@@ -65,6 +65,6 @@ SDL_AppResult SDL_AppIterate(void *appstate)
         auto result = app->update(delta);
         lastTick += delta;
     }
-    app->draw();
+    app->render();
     return app->getResult();
 }

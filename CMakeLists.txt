@@ -65,6 +65,8 @@ add_subdirectory(glad ${CMAKE_CURRENT_BINARY_DIR}/glad)
 # duktape
 # ----------------------------------------------------
 
+find_package(unofficial-duktape CONFIG REQUIRED)
+
 # ----------------------------------------------------
 # other libraries
 # ----------------------------------------------------
@@ -78,6 +80,8 @@ find_package(glm CONFIG REQUIRED)
 
 set(SOURCES
 	src/app.cpp
+	src/jsengine.cpp
+	src/dukwebgl.cpp
 	src/main.cpp
 )
 
@@ -95,6 +99,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
 	SDL3_image::SDL3_image
 	glm::glm
 	glad
+	unofficial::duktape::duktape
 )
 
 

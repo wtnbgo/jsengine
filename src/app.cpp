@@ -1,4 +1,5 @@
 #include "app.hpp"
+#include "jsengine.hpp"
 #include "glad/gles2.h"
 
 // 静的メンバ初期化
@@ -51,11 +52,30 @@ bool App::init(int argc, char *argv[])
            GLAD_VERSION_MAJOR(gles_version), GLAD_VERSION_MINOR(gles_version));
 
     SDL_GL_SetSwapInterval(1); // 1: VSYNC
+
+    // JsEngine 初期化
+    jsEngine_ = std::make_unique<JsEngine>();
+    if (!jsEngine_->init()) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to initialize JsEngine");
+        return false;
+    }
+
+    // main.js を読み込み実行
+    if (!jsEngine_->loadFile("main.js")) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to load main.js");
+        return false;
+    }
+
     return true;
 }
 
-App::~App() 
+App::~App()
 {
+    // JsEngine 終了
+    if (jsEngine_) {
+        jsEngine_.reset();
+    }
+
     if (context_) {
         SDL_GL_DestroyContext(context_);
         context_ = nullptr;
@@ -69,20 +89,22 @@ App::~App()
 }
 
 
-SDL_AppResult App::update(uint32_t delta) 
+SDL_AppResult App::update(uint32_t delta)
 {
+    if (jsEngine_) {
+        jsEngine_->update(delta);
+    }
     return result_;
 }
 
-void App::draw() 
+void App::render()
 {
     if (!window_ || !context_) return;
 
-    // 描画処理実行
-    glClearColor(0.5, 0.5, 0.5, 1);
+    // JS の render() 関数を呼び出す
+    if (jsEngine_) {
+        jsEngine_->render();
+    }
 
-    // 描画処理をここに実装
-
-    glClear(GL_COLOR_BUFFER_BIT);
     SDL_GL_SwapWindow(window_);
 }

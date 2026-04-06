@@ -2,7 +2,8 @@
   "name": "jsengine",
   "version": "1.0.0",
   "dependencies": [
-    "glm"
+    "glm",
+    "duktape"
   ],
   "vcpkg-configuration": {
     "registries": [

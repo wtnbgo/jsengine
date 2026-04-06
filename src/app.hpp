@@ -3,15 +3,17 @@
 #include <SDL3/SDL.h>
 #include <memory>
 
+class JsEngine;
+
 class App {
 public:
     App();
     ~App();
-    
+
     bool init(int argc, char *argv[]);
     SDL_AppResult update(uint32_t delta);
-    void draw();
-    
+    void render();
+
     SDL_Window* getWindow() const { return window_; }
 
     void setResult(SDL_AppResult res) { result_ = res; }
@@ -23,6 +25,7 @@ private:
     SDL_Window* window_;
     SDL_GLContext context_;
     SDL_AppResult result_;
+    std::unique_ptr<JsEngine> jsEngine_;
 
     static App* instance_;
 };
