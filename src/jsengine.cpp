@@ -2,6 +2,7 @@
 #include "dukwebgl.h"
 #include <duktape.h>
 #include <SDL3/SDL.h>
+#include <SDL3_image/SDL_image.h>
 #include <cstring>
 
 // console.log バインディング
@@ -63,6 +64,59 @@ static duk_ret_t native_load_script(duk_context *ctx) {
         return duk_throw(ctx);
     }
     return 1; // 実行結果を返す
+}
+
+// ============================================================
+// createImageBitmap(path) => ImageBitmap
+// ImageBitmap: { width, height, data (ArrayBuffer, RGBA) }
+// ============================================================
+
+static duk_ret_t native_createImageBitmap(duk_context *ctx) {
+    const char *path = duk_require_string(ctx, 0);
+    std::string resolved = resolve_path(path);
+
+    // SDL_image で画像読み込み
+    SDL_Surface *surface = IMG_Load(resolved.c_str());
+    if (!surface) {
+        return duk_error(ctx, DUK_ERR_ERROR, "Cannot load image: %s (%s)", resolved.c_str(), SDL_GetError());
+    }
+
+    // RGBA8888 に変換
+    SDL_Surface *rgba = SDL_ConvertSurface(surface, SDL_PIXELFORMAT_RGBA32);
+    SDL_DestroySurface(surface);
+    if (!rgba) {
+        return duk_error(ctx, DUK_ERR_ERROR, "Failed to convert image to RGBA: %s", SDL_GetError());
+    }
+
+    int w = rgba->w;
+    int h = rgba->h;
+    size_t dataSize = (size_t)w * h * 4;
+
+    // ImageBitmap オブジェクト作成
+    duk_idx_t obj = duk_push_object(ctx);
+
+    duk_push_int(ctx, w);
+    duk_put_prop_string(ctx, obj, "width");
+    duk_push_int(ctx, h);
+    duk_put_prop_string(ctx, obj, "height");
+
+    // ピクセルデータをバッファにコピー
+    void *buf = duk_push_buffer(ctx, dataSize, 0);
+    // SDL_Surface は pitch でアライメントされている可能性がある
+    if (rgba->pitch == w * 4) {
+        memcpy(buf, rgba->pixels, dataSize);
+    } else {
+        // 行ごとにコピー
+        for (int y = 0; y < h; y++) {
+            memcpy((char*)buf + y * w * 4,
+                   (char*)rgba->pixels + y * rgba->pitch,
+                   w * 4);
+        }
+    }
+    duk_put_prop_string(ctx, obj, "data");
+
+    SDL_DestroySurface(rgba);
+    return 1;
 }
 
 // ============================================================
@@ -1055,6 +1109,10 @@ bool JsEngine::init() {
     // loadScript バインディング登録
     duk_push_c_function(ctx_, native_load_script, 1);
     duk_put_global_string(ctx_, "loadScript");
+
+    // createImageBitmap 登録
+    duk_push_c_function(ctx_, native_createImageBitmap, 1);
+    duk_put_global_string(ctx_, "createImageBitmap");
 
     // addEventListener / removeEventListener 登録
     duk_push_c_function(ctx_, native_addEventListener, 2);
