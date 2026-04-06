@@ -215,7 +215,8 @@ static duk_ret_t native_createImageBitmap(duk_context *ctx) {
 // addEventListener(type, callback)
 static duk_ret_t native_addEventListener(duk_context *ctx) {
     const char *type = duk_require_string(ctx, 0);
-    duk_require_function(ctx, 1);
+    // callback が null/undefined の場合は無視（passive event detection 等）
+    if (!duk_is_function(ctx, 1)) return 0;
 
     // __eventListeners を取得（なければ作成）
     if (!duk_get_global_string(ctx, "__eventListeners")) {

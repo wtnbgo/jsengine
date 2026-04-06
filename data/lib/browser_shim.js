@@ -56,9 +56,150 @@ HTMLCanvasElement.prototype.getContext = function(type, options) {
         return gl;
     }
     if (type === "2d") {
-        // Canvas2D を返す
-        var c = new Canvas2D(this.width, this.height);
-        return c;
+        // 簡易 CanvasRenderingContext2D シム
+        var canvas = this;
+        var ctx2d = {
+            canvas: canvas,
+            _fillStyle: "#000000",
+            _strokeStyle: "#000000",
+            _lineWidth: 1,
+            _font: "10px sans-serif",
+            _textAlign: "start",
+            _textBaseline: "alphabetic",
+            _globalAlpha: 1.0,
+            _globalCompositeOperation: "source-over",
+            _imageData: new Uint8Array(canvas.width * canvas.height * 4),
+            // ダミーのピクセルバッファ
+            _ensureSize: function() {
+                var needed = canvas.width * canvas.height * 4;
+                if (this._imageData.length < needed) {
+                    this._imageData = new Uint8Array(needed);
+                }
+            }
+        };
+        // プロパティ
+        Object.defineProperty(ctx2d, "fillStyle", { get: function(){ return this._fillStyle; }, set: function(v){ this._fillStyle = v; } });
+        Object.defineProperty(ctx2d, "strokeStyle", { get: function(){ return this._strokeStyle; }, set: function(v){ this._strokeStyle = v; } });
+        Object.defineProperty(ctx2d, "lineWidth", { get: function(){ return this._lineWidth; }, set: function(v){ this._lineWidth = v; } });
+        Object.defineProperty(ctx2d, "font", { get: function(){ return this._font; }, set: function(v){ this._font = v; } });
+        Object.defineProperty(ctx2d, "textAlign", { get: function(){ return this._textAlign; }, set: function(v){ this._textAlign = v; } });
+        Object.defineProperty(ctx2d, "textBaseline", { get: function(){ return this._textBaseline; }, set: function(v){ this._textBaseline = v; } });
+        Object.defineProperty(ctx2d, "globalAlpha", { get: function(){ return this._globalAlpha; }, set: function(v){ this._globalAlpha = v; } });
+        Object.defineProperty(ctx2d, "globalCompositeOperation", { get: function(){ return this._globalCompositeOperation; }, set: function(v){ this._globalCompositeOperation = v; } });
+        Object.defineProperty(ctx2d, "imageSmoothingEnabled", { get: function(){ return true; }, set: function(){} });
+        // メソッド
+        ctx2d.save = function() {};
+        ctx2d.restore = function() {};
+        ctx2d.scale = function() {};
+        ctx2d.rotate = function() {};
+        ctx2d.translate = function() {};
+        ctx2d.transform = function() {};
+        ctx2d.setTransform = function() {};
+        ctx2d.resetTransform = function() {};
+        ctx2d.beginPath = function() {};
+        ctx2d.closePath = function() {};
+        ctx2d.moveTo = function() {};
+        ctx2d.lineTo = function() {};
+        ctx2d.quadraticCurveTo = function() {};
+        ctx2d.bezierCurveTo = function() {};
+        ctx2d.arc = function() {};
+        ctx2d.arcTo = function() {};
+        ctx2d.rect = function() {};
+        ctx2d.fill = function() {};
+        ctx2d.stroke = function() {};
+        ctx2d.clip = function() {};
+        ctx2d.fillRect = function(x, y, w, h) {
+            this._ensureSize();
+            // 簡易: 全ピクセルを色で塗る（正確ではないがテクスチャ生成に最低限必要）
+            var c = this._fillStyle;
+            var r = 0, g = 0, b = 0, a = 255;
+            if (c === "white" || c === "#ffffff" || c === "#fff") { r = g = b = 255; }
+            else if (c === "black" || c === "#000000" || c === "#000") { /* default 0,0,0 */ }
+            else if (c.charAt(0) === "#" && c.length === 7) {
+                r = parseInt(c.substr(1,2), 16);
+                g = parseInt(c.substr(3,2), 16);
+                b = parseInt(c.substr(5,2), 16);
+            }
+            var cw = canvas.width;
+            var data = this._imageData;
+            var ix = Math.max(0, Math.floor(x));
+            var iy = Math.max(0, Math.floor(y));
+            var iw = Math.min(cw, Math.floor(x + w));
+            var ih = Math.min(canvas.height, Math.floor(y + h));
+            for (var py = iy; py < ih; py++) {
+                for (var px = ix; px < iw; px++) {
+                    var idx = (py * cw + px) * 4;
+                    data[idx] = r; data[idx+1] = g; data[idx+2] = b; data[idx+3] = a;
+                }
+            }
+        };
+        ctx2d.strokeRect = function() {};
+        ctx2d.clearRect = function(x, y, w, h) {
+            this._ensureSize();
+            var cw = canvas.width;
+            var data = this._imageData;
+            var ix = Math.max(0, Math.floor(x));
+            var iy = Math.max(0, Math.floor(y));
+            var iw = Math.min(cw, Math.floor(x + w));
+            var ih = Math.min(canvas.height, Math.floor(y + h));
+            for (var py = iy; py < ih; py++) {
+                for (var px = ix; px < iw; px++) {
+                    var idx = (py * cw + px) * 4;
+                    data[idx] = 0; data[idx+1] = 0; data[idx+2] = 0; data[idx+3] = 0;
+                }
+            }
+        };
+        ctx2d.fillText = function() {};
+        ctx2d.strokeText = function() {};
+        ctx2d.measureText = function(text) {
+            return { width: (text ? text.length : 0) * 7 };
+        };
+        ctx2d.drawImage = function() {
+            // source canvas/image からピクセルコピー（簡易版）
+        };
+        ctx2d.createImageData = function(w, h) {
+            return { width: w, height: h, data: new Uint8Array(w * h * 4) };
+        };
+        ctx2d.getImageData = function(x, y, w, h) {
+            this._ensureSize();
+            var result = { width: w, height: h, data: new Uint8Array(w * h * 4) };
+            var cw = canvas.width;
+            for (var py = 0; py < h; py++) {
+                for (var px = 0; px < w; px++) {
+                    var srcIdx = ((y + py) * cw + (x + px)) * 4;
+                    var dstIdx = (py * w + px) * 4;
+                    result.data[dstIdx]   = this._imageData[srcIdx];
+                    result.data[dstIdx+1] = this._imageData[srcIdx+1];
+                    result.data[dstIdx+2] = this._imageData[srcIdx+2];
+                    result.data[dstIdx+3] = this._imageData[srcIdx+3];
+                }
+            }
+            return result;
+        };
+        ctx2d.putImageData = function(imageData, x, y) {
+            this._ensureSize();
+            var cw = canvas.width;
+            var w = imageData.width, h = imageData.height;
+            for (var py = 0; py < h; py++) {
+                for (var px = 0; px < w; px++) {
+                    var srcIdx = (py * w + px) * 4;
+                    var dstIdx = ((y + py) * cw + (x + px)) * 4;
+                    this._imageData[dstIdx]   = imageData.data[srcIdx];
+                    this._imageData[dstIdx+1] = imageData.data[srcIdx+1];
+                    this._imageData[dstIdx+2] = imageData.data[srcIdx+2];
+                    this._imageData[dstIdx+3] = imageData.data[srcIdx+3];
+                }
+            }
+        };
+        ctx2d.createLinearGradient = function() {
+            return { addColorStop: function() {} };
+        };
+        ctx2d.createRadialGradient = function() {
+            return { addColorStop: function() {} };
+        };
+        ctx2d.createPattern = function() { return null; };
+        canvas._ctx2d = ctx2d;
+        return ctx2d;
     }
     return null;
 };
@@ -105,9 +246,37 @@ if (typeof gl !== "undefined") {
             };
         };
     }
-    if (!gl.getExtension) {
-        gl.getExtension = function(name) { return null; };
-    }
+    // getExtension を拡張（GLES3 標準機能を WebGL1 拡張としてエクスポート）
+    var _origGetExtension = gl.getExtension;
+    gl.getExtension = function(name) {
+        if (name === "OES_vertex_array_object") return gl._vaoExt;
+        if (name === "OES_element_index_uint") return {};
+        if (name === "ANGLE_instanced_arrays") return {
+            drawArraysInstancedANGLE: function(m,f,c,n) { gl.drawArraysInstanced(m,f,c,n); },
+            drawElementsInstancedANGLE: function(m,c,t,o,n) { gl.drawElementsInstanced(m,c,t,o,n); },
+            vertexAttribDivisorANGLE: function(i,d) { gl.vertexAttribDivisor(i,d); },
+            VERTEX_ATTRIB_ARRAY_DIVISOR_ANGLE: 0x88FE
+        };
+        if (name === "OES_texture_float") return {};
+        if (name === "OES_texture_half_float") return { HALF_FLOAT_OES: 0x8D61 };
+        if (name === "WEBGL_depth_texture") return { UNSIGNED_INT_24_8_WEBGL: 0x84FA };
+        if (name === "EXT_blend_minmax") return { MIN_EXT: gl.MIN, MAX_EXT: gl.MAX };
+        if (name === "WEBGL_draw_buffers") return {
+            drawBuffersWEBGL: function(bufs) { gl.drawBuffers(bufs); },
+            MAX_DRAW_BUFFERS_WEBGL: gl.MAX_DRAW_BUFFERS || 8,
+            COLOR_ATTACHMENT0_WEBGL: gl.COLOR_ATTACHMENT0
+        };
+        if (name === "OES_standard_derivatives") return {};
+        if (name === "EXT_frag_depth") return {};
+        if (name === "EXT_shader_texture_lod") return {};
+        if (name === "EXT_color_buffer_float") return {};
+        if (name === "WEBGL_lose_context") return {
+            loseContext: function() {},
+            restoreContext: function() {}
+        };
+        if (_origGetExtension) return _origGetExtension.call(gl, name);
+        return null;
+    };
     if (!gl.drawingBufferWidth) {
         Object.defineProperty(gl, "drawingBufferWidth", {
             get: function() { return gl.canvas ? gl.canvas.width : 1280; }
@@ -118,6 +287,16 @@ if (typeof gl !== "undefined") {
             get: function() { return gl.canvas ? gl.canvas.height : 720; }
         });
     }
+    // OES_vertex_array_object 拡張のメソッドをマップ（pixi.js v4 用）
+    // GLES3 では VAO は標準機能なのでエイリアスを作成
+    gl._vaoExt = {
+        createVertexArrayOES: function() { return gl.createVertexArray(); },
+        deleteVertexArrayOES: function(vao) { gl.deleteVertexArray(vao); },
+        bindVertexArrayOES: function(vao) { gl.bindVertexArray(vao); },
+        isVertexArrayOES: function(vao) { return gl.isVertexArray(vao); },
+        VERTEX_ARRAY_BINDING_OES: gl.VERTEX_ARRAY_BINDING
+    };
+
     // pixi.js が使う追加メソッド
     if (!gl.getShaderPrecisionFormat) {
         gl.getShaderPrecisionFormat = function(shaderType, precisionType) {
@@ -207,7 +386,18 @@ function Image(width, height) {
     this.crossOrigin = "";
     this.complete = false;
     this._data = null;
+    this._listeners = {};
 }
+
+Image.prototype.addEventListener = function(type, cb) {
+    if (!this._listeners[type]) this._listeners[type] = [];
+    this._listeners[type].push(cb);
+};
+Image.prototype.removeEventListener = function(type, cb) {
+    if (this._listeners[type]) {
+        this._listeners[type] = this._listeners[type].filter(function(f) { return f !== cb; });
+    }
+};
 
 // src が設定されたら createImageBitmap で読み込む
 Object.defineProperty(Image.prototype, "src", {
@@ -216,19 +406,33 @@ Object.defineProperty(Image.prototype, "src", {
         var self = this;
         // 同期的にロード試行
         try {
-            var bitmap = createImageBitmap(url);
+            // URL からクエリパラメータを除去
+            var cleanUrl = url.split("?")[0];
+            if (!cleanUrl || cleanUrl.length === 0) {
+                // 空URLは無視
+                return;
+            }
+            var bitmap = createImageBitmap(cleanUrl);
             self.width = bitmap.width;
             self.height = bitmap.height;
             self._data = bitmap.data;
             self.complete = true;
-            if (typeof self.onload === "function") {
-                setTimeout(function() { self.onload(); }, 0);
-            }
+            // onload + addEventListener('load') コールバック実行
+            var loadCbs = (self._listeners && self._listeners["load"]) || [];
+            setTimeout(function() {
+                if (typeof self.onload === "function") self.onload();
+                for (var i = 0; i < loadCbs.length; i++) loadCbs[i].call(self);
+            }, 0);
         } catch(e) {
-            self.complete = true;
-            if (typeof self.onerror === "function") {
-                setTimeout(function() { self.onerror(e); }, 0);
+            if (cleanUrl && cleanUrl.length > 0) {
+                console.error("Image load error: " + cleanUrl + " => " + e);
             }
+            self.complete = true;
+            var errCbs = (self._listeners && self._listeners["error"]) || [];
+            setTimeout(function() {
+                if (typeof self.onerror === "function") self.onerror(e);
+                for (var i = 0; i < errCbs.length; i++) errCbs[i].call(self, e);
+            }, 0);
         }
     },
     get: function() { return this._src || ""; }
