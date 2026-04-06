@@ -23,3 +23,5 @@ Release
 build/
 savedata
 .claude/
+.venv/
+test/

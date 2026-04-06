@@ -67,3 +67,8 @@ cmake --build build/x64-windows --config Release
 - The vcpkg duktape package name is `unofficial-duktape` (target: `unofficial::duktape::duktape`).
 - Comments in the codebase are in Japanese.
 - `manual.js` contains the full API reference for the JS environment.
+- pixi.js v5.3.12 動作確認済み（data/lib/ に polyfill.js, browser_shim.js, pixi.min.js）。白テクスチャの手動差し替えが必要。
+- pixi.js v4.5.4（RPG Maker MV）は test/ で作業中。OES_vertex_array_object 拡張マッピング、CanvasRenderingContext2D シム等を追加済み。
+- `dukwebgl_get_buffer()` は TypedArray の byteOffset を正しく処理する。
+- `getParameter()` は配列型（VIEWPORT 等）を Int32Array/Float32Array で返す。
+- `getExtension()` は GLES3 標準拡張に対して機能オブジェクトを返す（VAO 拡張メソッド含む）。
