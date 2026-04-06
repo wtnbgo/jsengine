@@ -28,6 +28,19 @@ console.log("message", arg1, arg2);   // SDL_Log へ出力
 console.error("message", arg1, arg2); // SDL_LogError へ出力
 
 // ************************************************************
+// Web Storage API（ブラウザ互換）
+// ************************************************************
+// データは SDL_GetPrefPath("jsengine","jsengine") 配下の
+// localStorage.json に JSON 形式で永続化される。
+
+localStorage.setItem("key", "value");           // 値を保存（自動永続化）
+localStorage.getItem("key");                    // => "value" | null
+localStorage.removeItem("key");                 // キーを削除（自動永続化）
+localStorage.clear();                           // 全データ削除（自動永続化）
+localStorage.key(0);                            // => インデックス指定でキー名取得 | null
+localStorage.length;                            // => 保存されているキーの数
+
+// ************************************************************
 // イベントシステム（ブラウザ互換）
 // ************************************************************
 

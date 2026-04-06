@@ -277,6 +277,181 @@ static const char* sdl_scancode_to_js_code(SDL_Scancode sc) {
     return SDL_GetScancodeName(sc);
 }
 
+// ============================================================
+// localStorage (Web Storage API)
+// データは SDL_GetPrefPath 配下の localStorage.json に保存
+// ============================================================
+
+// localStorage のデータは duktape のグローバル隠しオブジェクト __localStorageData に保持
+// 変更時に JSON ファイルに書き出す
+
+static char* get_storage_path() {
+    char *pref = SDL_GetPrefPath("jsengine", "jsengine");
+    if (!pref) return nullptr;
+    size_t len = strlen(pref) + 32;
+    char *path = (char*)SDL_malloc(len);
+    snprintf(path, len, "%slocalStorage.json", pref);
+    SDL_free(pref);
+    return path;
+}
+
+// __localStorageData を JSON 文字列にして保存
+static void storage_save(duk_context *ctx) {
+    char *path = get_storage_path();
+    if (!path) return;
+
+    duk_get_global_string(ctx, "JSON");
+    duk_get_prop_string(ctx, -1, "stringify");
+    duk_get_global_string(ctx, "__localStorageData");
+    duk_call(ctx, 1);
+    const char *json = duk_get_string(ctx, -1);
+
+    SDL_IOStream *io = SDL_IOFromFile(path, "w");
+    if (io) {
+        SDL_WriteIO(io, json, strlen(json));
+        SDL_CloseIO(io);
+    }
+    duk_pop_2(ctx); // json string, JSON object
+    SDL_free(path);
+}
+
+// JSON ファイルから __localStorageData を復元
+static void storage_load(duk_context *ctx) {
+    char *path = get_storage_path();
+    if (!path) {
+        duk_push_object(ctx);
+        duk_put_global_string(ctx, "__localStorageData");
+        return;
+    }
+
+    size_t size = 0;
+    void *data = SDL_LoadFile(path, &size);
+    SDL_free(path);
+
+    if (data && size > 0) {
+        duk_get_global_string(ctx, "JSON");
+        duk_get_prop_string(ctx, -1, "parse");
+        duk_push_lstring(ctx, (const char*)data, size);
+        if (duk_pcall(ctx, 1) == 0 && duk_is_object(ctx, -1)) {
+            duk_put_global_string(ctx, "__localStorageData");
+            duk_pop(ctx); // JSON object
+        } else {
+            duk_pop_2(ctx); // error/result, JSON object
+            duk_push_object(ctx);
+            duk_put_global_string(ctx, "__localStorageData");
+        }
+    } else {
+        duk_push_object(ctx);
+        duk_put_global_string(ctx, "__localStorageData");
+    }
+    if (data) SDL_free(data);
+}
+
+// localStorage.getItem(key) => string | null
+static duk_ret_t native_storage_getItem(duk_context *ctx) {
+    const char *key = duk_require_string(ctx, 0);
+    duk_get_global_string(ctx, "__localStorageData");
+    if (duk_get_prop_string(ctx, -1, key)) {
+        // 値あり — string として返す
+        duk_remove(ctx, -2); // __localStorageData
+        return 1;
+    }
+    duk_pop_2(ctx); // undefined, __localStorageData
+    duk_push_null(ctx);
+    return 1;
+}
+
+// localStorage.setItem(key, value)
+static duk_ret_t native_storage_setItem(duk_context *ctx) {
+    const char *key = duk_require_string(ctx, 0);
+    const char *value = duk_to_string(ctx, 1);
+    duk_get_global_string(ctx, "__localStorageData");
+    duk_push_string(ctx, value);
+    duk_put_prop_string(ctx, -2, key);
+    duk_pop(ctx); // __localStorageData
+    storage_save(ctx);
+    return 0;
+}
+
+// localStorage.removeItem(key)
+static duk_ret_t native_storage_removeItem(duk_context *ctx) {
+    const char *key = duk_require_string(ctx, 0);
+    duk_get_global_string(ctx, "__localStorageData");
+    duk_del_prop_string(ctx, -1, key);
+    duk_pop(ctx);
+    storage_save(ctx);
+    return 0;
+}
+
+// localStorage.clear()
+static duk_ret_t native_storage_clear(duk_context *ctx) {
+    duk_push_object(ctx);
+    duk_put_global_string(ctx, "__localStorageData");
+    storage_save(ctx);
+    return 0;
+}
+
+// localStorage.key(index) => string | null
+static duk_ret_t native_storage_key(duk_context *ctx) {
+    duk_uint_t index = duk_require_uint(ctx, 0);
+    duk_get_global_string(ctx, "__localStorageData");
+    duk_enum(ctx, -1, DUK_ENUM_OWN_PROPERTIES_ONLY);
+    duk_uint_t i = 0;
+    while (duk_next(ctx, -1, 0)) {
+        if (i == index) {
+            // key はスタックトップ
+            duk_remove(ctx, -2); // enum
+            duk_remove(ctx, -2); // __localStorageData
+            return 1;
+        }
+        duk_pop(ctx); // key
+        i++;
+    }
+    duk_pop_2(ctx); // enum, __localStorageData
+    duk_push_null(ctx);
+    return 1;
+}
+
+// localStorage.length (getter)
+static duk_ret_t native_storage_length(duk_context *ctx) {
+    duk_get_global_string(ctx, "__localStorageData");
+    duk_enum(ctx, -1, DUK_ENUM_OWN_PROPERTIES_ONLY);
+    duk_uint_t count = 0;
+    while (duk_next(ctx, -1, 0)) {
+        duk_pop(ctx);
+        count++;
+    }
+    duk_pop_2(ctx); // enum, __localStorageData
+    duk_push_uint(ctx, count);
+    return 1;
+}
+
+static void storage_register(duk_context *ctx) {
+    // ファイルからデータ復元
+    storage_load(ctx);
+
+    // localStorage オブジェクト作成
+    duk_push_object(ctx);
+
+    duk_push_c_function(ctx, native_storage_getItem, 1);
+    duk_put_prop_string(ctx, -2, "getItem");
+    duk_push_c_function(ctx, native_storage_setItem, 2);
+    duk_put_prop_string(ctx, -2, "setItem");
+    duk_push_c_function(ctx, native_storage_removeItem, 1);
+    duk_put_prop_string(ctx, -2, "removeItem");
+    duk_push_c_function(ctx, native_storage_clear, 0);
+    duk_put_prop_string(ctx, -2, "clear");
+    duk_push_c_function(ctx, native_storage_key, 1);
+    duk_put_prop_string(ctx, -2, "key");
+
+    // length を getter プロパティとして定義
+    duk_push_string(ctx, "length");
+    duk_push_c_function(ctx, native_storage_length, 0);
+    duk_def_prop(ctx, -3, DUK_DEFPROP_HAVE_GETTER | DUK_DEFPROP_SET_ENUMERABLE);
+
+    duk_put_global_string(ctx, "localStorage");
+}
+
 // duktape fatal error handler
 static void fatal_handler(void *udata, const char *msg) {
     (void)udata;
@@ -318,6 +493,9 @@ bool JsEngine::init() {
     // イベントリスナー格納用オブジェクト
     duk_push_object(ctx_);
     duk_put_global_string(ctx_, "__eventListeners");
+
+    // localStorage 登録
+    storage_register(ctx_);
 
     // WebGL バインディング登録
     dukwebgl_bind(ctx_);

@@ -109,6 +109,15 @@ function initGL() {
 initGL();
 
 // ============================================================
+// localStorage サンプル: 起動回数カウンター
+// ============================================================
+
+var launchCount = parseInt(localStorage.getItem("launchCount")) || 0;
+launchCount++;
+localStorage.setItem("launchCount", String(launchCount));
+console.log("Launch count: " + launchCount);
+
+// ============================================================
 // イベントリスナー登録
 // ============================================================
 
