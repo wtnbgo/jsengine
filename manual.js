@@ -62,6 +62,61 @@ source.start();                        // 再生開始（先頭から）
 source.stop();                         // 再生停止
 
 // ************************************************************
+// Canvas 2D API（ThorVG ベース）
+// ************************************************************
+// オフスクリーン 2D 描画キャンバス。描画結果は GL テクスチャとして取得可能。
+// ThorVG SwCanvas で描画し、flush() で GL テクスチャにアップロードする。
+
+Canvas2D.loadFont("font.ttf");                          // フォントファイル読み込み（ベースパス相対）
+
+var ctx = new Canvas2D(512, 512);                        // オフスクリーンキャンバス作成
+ctx.width;                                               // 読み取り専用
+ctx.height;                                              // 読み取り専用
+ctx.texture;                                             // WebGLTexture 互換オブジェクト（flush 後に利用可）
+
+// --- スタイル ---
+ctx.fillStyle = "#ff0000";                               // "#rrggbb", "#rrggbbaa", "rgba(r,g,b,a)", "rgb(r,g,b)", 色名
+ctx.strokeStyle = "blue";
+ctx.lineWidth = 2.0;
+ctx.globalAlpha = 1.0;                                   // 0.0 ~ 1.0
+ctx.lineCap = "butt";                                    // "butt" | "round" | "square"
+ctx.lineJoin = "miter";                                  // "miter" | "round" | "bevel"
+
+// --- 矩形 ---
+ctx.fillRect(x, y, w, h);
+ctx.strokeRect(x, y, w, h);
+ctx.clearRect(x, y, w, h);
+
+// --- パス ---
+ctx.beginPath();
+ctx.moveTo(x, y);
+ctx.lineTo(x, y);
+ctx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, x, y);
+ctx.rect(x, y, w, h);
+ctx.arc(cx, cy, r, startAngle, endAngle, counterclockwise);  // 角度はラジアン
+ctx.closePath();
+ctx.fill();
+ctx.stroke();
+
+// --- テキスト ---
+ctx.font = "24px FontName";                              // "サイズpx フォント名"
+ctx.textAlign = "left";                                  // "left" | "center" | "right"（予約）
+ctx.fillText("Hello", x, y);                             // y はベースライン位置
+ctx.strokeText("Hello", x, y);
+var m = ctx.measureText("Hello");                        // => { width }
+
+// --- 変換 ---
+ctx.save();
+ctx.translate(x, y);
+ctx.rotate(angle);                                       // ラジアン
+ctx.scale(sx, sy);
+ctx.restore();
+
+// --- 描画確定 ---
+ctx.flush();                                             // ThorVG レンダリング → GL テクスチャ更新
+// flush 後に ctx.texture を gl.bindTexture で使用可能
+
+// ************************************************************
 // コンソール
 // ************************************************************
 

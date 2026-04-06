@@ -6,7 +6,11 @@
     "duktape",
     "libvorbis",
     "libogg",
-    "opusfile"
+    "opusfile",
+    {
+      "name": "freetype",
+      "features": ["png", "zlib"]
+    }
   ],
   "vcpkg-configuration": {
     "registries": [

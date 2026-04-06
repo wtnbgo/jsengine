@@ -4,11 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**jsengine** is a C++17 cross-platform application using SDL3 with OpenGL ES 3.0 rendering and an embedded duktape JavaScript engine with WebGL 2.0 compatible bindings. It uses the SDL3 callback-based application model (SDL_AppInit/SDL_AppIterate/SDL_AppEvent/SDL_AppQuit). JavaScript code in `main.js` drives the rendering and input handling via browser-compatible APIs.
+**jsengine** is a C++17 cross-platform application using SDL3 with OpenGL ES 3.0 rendering and an embedded duktape JavaScript engine. It provides browser-compatible APIs including WebGL 2.0, Canvas 2D (ThorVG), Web Audio (miniaudio), Web Storage, File System Access, and input events. It uses the SDL3 callback-based application model (SDL_AppInit/SDL_AppIterate/SDL_AppEvent/SDL_AppQuit).
 
 ## Build System
 
-CMake with presets + Ninja Multi-Config generator. Dependencies are managed via vcpkg (glm, duktape) and FetchContent (SDL3, SDL3_image).
+CMake with presets + Ninja Multi-Config generator. Dependencies are managed via vcpkg (glm, duktape, freetype, miniaudio, libvorbis, libopus) and FetchContent (SDL3, SDL3_image, ThorVG, HarfBuzz).
 
 **Prerequisites:** vcpkg installed with `VCPKG_ROOT` environment variable set.
 
@@ -50,6 +50,9 @@ cmake --build build/x64-windows --config Release
 - `src/app.hpp` / `src/app.cpp` — `App` singleton class owning the SDL window, OpenGL ES context, and JsEngine. Provides `init()`, `update(delta)`, `render()`, and `handleEvent()` methods.
 - `src/jsengine.hpp` / `src/jsengine.cpp` — `JsEngine` class. Manages the duktape heap, JS file loading (via SDL_LoadFile), lifecycle calls (update/render/done), and browser-compatible input event dispatch (addEventListener/removeEventListener).
 - `src/dukwebgl.h` / `src/dukwebgl.cpp` — WebGL 2.0 compatible bindings mapping to GLES 3.0. Registers `gl` global and `WebGL2RenderingContext`.
+- `src/webaudio.h` / `src/webaudio.cpp` — Web Audio API bindings. Uses AudioEngine/AudioStream for playback.
+- `src/canvas2d.h` / `src/canvas2d.cpp` — Canvas 2D API bindings using ThorVG SwCanvas. Renders to offscreen buffer, uploads to GL texture.
+- `src/audio/` — AudioEngine (miniaudio singleton with sound groups) and AudioStream (file/memory/stream decoding with SDL3 I/O). Supports WAV, MP3, FLAC, and optionally OGG Vorbis/Opus.
 - `glad/` — GLAD loader for OpenGL ES 3.0 (local subdirectory, built as a CMake sub-project).
 
 ## Key Technical Details

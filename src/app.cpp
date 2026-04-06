@@ -1,6 +1,7 @@
 #include "app.hpp"
 #include "jsengine.hpp"
 #include "webaudio.h"
+#include "canvas2d.h"
 #include "glad/gles2.h"
 
 // 静的メンバ初期化
@@ -63,6 +64,9 @@ bool App::init(int argc, char *argv[])
         }
     }
 
+    // Canvas2D (ThorVG) 初期化
+    canvas2d_init();
+
     // オーディオシステム初期化
     webaudio_init();
 
@@ -93,6 +97,9 @@ App::~App()
 
     // オーディオシステム終了
     webaudio_uninit();
+
+    // Canvas2D (ThorVG) 終了
+    canvas2d_uninit();
 
     if (context_) {
         SDL_GL_DestroyContext(context_);

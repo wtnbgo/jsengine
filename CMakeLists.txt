@@ -67,6 +67,54 @@ add_subdirectory(glad ${CMAKE_CURRENT_BINARY_DIR}/glad)
 
 find_package(unofficial-duktape CONFIG REQUIRED)
 
+
+# ----------------------------------------------------
+# thorvg + (freetype vcpkg) + harfbuzz 
+# ----------------------------------------------------
+
+# ThorVG loader options (shared by both paths)
+option(TVG_BUILD_SHARED "Build shared library" OFF)
+option(TVG_LOADER_SVG "Enable SVG Loader" OFF)
+option(TVG_LOADER_PNG "Enable PNG Loader" OFF)
+option(TVG_LOADER_JPG "Enable JPG Loader" OFF)
+option(TVG_LOADER_LOTTIE "Enable Lottie Loader" OFF)
+option(TVG_LOADER_TTF "Enable TTF Loader" ON)
+option(TVG_LOADER_WEBP "Enable WebP Loader" OFF)
+option(TVG_LOG "Enable log message" OFF)
+option(TVG_FILE_IO "Enable File IO calls" ON)
+
+option(TVG_ENGINE_SW "Enable Software Rasterizer Engine" ON)
+option(TVG_ENGINE_GL "Enable OpenGL Rasterizer Engine" ON)
+
+# --- ThorVG ---
+FetchContent_Declare(
+	thorvg
+	EXCLUDE_FROM_ALL
+	GIT_REPOSITORY https://github.com/wtnbgo/thorvg.git
+	GIT_TAG cmake
+)
+FetchContent_MakeAvailable(thorvg)
+
+# --- FreeType (vcpkg) ---
+find_package(freetype CONFIG REQUIRED)
+
+# --- HarfBuzz 13.1.1 (FetchContent, ICU なし) ---
+set(HB_HAVE_FREETYPE ON CACHE BOOL "Enable freetype interop helpers" FORCE)
+set(HB_HAVE_ICU OFF CACHE BOOL "Disable ICU" FORCE)
+set(HB_BUILD_SUBSET OFF CACHE BOOL "" FORCE)
+set(HB_BUILD_UTILS OFF CACHE BOOL "" FORCE)
+set(SKIP_INSTALL_ALL ON CACHE BOOL "" FORCE)
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+
+FetchContent_Declare(
+	harfbuzz_source
+	GIT_REPOSITORY https://github.com/harfbuzz/harfbuzz.git
+	GIT_TAG 13.1.1
+	GIT_SHALLOW TRUE
+)
+FetchContent_MakeAvailable(harfbuzz_source)
+
+
 # ----------------------------------------------------
 # other libraries
 # ----------------------------------------------------
@@ -87,6 +135,7 @@ set(SOURCES
 	src/jsengine.cpp
 	src/dukwebgl.cpp
 	src/webaudio.cpp
+	src/canvas2d.cpp
 	src/audio/AudioEngine.cpp
 	src/audio/AudioStream.cpp
 	src/main.cpp
@@ -108,13 +157,21 @@ add_executable(${PROJECT_NAME}
 	${SOURCES}
 )
 
+target_include_directories(${PROJECT_NAME} PRIVATE 
+	"${thorvg_SOURCE_DIR}/inc"
+)
+
 target_link_libraries(${PROJECT_NAME} PRIVATE
 	SDL3::SDL3
 	SDL3_image::SDL3_image
 	glm::glm
 	glad
 	unofficial::duktape::duktape
+	thorvg
+	freetype
+	harfbuzz
 )
+
 
 if(Vorbis_FOUND)
 	target_compile_definitions(${PROJECT_NAME} PRIVATE HAS_VORBIS)

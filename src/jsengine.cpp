@@ -1,6 +1,7 @@
 #include "jsengine.hpp"
 #include "dukwebgl.h"
 #include "webaudio.h"
+#include "canvas2d.h"
 #include <duktape.h>
 #include <SDL3/SDL.h>
 #include <SDL3_image/SDL_image.h>
@@ -1136,6 +1137,9 @@ bool JsEngine::init() {
 
     // Web Audio API バインディング登録
     webaudio_bind(ctx_);
+
+    // Canvas 2D API バインディング登録
+    canvas2d_bind(ctx_);
 
     SDL_Log("JsEngine initialized");
     return true;

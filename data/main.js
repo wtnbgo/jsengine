@@ -1,7 +1,13 @@
-// main.js - サンプルスクリプト（入力イベント・テクスチャ動作確認付き）
+// main.js - デモスクリプト
+// 数字キー 1～4 でデモ切り替え
+//   1: 頂点カラー三角形 + テクスチャクワッド（WASD移動、ホイール透明度）
+//   2: Canvas2D 図形描画（矩形、円、パス、グラデーション風）
+//   3: Canvas2D テキスト描画（要フォントファイル）
+//   4: Canvas2D アニメーション（回転する図形）
+// Space: ビープ音再生  R: リセット
 
 // ============================================================
-// シェーダソース: 頂点カラー三角形用
+// シェーダソース
 // ============================================================
 
 var vertexShaderSource =
@@ -25,18 +31,13 @@ var fragmentShaderSource =
     "    fragColor = vec4(vColor, uAlpha);\n" +
     "}\n";
 
-// ============================================================
-// シェーダソース: テクスチャクワッド用
-// ============================================================
-
 var texVertSource =
     "#version 300 es\n" +
     "layout(location = 0) in vec2 aPosition;\n" +
     "layout(location = 1) in vec2 aTexCoord;\n" +
-    "uniform vec2 uOffset;\n" +
     "out vec2 vTexCoord;\n" +
     "void main() {\n" +
-    "    gl_Position = vec4(aPosition + uOffset, 0.0, 1.0);\n" +
+    "    gl_Position = vec4(aPosition, 0.0, 1.0);\n" +
     "    vTexCoord = aTexCoord;\n" +
     "}\n";
 
@@ -51,40 +52,27 @@ var texFragSource =
     "}\n";
 
 // ============================================================
-// 変数
+// GL 変数
 // ============================================================
 
-var program = null;
-var vao = null;
-var vbo = null;
-var uOffsetLoc = null;
-var uAlphaLoc = null;
-
-var texProgram = null;
-var texVao = null;
-var texVbo = null;
-var texIbo = null;
+var program = null, vao = null, vbo = null;
+var uOffsetLoc = null, uAlphaLoc = null;
+var texProgram = null, texVao = null, texVbo = null, texIbo = null;
 var texTexture = null;
-var texOffsetLoc = null;
-
-// 三角形の位置（キーボード WASD / 矢印キーで移動）
-var offsetX = 0.0;
-var offsetY = 0.0;
-var moveSpeed = 0.02;
-
-// マウス操作用
-var mouseX = 0.0;
-var mouseY = 0.0;
-var mouseDown = false;
-
-// ホイールで透明度を変更
+var offsetX = 0.0, offsetY = 0.0, moveSpeed = 0.02;
+var mouseX = 0.0, mouseY = 0.0, mouseDown = false;
 var alpha = 1.0;
-
-// 押下中のキーを追跡
 var keysDown = {};
 
+// デモモード
+var demoMode = 1;
+var time = 0;
+
+// Canvas2D
+var canvas2d = null;
+
 // ============================================================
-// シェーダコンパイルヘルパー
+// ヘルパー
 // ============================================================
 
 function compileShader(type, source) {
@@ -98,7 +86,7 @@ function compileShader(type, source) {
     return s;
 }
 
-function createProgram(vsSrc, fsSrc) {
+function createProgramGL(vsSrc, fsSrc) {
     var vs = compileShader(gl.VERTEX_SHADER, vsSrc);
     var fs = compileShader(gl.FRAGMENT_SHADER, fsSrc);
     if (!vs || !fs) return null;
@@ -115,145 +103,349 @@ function createProgram(vsSrc, fsSrc) {
     return prog;
 }
 
+// テクスチャを画面全体に描画するクワッド
+function initFullscreenQuad() {
+    texProgram = createProgramGL(texVertSource, texFragSource);
+    if (!texProgram) return;
+    var verts = new Float32Array([
+        -1, 1,  0, 0,
+         1, 1,  1, 0,
+         1,-1,  1, 1,
+        -1,-1,  0, 1
+    ]);
+    var idx = new Uint16Array([0,1,2, 0,2,3]);
+    texVao = gl.createVertexArray();
+    gl.bindVertexArray(texVao);
+    texVbo = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, texVbo);
+    gl.bufferData(gl.ARRAY_BUFFER, verts, gl.STATIC_DRAW);
+    texIbo = gl.createBuffer();
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, texIbo);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, idx, gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 16, 0);
+    gl.enableVertexAttribArray(1);
+    gl.vertexAttribPointer(1, 2, gl.FLOAT, false, 16, 8);
+    gl.bindVertexArray(null);
+}
+
+// Canvas2D テクスチャを全画面に描画
+function drawCanvas2DFullscreen(c2d) {
+    gl.useProgram(texProgram);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, c2d.texture);
+    gl.bindVertexArray(texVao);
+    gl.drawElements(gl.TRIANGLES, 6, gl.UNSIGNED_SHORT, 0);
+    gl.bindVertexArray(null);
+}
+
 // ============================================================
-// GL 初期化: 頂点カラー三角形
+// デモ1: 頂点カラー三角形
 // ============================================================
 
-function initTriangle() {
-    program = createProgram(vertexShaderSource, fragmentShaderSource);
-    if (!program) return false;
-
+function initDemo1() {
+    program = createProgramGL(vertexShaderSource, fragmentShaderSource);
+    if (!program) return;
     uOffsetLoc = gl.getUniformLocation(program, "uOffset");
     uAlphaLoc = gl.getUniformLocation(program, "uAlpha");
-
     var vertices = new Float32Array([
          0.0,  0.5,  1.0, 0.0, 0.0,
         -0.5, -0.5,  0.0, 1.0, 0.0,
          0.5, -0.5,  0.0, 0.0, 1.0
     ]);
-
     vao = gl.createVertexArray();
     gl.bindVertexArray(vao);
-
     vbo = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
     gl.bufferData(gl.ARRAY_BUFFER, vertices, gl.STATIC_DRAW);
-
     gl.enableVertexAttribArray(0);
     gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 20, 0);
     gl.enableVertexAttribArray(1);
     gl.vertexAttribPointer(1, 3, gl.FLOAT, false, 20, 8);
-
     gl.bindVertexArray(null);
-    return true;
+}
+
+function renderDemo1() {
+    gl.useProgram(program);
+    gl.uniform2f(uOffsetLoc, offsetX, offsetY);
+    gl.uniform1f(uAlphaLoc, alpha);
+    gl.bindVertexArray(vao);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    gl.bindVertexArray(null);
 }
 
 // ============================================================
-// GL 初期化: テクスチャクワッド（ImageBitmap 使用）
+// デモ2: Canvas2D 図形描画
 // ============================================================
 
-function initTexturedQuad() {
-    texProgram = createProgram(texVertSource, texFragSource);
-    if (!texProgram) return false;
+function renderDemo2() {
+    var c = canvas2d;
 
-    texOffsetLoc = gl.getUniformLocation(texProgram, "uOffset");
+    // 背景
+    c.fillStyle = "#1a1a2e";
+    c.fillRect(0, 0, 512, 512);
 
-    // sample.png を ImageBitmap として読み込み
-    var img = createImageBitmap("sample.png");
-    console.log("Loaded image: " + img.width + "x" + img.height);
+    // 矩形（塗り）
+    c.fillStyle = "#e94560";
+    c.fillRect(30, 30, 120, 80);
 
-    // テクスチャ作成
-    texTexture = gl.createTexture();
-    gl.bindTexture(gl.TEXTURE_2D, texTexture);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, img.width, img.height, 0,
-                  gl.RGBA, gl.UNSIGNED_BYTE, img);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-    gl.bindTexture(gl.TEXTURE_2D, null);
+    // 矩形（枠線）
+    c.strokeStyle = "#0f3460";
+    c.lineWidth = 4;
+    c.strokeRect(180, 30, 120, 80);
 
-    // クワッド頂点: position(xy) + texcoord(uv)
-    var quadVerts = new Float32Array([
-        // x,    y,    u,   v
-        -0.3,  0.3,  0.0, 0.0,   // 左上
-         0.3,  0.3,  1.0, 0.0,   // 右上
-         0.3, -0.3,  1.0, 1.0,   // 右下
-        -0.3, -0.3,  0.0, 1.0    // 左下
-    ]);
+    // 半透明矩形
+    c.globalAlpha = 0.5;
+    c.fillStyle = "#16213e";
+    c.fillRect(60, 60, 120, 80);
+    c.globalAlpha = 1.0;
 
-    var indices = new Uint16Array([0, 1, 2, 0, 2, 3]);
+    // 円（パスで描画）
+    c.beginPath();
+    c.arc(400, 80, 50, 0, Math.PI * 2);
+    c.closePath();
+    c.fillStyle = "#533483";
+    c.fill();
 
-    texVao = gl.createVertexArray();
-    gl.bindVertexArray(texVao);
+    // 半円
+    c.beginPath();
+    c.arc(400, 80, 50, 0, Math.PI);
+    c.closePath();
+    c.fillStyle = "rgba(255,200,0,0.7)";
+    c.fill();
 
-    texVbo = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, texVbo);
-    gl.bufferData(gl.ARRAY_BUFFER, quadVerts, gl.STATIC_DRAW);
+    // 三角形パス
+    c.beginPath();
+    c.moveTo(50, 250);
+    c.lineTo(150, 180);
+    c.lineTo(150, 320);
+    c.closePath();
+    c.fillStyle = "#2b9348";
+    c.fill();
+    c.strokeStyle = "white";
+    c.lineWidth = 2;
+    c.stroke();
 
-    texIbo = gl.createBuffer();
-    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, texIbo);
-    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indices, gl.STATIC_DRAW);
+    // ベジェ曲線
+    c.beginPath();
+    c.moveTo(200, 250);
+    c.bezierCurveTo(250, 150, 350, 350, 450, 250);
+    c.strokeStyle = "#ff6b6b";
+    c.lineWidth = 3;
+    c.stroke();
 
-    // aPosition (location=0): 2 floats, stride=16, offset=0
-    gl.enableVertexAttribArray(0);
-    gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 16, 0);
-    // aTexCoord (location=1): 2 floats, stride=16, offset=8
-    gl.enableVertexAttribArray(1);
-    gl.vertexAttribPointer(1, 2, gl.FLOAT, false, 16, 8);
+    // 複数矩形パターン
+    var colors = ["#e63946", "#457b9d", "#2a9d8f", "#e9c46a", "#f4a261"];
+    for (var i = 0; i < 5; i++) {
+        c.fillStyle = colors[i];
+        c.fillRect(30 + i * 60, 380, 50, 50);
+    }
 
-    gl.bindVertexArray(null);
+    // 同心円
+    for (var j = 5; j > 0; j--) {
+        c.beginPath();
+        c.arc(400, 400, j * 20, 0, Math.PI * 2);
+        c.closePath();
+        c.fillStyle = "rgba(" + (j*50) + "," + (255-j*40) + "," + (j*30+100) + ",0.6)";
+        c.fill();
+    }
 
-    console.log("Textured quad initialized");
-    return true;
+    c.flush();
 }
 
 // ============================================================
-// 初期化実行
+// デモ3: Canvas2D テキスト描画
 // ============================================================
 
-initTriangle();
-initTexturedQuad();
+function renderDemo3() {
+    var c = canvas2d;
+
+    // 背景
+    c.fillStyle = "#0d1117";
+    c.fillRect(0, 0, 512, 512);
+
+    // OpenSans Bold タイトル
+    c.font = "48px OpenSans-Bold";
+    c.fillStyle = "#58a6ff";
+    c.fillText("Canvas2D", 30, 80);
+
+    // OpenSans Regular サブタイトル
+    c.font = "32px OpenSans-Regular";
+    c.fillStyle = "#f0f6fc";
+    c.fillText("ThorVG + duktape", 30, 140);
+
+    // Roboto Regular
+    c.font = "24px Roboto-Regular";
+    c.fillStyle = "#8b949e";
+    c.fillText("OpenGL ES 3.0 Rendering", 30, 190);
+
+    // 複数フォント・色
+    var items = [
+        {text: "OpenSans Regular",  font: "24px OpenSans-Regular",  color: "#ff7b72", y: 250},
+        {text: "OpenSans Bold",     font: "24px OpenSans-Bold",     color: "#3fb950", y: 290},
+        {text: "Roboto Regular",    font: "24px Roboto-Regular",    color: "#58a6ff", y: 330},
+        {text: "RobotoMono",        font: "24px RobotoMono-VariableFont_wght", color: "#d29922", y: 370},
+    ];
+    for (var i = 0; i < items.length; i++) {
+        c.font = items[i].font;
+        c.fillStyle = items[i].color;
+        c.fillText(items[i].text, 30, items[i].y);
+
+        // 色見本矩形
+        c.fillRect(350, items[i].y - 18, 60, 22);
+    }
+
+    // ストロークテキスト
+    c.font = "40px OpenSans-Bold";
+    c.strokeStyle = "#f78166";
+    c.lineWidth = 2;
+    c.strokeText("Outline Text", 30, 450);
+
+    // サイズバリエーション
+    c.fillStyle = "#bc8cff";
+    var sizes = [12, 16, 20, 28, 36];
+    var tx = 300;
+    for (var j = 0; j < sizes.length; j++) {
+        c.font = sizes[j] + "px OpenSans-Regular";
+        c.fillText(sizes[j] + "px", tx, 450 + (j > 0 ? 10 : 0));
+        tx += sizes[j] * 2 + 10;
+    }
+
+    c.flush();
+}
+
+// ============================================================
+// デモ4: Canvas2D アニメーション
+// ============================================================
+
+function renderDemo4() {
+    var c = canvas2d;
+
+    // 背景
+    c.fillStyle = "#16213e";
+    c.fillRect(0, 0, 512, 512);
+
+    var cx = 256, cy = 256;
+
+    // 回転する四角形群
+    for (var i = 0; i < 6; i++) {
+        c.save();
+        c.translate(cx, cy);
+        c.rotate(time * 0.001 * (i + 1) * 0.5 + i * Math.PI / 3);
+
+        var size = 40 + i * 15;
+        var hue = (i * 60 + Math.floor(time * 0.05)) % 360;
+        // HSL 簡易変換
+        var r = 0, g = 0, b = 0;
+        var h = hue / 60;
+        var x = 1 - Math.abs(h % 2 - 1);
+        if      (h < 1) { r = 1; g = x; }
+        else if (h < 2) { r = x; g = 1; }
+        else if (h < 3) { g = 1; b = x; }
+        else if (h < 4) { g = x; b = 1; }
+        else if (h < 5) { r = x; b = 1; }
+        else            { r = 1; b = x; }
+
+        c.globalAlpha = 0.7;
+        c.fillStyle = "rgba(" + Math.floor(r*255) + "," + Math.floor(g*255) + "," + Math.floor(b*255) + ",1)";
+        c.fillRect(-size/2, -size/2, size, size);
+
+        c.strokeStyle = "white";
+        c.lineWidth = 1;
+        c.strokeRect(-size/2, -size/2, size, size);
+        c.globalAlpha = 1.0;
+
+        c.restore();
+    }
+
+    // 中央の回転する円
+    c.save();
+    c.translate(cx, cy);
+    var circleR = 30 + Math.sin(time * 0.002) * 10;
+    c.beginPath();
+    c.arc(0, 0, circleR, 0, Math.PI * 2);
+    c.closePath();
+    c.fillStyle = "white";
+    c.fill();
+    c.restore();
+
+    // 軌道上の小さな円
+    for (var j = 0; j < 8; j++) {
+        var angle = time * 0.001 + j * Math.PI / 4;
+        var orbitR = 150;
+        var px = cx + Math.cos(angle) * orbitR;
+        var py = cy + Math.sin(angle) * orbitR;
+        c.beginPath();
+        c.arc(px, py, 10, 0, Math.PI * 2);
+        c.closePath();
+        c.fillStyle = "rgba(255,255,255,0.5)";
+        c.fill();
+    }
+
+    // FPS / 時間表示
+    c.font = "18px RobotoMono-VariableFont_wght";
+    c.fillStyle = "rgba(255,255,255,0.8)";
+    c.fillText("t=" + (time * 0.001).toFixed(1) + "s", 10, 30);
+    c.fillText("Demo 4: Animation", 10, 500);
+
+    c.flush();
+}
+
+// ============================================================
+// 初期化
+// ============================================================
+
+initDemo1();
+initFullscreenQuad();
+
+canvas2d = new Canvas2D(512, 512);
+
+// フォント読み込み
+try {
+    Canvas2D.loadFont("fonts/OpenSans-Regular.ttf");
+    Canvas2D.loadFont("fonts/OpenSans-Bold.ttf");
+    Canvas2D.loadFont("fonts/Roboto-Regular.ttf");
+    Canvas2D.loadFont("fonts/RobotoMono-VariableFont_wght.ttf");
+    console.log("Fonts loaded");
+} catch(e) {
+    console.error("Font load error: " + e);
+}
 
 gl.enable(gl.BLEND);
 gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
 
-// ============================================================
-// localStorage サンプル: 起動回数カウンター
-// ============================================================
-
+// localStorage サンプル
 var launchCount = parseInt(localStorage.getItem("launchCount")) || 0;
 launchCount++;
 localStorage.setItem("launchCount", String(launchCount));
 console.log("Launch count: " + launchCount);
 
-// ============================================================
-// Web Audio サンプル: スペースキーでビープ音再生
-// ============================================================
-
+// Audio
 var audioCtx = new AudioContext();
-console.log("AudioContext state: " + audioCtx.state + ", sampleRate: " + audioCtx.sampleRate);
+
+console.log("Demo ready. Press 1-4 to switch demos, Space for beep, R to reset");
 
 // ============================================================
-// イベントリスナー登録
+// イベント
 // ============================================================
 
 addEventListener("keydown", function(e) {
     keysDown[e.code] = true;
 
-    // スペースキーでビープ音再生
     if (e.code === "Space" && !e.repeat) {
         var beep = audioCtx.createBufferSource("beep.wav");
         beep.volume = 0.5;
         beep.start();
-        console.log("Beep!");
     }
 
+    // デモ切り替え
+    if (e.key === "1") { demoMode = 1; console.log("Demo 1: Triangle + Texture"); }
+    if (e.key === "2") { demoMode = 2; console.log("Demo 2: Canvas2D Shapes"); }
+    if (e.key === "3") { demoMode = 3; console.log("Demo 3: Canvas2D Text"); }
+    if (e.key === "4") { demoMode = 4; console.log("Demo 4: Canvas2D Animation"); }
+
     if (e.key === "r" || e.key === "R") {
-        offsetX = 0.0;
-        offsetY = 0.0;
-        alpha = 1.0;
-        console.log("Reset position and alpha");
+        offsetX = 0.0; offsetY = 0.0; alpha = 1.0;
     }
 });
 
@@ -262,96 +454,61 @@ addEventListener("keyup", function(e) {
 });
 
 addEventListener("mousedown", function(e) {
-    if (e.button === 0) {
-        mouseDown = true;
-        mouseX = e.clientX;
-        mouseY = e.clientY;
-    }
+    if (e.button === 0) { mouseDown = true; mouseX = e.clientX; mouseY = e.clientY; }
 });
-
 addEventListener("mouseup", function(e) {
-    if (e.button === 0) {
-        mouseDown = false;
-    }
+    if (e.button === 0) { mouseDown = false; }
 });
-
 addEventListener("mousemove", function(e) {
     if (mouseDown) {
-        var dx = e.clientX - mouseX;
-        var dy = e.clientY - mouseY;
-        offsetX += dx / 640.0;
-        offsetY -= dy / 360.0;
-        mouseX = e.clientX;
-        mouseY = e.clientY;
+        offsetX += (e.clientX - mouseX) / 640.0;
+        offsetY -= (e.clientY - mouseY) / 360.0;
+        mouseX = e.clientX; mouseY = e.clientY;
     }
 });
-
 addEventListener("wheel", function(e) {
     alpha += e.deltaY * 0.001;
     if (alpha < 0.05) alpha = 0.05;
     if (alpha > 1.0) alpha = 1.0;
 });
 
-addEventListener("touchstart", function(e) {
-    if (e.touches.length > 0) {
-        var t = e.touches[0];
-        offsetX = (t.clientX / 640.0) - 1.0;
-        offsetY = 1.0 - (t.clientY / 360.0);
-    }
-});
-
-addEventListener("touchmove", function(e) {
-    if (e.touches.length > 0) {
-        var t = e.touches[0];
-        offsetX = (t.clientX / 640.0) - 1.0;
-        offsetY = 1.0 - (t.clientY / 360.0);
-    }
-});
-
 // ============================================================
-// 毎フレーム更新
+// 毎フレーム
 // ============================================================
 
 function update(dt) {
-    if (keysDown["KeyW"] || keysDown["ArrowUp"])    offsetY += moveSpeed;
-    if (keysDown["KeyS"] || keysDown["ArrowDown"])   offsetY -= moveSpeed;
-    if (keysDown["KeyA"] || keysDown["ArrowLeft"])   offsetX -= moveSpeed;
-    if (keysDown["KeyD"] || keysDown["ArrowRight"])  offsetX += moveSpeed;
+    time += dt;
 
-    if (offsetX < -1.0) offsetX = -1.0;
-    if (offsetX >  1.0) offsetX =  1.0;
-    if (offsetY < -1.0) offsetY = -1.0;
-    if (offsetY >  1.0) offsetY =  1.0;
+    if (demoMode === 1) {
+        if (keysDown["KeyW"] || keysDown["ArrowUp"])    offsetY += moveSpeed;
+        if (keysDown["KeyS"] || keysDown["ArrowDown"])   offsetY -= moveSpeed;
+        if (keysDown["KeyA"] || keysDown["ArrowLeft"])   offsetX -= moveSpeed;
+        if (keysDown["KeyD"] || keysDown["ArrowRight"])  offsetX += moveSpeed;
+        if (offsetX < -1) offsetX = -1; if (offsetX > 1) offsetX = 1;
+        if (offsetY < -1) offsetY = -1; if (offsetY > 1) offsetY = 1;
+    }
 }
-
-// ============================================================
-// 毎フレーム描画
-// ============================================================
 
 function render() {
-    gl.clearColor(0.2, 0.2, 0.2, 1.0);
+    gl.clearColor(0.15, 0.15, 0.15, 1.0);
     gl.clear(gl.COLOR_BUFFER_BIT);
 
-    // テクスチャクワッド描画（右寄り）
-    gl.useProgram(texProgram);
-    gl.uniform2f(texOffsetLoc, offsetX + 0.5, offsetY);
-    gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, texTexture);
-    gl.bindVertexArray(texVao);
-    gl.drawElements(gl.TRIANGLES, 6, gl.UNSIGNED_SHORT, 0);
-
-    // 頂点カラー三角形描画（左寄り）
-    gl.useProgram(program);
-    gl.uniform2f(uOffsetLoc, offsetX - 0.5, offsetY);
-    gl.uniform1f(uAlphaLoc, alpha);
-    gl.bindVertexArray(vao);
-    gl.drawArrays(gl.TRIANGLES, 0, 3);
-
-    gl.bindVertexArray(null);
+    if (demoMode === 1) {
+        renderDemo1();
+    } else if (demoMode === 2) {
+        renderDemo2();
+        drawCanvas2DFullscreen(canvas2d);
+    } else if (demoMode === 3) {
+        renderDemo3();
+        drawCanvas2DFullscreen(canvas2d);
+    } else if (demoMode === 4) {
+        renderDemo4();
+        drawCanvas2DFullscreen(canvas2d);
+    }
 }
 
 // ============================================================
-// 終了時
+// 終了
 // ============================================================
 
 function done() {
@@ -361,7 +518,6 @@ function done() {
     if (texVbo) gl.deleteBuffer(texVbo);
     if (texIbo) gl.deleteBuffer(texIbo);
     if (texVao) gl.deleteVertexArray(texVao);
-    if (texTexture) gl.deleteTexture(texTexture);
     if (texProgram) gl.deleteProgram(texProgram);
     console.log("done");
 }

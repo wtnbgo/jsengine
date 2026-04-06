@@ -43,6 +43,11 @@ jsengine -quiet             # 警告以上のログのみ
 | GLAD | ローカル (glad/) | OpenGL ES 3.0 ローダー |
 | duktape | vcpkg | JavaScript エンジン |
 | glm | vcpkg | 数学ライブラリ |
+| miniaudio | src/audio/ | オーディオエンジン（WAV, MP3, FLAC, OGG） |
+| ThorVG | FetchContent | 2D ベクターグラフィックス（Canvas 2D API） |
+| FreeType | vcpkg | フォントラスタライズ |
+| HarfBuzz | FetchContent | テキストシェーピング |
+| libvorbis / libopus | vcpkg (オプション) | OGG Vorbis / Opus オーディオデコード |
 
 ## アーキテクチャ
 
@@ -52,6 +57,9 @@ jsengine -quiet             # 警告以上のログのみ
 - `src/app.hpp / app.cpp` - `App` シングルトン。SDL ウィンドウと GL コンテキストの管理、JsEngine の所有。
 - `src/jsengine.hpp / jsengine.cpp` - `JsEngine` クラス。duktape ヒープの管理、JS ファイルの読み込み・実行、イベントディスパッチ。
 - `src/dukwebgl.h / dukwebgl.cpp` - WebGL 2.0 互換バインディング（GLES 3.0 ベース）
+- `src/webaudio.h / webaudio.cpp` - Web Audio API バインディング
+- `src/canvas2d.h / canvas2d.cpp` - Canvas 2D API バインディング（ThorVG ベース）
+- `src/audio/` - AudioEngine / AudioStream（miniaudio + SDL3 オーディオ）
 
 ### JavaScript ライフサイクル
 
@@ -73,6 +81,10 @@ jsengine -quiet             # 警告以上のログのみ
 - **`addEventListener(type, callback)`** - ブラウザ互換イベントリスナー登録
 - **`removeEventListener(type, callback)`** - イベントリスナー解除
 - **`fs`** - File System Access API（`readText`, `writeText`, `getFileHandle`, `getDirectoryHandle`, `exists`, `stat`, `mkdir`, `remove`, `rename`）
+- **`new AudioContext()`** - Web Audio API（`createBufferSource`, マスターボリューム）
+- **`new Canvas2D(w, h)`** - Canvas 2D API（矩形、パス、テキスト、変換、GL テクスチャ出力）
+- **`Canvas2D.loadFont(path)`** - ThorVG 用フォントファイル読み込み
+- **`createImageBitmap(path)`** - 画像を RGBA ピクセルデータとして読み込み
 
 ### 入力イベント
 
@@ -95,10 +107,15 @@ jsengine -quiet             # 警告以上のログのみ
 
 ## サンプル
 
-`main.js` に入力操作で三角形を動かせるサンプルが含まれています。
+`data/main.js` にキー操作で切り替え可能な4つのデモが含まれています。
 
-- **WASD / 矢印キー** — 三角形を移動
-- **マウスドラッグ** — 三角形をドラッグ移動
-- **ホイール** — 透明度を変更
-- **タッチ** — タッチ位置に移動
-- **R キー** — リセット
+| キー | デモ内容 |
+|------|---------|
+| **1** | 頂点カラー三角形（WASD 移動、ホイール透明度） |
+| **2** | Canvas2D 図形描画（矩形、円、ベジェ曲線、半透明） |
+| **3** | Canvas2D テキスト描画（複数フォント・サイズ・色） |
+| **4** | Canvas2D アニメーション（回転図形、軌道円） |
+| **Space** | ビープ音再生 |
+| **R** | リセット |
+
+フォントファイルは `data/fonts/` に配置してください（OpenSans, Roboto 等）。
