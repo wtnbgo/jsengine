@@ -25,6 +25,15 @@ make run
 
 プリセットは OS に応じて自動選択されます（`x64-windows` / `x64-linux` / `x64-macos`）。
 
+### 起動オプション
+
+```bash
+jsengine                    # data/ フォルダから main.js を読み込み
+jsengine -data path/to/dir  # 指定フォルダから main.js を読み込み
+jsengine -debug             # デバッグログ有効
+jsengine -quiet             # 警告以上のログのみ
+```
+
 ## 依存ライブラリ
 
 | ライブラリ | 管理方法 | 用途 |
@@ -46,7 +55,9 @@ make run
 
 ### JavaScript ライフサイクル
 
-起動時に `main.js` が `SDL_LoadFile` 経由で読み込まれ実行されます。その後、以下のグローバル関数が C++ 側から呼び出されます:
+起動時にベースパス（デフォルト: `data/`）から `main.js` が読み込まれ実行されます。`-data` オプションでベースパスを変更できます。`loadScript()` や `fs.*` API の相対パスはすべてこのベースパスから解決されます。
+
+以下のグローバル関数を定義すると C++ 側から呼び出されます:
 
 | 関数 | タイミング | 引数 |
 |------|-----------|------|
@@ -61,6 +72,7 @@ make run
 - **`loadScript(path)`** - 追加の JS ファイルを読み込み実行
 - **`addEventListener(type, callback)`** - ブラウザ互換イベントリスナー登録
 - **`removeEventListener(type, callback)`** - イベントリスナー解除
+- **`fs`** - File System Access API（`readText`, `writeText`, `getFileHandle`, `getDirectoryHandle`, `exists`, `stat`, `mkdir`, `remove`, `rename`）
 
 ### 入力イベント
 

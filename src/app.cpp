@@ -53,8 +53,19 @@ bool App::init(int argc, char *argv[])
 
     SDL_GL_SetSwapInterval(1); // 1: VSYNC
 
+    // データパス決定（デフォルト: data、-data オプションで変更可）
+    const char *dataPath = "data";
+    for (int i = 1; i < argc; i++) {
+        if (SDL_strcmp(argv[i], "-data") == 0 && i + 1 < argc) {
+            dataPath = argv[i + 1];
+            break;
+        }
+    }
+
     // JsEngine 初期化
     jsEngine_ = std::make_unique<JsEngine>();
+    jsEngine_->setBasePath(dataPath);
+    SDL_Log("Data path: %s", jsEngine_->getBasePath().c_str());
     if (!jsEngine_->init()) {
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to initialize JsEngine");
         return false;

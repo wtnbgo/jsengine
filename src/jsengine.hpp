@@ -1,5 +1,6 @@
 #pragma once
 #include <cstdint>
+#include <string>
 
 // forward declarations
 struct duk_hthread;
@@ -10,6 +11,13 @@ class JsEngine {
 public:
     JsEngine();
     ~JsEngine();
+
+    // ベースパスを設定（init 前に呼ぶ）
+    void setBasePath(const char *path);
+    const std::string& getBasePath() const { return basePath_; }
+
+    // ベースパスからの相対パスをフルパスに解決
+    std::string resolvePath(const char *path) const;
 
     bool init();
     void update(uint32_t delta);
@@ -24,8 +32,13 @@ public:
 
     duk_context* getContext() const { return ctx_; }
 
+    static JsEngine* getInstance() { return instance_; }
+
 private:
     duk_context* ctx_;
+    std::string basePath_;
+
+    static JsEngine* instance_;
 
     // イベントディスパッチヘルパー
     void dispatchEvent(const char *type);

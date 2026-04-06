@@ -58,7 +58,8 @@ cmake --build build/x64-windows --config Release
 - GLAD is loaded via `SDL_GL_GetProcAddress`; do not use platform-specific GL loaders.
 - SDL3 shared libraries are copied to the build output directory as a post-build step.
 - On mobile platforms (iOS/Android), the window is created fullscreen; on desktop, it's resizable.
-- JS lifecycle: `main.js` loaded at init → `update(dt)` and `render()` called each frame → `done()` at quit.
+- JS files are loaded from the base path (default: `data/`, changeable via `-data <path>` CLI option). All relative paths in `loadScript()` and `fs.*` APIs resolve from this base path.
+- JS lifecycle: `data/main.js` loaded at init → `update(dt)` and `render()` called each frame → `done()` at quit.
 - Input events (keyboard, mouse, touch, wheel) are converted from SDL3 to browser-compatible event objects and dispatched via `addEventListener`.
 - The vcpkg duktape package name is `unofficial-duktape` (target: `unofficial::duktape::duktape`).
 - Comments in the codebase are in Japanese.

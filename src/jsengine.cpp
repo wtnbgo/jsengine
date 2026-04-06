@@ -34,24 +34,32 @@ static char* load_file_sdl(const char *path, size_t *out_size) {
     return (char*)data;
 }
 
+// ベースパスからの相対パスを解決するヘルパー（static 関数からアクセス用）
+static std::string resolve_path(const char *path) {
+    JsEngine *engine = JsEngine::getInstance();
+    if (engine) return engine->resolvePath(path);
+    return path;
+}
+
 // JS から呼び出せる loadScript("path") バインディング
 static duk_ret_t native_load_script(duk_context *ctx) {
     const char *path = duk_require_string(ctx, 0);
+    std::string resolved = resolve_path(path);
     size_t size = 0;
-    char *source = load_file_sdl(path, &size);
+    char *source = load_file_sdl(resolved.c_str(), &size);
     if (!source) {
-        return duk_error(ctx, DUK_ERR_ERROR, "Cannot load file: %s", path);
+        return duk_error(ctx, DUK_ERR_ERROR, "Cannot load file: %s", resolved.c_str());
     }
     duk_push_lstring(ctx, source, size);
     SDL_free(source);
     // ファイル名付きでコンパイル・実行
     duk_push_string(ctx, path);
     if (duk_pcompile(ctx, DUK_COMPILE_EVAL) != 0) {
-        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "JS compile error (%s): %s", path, duk_safe_to_string(ctx, -1));
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "JS compile error (%s): %s", resolved.c_str(), duk_safe_to_string(ctx, -1));
         return duk_throw(ctx);
     }
     if (duk_pcall(ctx, 0) != 0) {
-        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "JS exec error (%s): %s", path, duk_safe_to_string(ctx, -1));
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "JS exec error (%s): %s", resolved.c_str(), duk_safe_to_string(ctx, -1));
         return duk_throw(ctx);
     }
     return 1; // 実行結果を返す
@@ -278,6 +286,547 @@ static const char* sdl_scancode_to_js_code(SDL_Scancode sc) {
 }
 
 // ============================================================
+// File System Access API (同期版)
+//
+// JS 側:
+//   var root = await navigator.storage.getDirectory()   に相当する
+//   fs.getDirectoryHandle(path, {create:true})
+//   fs.getFileHandle(path, {create:true})
+//   handle.getFile() => { name, size, type, text(), arrayBuffer() }
+//   handle.createWritable() => { write(data), close() }
+//   dirHandle.entries() => [[name, handle], ...]
+//   dirHandle.removeEntry(name, {recursive:true})
+//   fs.exists(path), fs.remove(path), fs.mkdir(path), fs.stat(path)
+// ============================================================
+
+// --- ユーティリティ: options から create フラグ取得 ---
+static bool get_create_option(duk_context *ctx, duk_idx_t opt_idx) {
+    if (duk_is_object(ctx, opt_idx)) {
+        duk_get_prop_string(ctx, opt_idx, "create");
+        bool create = duk_to_boolean(ctx, -1) != 0;
+        duk_pop(ctx);
+        return create;
+    }
+    return false;
+}
+
+// --- ユーティリティ: options から recursive フラグ取得 ---
+static bool get_recursive_option(duk_context *ctx, duk_idx_t opt_idx) {
+    if (duk_is_object(ctx, opt_idx)) {
+        duk_get_prop_string(ctx, opt_idx, "recursive");
+        bool r = duk_to_boolean(ctx, -1) != 0;
+        duk_pop(ctx);
+        return r;
+    }
+    return false;
+}
+
+// --- FileSystemFileHandle ---
+
+// handle._path にファイルパスを格納
+static void push_file_handle(duk_context *ctx, const char *path);
+static void push_directory_handle(duk_context *ctx, const char *path);
+
+// getFile() => { name, size, text(), arrayBuffer() }
+static duk_ret_t filehandle_getFile(duk_context *ctx) {
+    duk_push_this(ctx);
+    duk_get_prop_string(ctx, -1, "_path");
+    const char *path = duk_get_string(ctx, -1);
+    duk_pop_2(ctx);
+
+    SDL_PathInfo info;
+    if (!SDL_GetPathInfo(path, &info) || info.type != SDL_PATHTYPE_FILE) {
+        return duk_error(ctx, DUK_ERR_ERROR, "File not found: %s", path);
+    }
+
+    // ファイル名抽出
+    const char *name = path;
+    const char *p = path;
+    while (*p) {
+        if (*p == '/' || *p == '\\') name = p + 1;
+        p++;
+    }
+
+    duk_idx_t obj = duk_push_object(ctx);
+
+    duk_push_string(ctx, name);
+    duk_put_prop_string(ctx, obj, "name");
+    duk_push_number(ctx, (double)info.size);
+    duk_put_prop_string(ctx, obj, "size");
+    duk_push_string(ctx, "");
+    duk_put_prop_string(ctx, obj, "type");
+
+    // ファイルパスを隠しプロパティとしてコピー
+    duk_push_string(ctx, path);
+    duk_put_prop_string(ctx, obj, "_path");
+
+    // text() メソッド
+    duk_push_c_function(ctx, [](duk_context *c) -> duk_ret_t {
+        duk_push_this(c);
+        duk_get_prop_string(c, -1, "_path");
+        const char *p = duk_get_string(c, -1);
+        duk_pop_2(c);
+        size_t sz = 0;
+        void *data = SDL_LoadFile(p, &sz);
+        if (!data) return duk_error(c, DUK_ERR_ERROR, "Cannot read file: %s", p);
+        duk_push_lstring(c, (const char*)data, sz);
+        SDL_free(data);
+        return 1;
+    }, 0);
+    duk_put_prop_string(ctx, obj, "text");
+
+    // arrayBuffer() メソッド
+    duk_push_c_function(ctx, [](duk_context *c) -> duk_ret_t {
+        duk_push_this(c);
+        duk_get_prop_string(c, -1, "_path");
+        const char *p = duk_get_string(c, -1);
+        duk_pop_2(c);
+        size_t sz = 0;
+        void *data = SDL_LoadFile(p, &sz);
+        if (!data) return duk_error(c, DUK_ERR_ERROR, "Cannot read file: %s", p);
+        void *buf = duk_push_buffer(c, sz, 0);
+        memcpy(buf, data, sz);
+        SDL_free(data);
+        return 1;
+    }, 0);
+    duk_put_prop_string(ctx, obj, "arrayBuffer");
+
+    return 1;
+}
+
+// createWritable() => { _chunks: [], write(data), close() }
+static duk_ret_t filehandle_createWritable(duk_context *ctx) {
+    duk_push_this(ctx);
+    duk_get_prop_string(ctx, -1, "_path");
+    const char *path = duk_get_string(ctx, -1);
+    duk_pop_2(ctx);
+
+    duk_idx_t obj = duk_push_object(ctx);
+
+    duk_push_string(ctx, path);
+    duk_put_prop_string(ctx, obj, "_path");
+
+    // _chunks 配列
+    duk_push_array(ctx);
+    duk_put_prop_string(ctx, obj, "_chunks");
+
+    // write(data) — 文字列またはバッファを _chunks に追加
+    duk_push_c_function(ctx, [](duk_context *c) -> duk_ret_t {
+        duk_push_this(c);
+        duk_get_prop_string(c, -1, "_chunks");
+        duk_get_prop_string(c, -1, "length");
+        duk_uarridx_t len = (duk_uarridx_t)duk_to_uint(c, -1);
+        duk_pop(c);
+        duk_dup(c, 0); // data
+        duk_put_prop_index(c, -2, len);
+        duk_pop_2(c); // _chunks, this
+        return 0;
+    }, 1);
+    duk_put_prop_string(ctx, obj, "write");
+
+    // close() — _chunks を結合してファイルに書き出す
+    duk_push_c_function(ctx, [](duk_context *c) -> duk_ret_t {
+        duk_push_this(c);
+        duk_get_prop_string(c, -1, "_path");
+        const char *p = duk_get_string(c, -1);
+        duk_pop(c);
+        duk_get_prop_string(c, -1, "_chunks");
+
+        duk_get_prop_string(c, -1, "length");
+        duk_uint_t len = duk_to_uint(c, -1);
+        duk_pop(c);
+
+        // 全チャンクのサイズを計算
+        size_t total = 0;
+        for (duk_uint_t i = 0; i < len; i++) {
+            duk_get_prop_index(c, -1, i);
+            if (duk_is_buffer_data(c, -1)) {
+                duk_size_t sz;
+                duk_get_buffer_data(c, -1, &sz);
+                total += sz;
+            } else {
+                duk_size_t sz;
+                duk_to_lstring(c, -1, &sz);
+                total += sz;
+            }
+            duk_pop(c);
+        }
+
+        // バッファに結合
+        char *buf = (char*)SDL_malloc(total);
+        if (!buf) {
+            duk_pop_2(c);
+            return duk_error(c, DUK_ERR_ERROR, "Out of memory");
+        }
+        size_t offset = 0;
+        for (duk_uint_t i = 0; i < len; i++) {
+            duk_get_prop_index(c, -1, i);
+            if (duk_is_buffer_data(c, -1)) {
+                duk_size_t sz;
+                void *data = duk_get_buffer_data(c, -1, &sz);
+                memcpy(buf + offset, data, sz);
+                offset += sz;
+            } else {
+                duk_size_t sz;
+                const char *s = duk_to_lstring(c, -1, &sz);
+                memcpy(buf + offset, s, sz);
+                offset += sz;
+            }
+            duk_pop(c);
+        }
+
+        bool ok = SDL_SaveFile(p, buf, total);
+        SDL_free(buf);
+        duk_pop_2(c); // _chunks, this
+
+        if (!ok) {
+            return duk_error(c, DUK_ERR_ERROR, "Failed to write file: %s", p);
+        }
+        return 0;
+    }, 0);
+    duk_put_prop_string(ctx, obj, "close");
+
+    return 1;
+}
+
+static void push_file_handle(duk_context *ctx, const char *path) {
+    duk_idx_t obj = duk_push_object(ctx);
+
+    duk_push_string(ctx, path);
+    duk_put_prop_string(ctx, obj, "_path");
+    duk_push_string(ctx, "file");
+    duk_put_prop_string(ctx, obj, "kind");
+
+    // ファイル名抽出
+    const char *name = path;
+    const char *p = path;
+    while (*p) {
+        if (*p == '/' || *p == '\\') name = p + 1;
+        p++;
+    }
+    duk_push_string(ctx, name);
+    duk_put_prop_string(ctx, obj, "name");
+
+    duk_push_c_function(ctx, filehandle_getFile, 0);
+    duk_put_prop_string(ctx, obj, "getFile");
+    duk_push_c_function(ctx, filehandle_createWritable, 0);
+    duk_put_prop_string(ctx, obj, "createWritable");
+}
+
+// --- FileSystemDirectoryHandle ---
+
+// entries() => [[name, handle], ...]
+struct EnumCtx {
+    duk_context *ctx;
+    duk_idx_t arr_idx;
+    duk_uint_t count;
+    const char *dirname;
+};
+
+static SDL_EnumerationResult dir_enum_callback(void *userdata, const char *dirname, const char *fname) {
+    EnumCtx *ec = (EnumCtx*)userdata;
+
+    // エントリ配列 [name, handle]
+    duk_push_array(ec->ctx);
+
+    duk_push_string(ec->ctx, fname);
+    duk_put_prop_index(ec->ctx, -2, 0);
+
+    // フルパス構築
+    size_t len = strlen(dirname) + strlen(fname) + 2;
+    char *fullpath = (char*)SDL_malloc(len);
+    snprintf(fullpath, len, "%s/%s", dirname, fname);
+
+    SDL_PathInfo info;
+    if (SDL_GetPathInfo(fullpath, &info) && info.type == SDL_PATHTYPE_DIRECTORY) {
+        push_directory_handle(ec->ctx, fullpath);
+    } else {
+        push_file_handle(ec->ctx, fullpath);
+    }
+    SDL_free(fullpath);
+    duk_put_prop_index(ec->ctx, -2, 1);
+
+    // 外側の配列に追加
+    duk_put_prop_index(ec->ctx, ec->arr_idx, ec->count);
+    ec->count++;
+
+    return SDL_ENUM_CONTINUE;
+}
+
+static duk_ret_t dirhandle_entries(duk_context *ctx) {
+    duk_push_this(ctx);
+    duk_get_prop_string(ctx, -1, "_path");
+    const char *path = duk_get_string(ctx, -1);
+    duk_pop_2(ctx);
+
+    duk_idx_t arr = duk_push_array(ctx);
+    EnumCtx ec = { ctx, arr, 0, path };
+    SDL_EnumerateDirectory(path, dir_enum_callback, &ec);
+    return 1;
+}
+
+// getFileHandle(name, options)
+static duk_ret_t dirhandle_getFileHandle(duk_context *ctx) {
+    duk_push_this(ctx);
+    duk_get_prop_string(ctx, -1, "_path");
+    const char *dir = duk_get_string(ctx, -1);
+    duk_pop_2(ctx);
+
+    const char *name = duk_require_string(ctx, 0);
+    bool create = get_create_option(ctx, 1);
+
+    size_t len = strlen(dir) + strlen(name) + 2;
+    char *fullpath = (char*)SDL_malloc(len);
+    snprintf(fullpath, len, "%s/%s", dir, name);
+
+    SDL_PathInfo info;
+    if (!SDL_GetPathInfo(fullpath, &info) || info.type == SDL_PATHTYPE_NONE) {
+        if (create) {
+            // 空ファイル作成
+            SDL_SaveFile(fullpath, "", 0);
+        } else {
+            SDL_free(fullpath);
+            return duk_error(ctx, DUK_ERR_ERROR, "File not found: %s/%s", dir, name);
+        }
+    }
+
+    push_file_handle(ctx, fullpath);
+    SDL_free(fullpath);
+    return 1;
+}
+
+// getDirectoryHandle(name, options)
+static duk_ret_t dirhandle_getDirectoryHandle(duk_context *ctx) {
+    duk_push_this(ctx);
+    duk_get_prop_string(ctx, -1, "_path");
+    const char *dir = duk_get_string(ctx, -1);
+    duk_pop_2(ctx);
+
+    const char *name = duk_require_string(ctx, 0);
+    bool create = get_create_option(ctx, 1);
+
+    size_t len = strlen(dir) + strlen(name) + 2;
+    char *fullpath = (char*)SDL_malloc(len);
+    snprintf(fullpath, len, "%s/%s", dir, name);
+
+    SDL_PathInfo info;
+    if (!SDL_GetPathInfo(fullpath, &info) || info.type != SDL_PATHTYPE_DIRECTORY) {
+        if (create) {
+            SDL_CreateDirectory(fullpath);
+        } else {
+            SDL_free(fullpath);
+            return duk_error(ctx, DUK_ERR_ERROR, "Directory not found: %s/%s", dir, name);
+        }
+    }
+
+    push_directory_handle(ctx, fullpath);
+    SDL_free(fullpath);
+    return 1;
+}
+
+// removeEntry(name, options)
+static duk_ret_t dirhandle_removeEntry(duk_context *ctx) {
+    duk_push_this(ctx);
+    duk_get_prop_string(ctx, -1, "_path");
+    const char *dir = duk_get_string(ctx, -1);
+    duk_pop_2(ctx);
+
+    const char *name = duk_require_string(ctx, 0);
+    // recursive オプション（今は SDL_RemovePath のみ）
+    // bool recursive = get_recursive_option(ctx, 1);
+
+    size_t len = strlen(dir) + strlen(name) + 2;
+    char *fullpath = (char*)SDL_malloc(len);
+    snprintf(fullpath, len, "%s/%s", dir, name);
+
+    if (!SDL_RemovePath(fullpath)) {
+        SDL_free(fullpath);
+        return duk_error(ctx, DUK_ERR_ERROR, "Failed to remove: %s/%s", dir, name);
+    }
+    SDL_free(fullpath);
+    return 0;
+}
+
+static void push_directory_handle(duk_context *ctx, const char *path) {
+    duk_idx_t obj = duk_push_object(ctx);
+
+    duk_push_string(ctx, path);
+    duk_put_prop_string(ctx, obj, "_path");
+    duk_push_string(ctx, "directory");
+    duk_put_prop_string(ctx, obj, "kind");
+
+    // ディレクトリ名抽出
+    const char *name = path;
+    const char *p = path;
+    while (*p) {
+        if (*p == '/' || *p == '\\') name = p + 1;
+        p++;
+    }
+    duk_push_string(ctx, name);
+    duk_put_prop_string(ctx, obj, "name");
+
+    duk_push_c_function(ctx, dirhandle_entries, 0);
+    duk_put_prop_string(ctx, obj, "entries");
+    duk_push_c_function(ctx, dirhandle_getFileHandle, 2);
+    duk_put_prop_string(ctx, obj, "getFileHandle");
+    duk_push_c_function(ctx, dirhandle_getDirectoryHandle, 2);
+    duk_put_prop_string(ctx, obj, "getDirectoryHandle");
+    duk_push_c_function(ctx, dirhandle_removeEntry, 2);
+    duk_put_prop_string(ctx, obj, "removeEntry");
+}
+
+// --- グローバル fs オブジェクト ---
+
+// fs.getFileHandle(path, options)
+static duk_ret_t fs_getFileHandle(duk_context *ctx) {
+    std::string rpath = resolve_path(duk_require_string(ctx, 0));
+    bool create = get_create_option(ctx, 1);
+
+    SDL_PathInfo info;
+    if (!SDL_GetPathInfo(rpath.c_str(), &info) || info.type == SDL_PATHTYPE_NONE) {
+        if (create) {
+            SDL_SaveFile(rpath.c_str(), "", 0);
+        } else {
+            return duk_error(ctx, DUK_ERR_ERROR, "File not found: %s", rpath.c_str());
+        }
+    }
+    push_file_handle(ctx, rpath.c_str());
+    return 1;
+}
+
+// fs.getDirectoryHandle(path, options)
+static duk_ret_t fs_getDirectoryHandle(duk_context *ctx) {
+    std::string rpath = resolve_path(duk_require_string(ctx, 0));
+    bool create = get_create_option(ctx, 1);
+
+    SDL_PathInfo info;
+    if (!SDL_GetPathInfo(rpath.c_str(), &info) || info.type != SDL_PATHTYPE_DIRECTORY) {
+        if (create) {
+            SDL_CreateDirectory(rpath.c_str());
+        } else {
+            return duk_error(ctx, DUK_ERR_ERROR, "Directory not found: %s", rpath.c_str());
+        }
+    }
+    push_directory_handle(ctx, rpath.c_str());
+    return 1;
+}
+
+// fs.exists(path) => boolean
+static duk_ret_t fs_exists(duk_context *ctx) {
+    std::string rpath = resolve_path(duk_require_string(ctx, 0));
+    SDL_PathInfo info;
+    duk_push_boolean(ctx, SDL_GetPathInfo(rpath.c_str(), &info) && info.type != SDL_PATHTYPE_NONE);
+    return 1;
+}
+
+// fs.stat(path) => { type, size, createTime, modifyTime, accessTime } | null
+static duk_ret_t fs_stat(duk_context *ctx) {
+    std::string rpath = resolve_path(duk_require_string(ctx, 0));
+    SDL_PathInfo info;
+    if (!SDL_GetPathInfo(rpath.c_str(), &info) || info.type == SDL_PATHTYPE_NONE) {
+        duk_push_null(ctx);
+        return 1;
+    }
+    duk_idx_t obj = duk_push_object(ctx);
+    const char *typeStr = "other";
+    if (info.type == SDL_PATHTYPE_FILE) typeStr = "file";
+    else if (info.type == SDL_PATHTYPE_DIRECTORY) typeStr = "directory";
+    duk_push_string(ctx, typeStr);
+    duk_put_prop_string(ctx, obj, "type");
+    duk_push_number(ctx, (double)info.size);
+    duk_put_prop_string(ctx, obj, "size");
+    duk_push_number(ctx, (double)info.create_time);
+    duk_put_prop_string(ctx, obj, "createTime");
+    duk_push_number(ctx, (double)info.modify_time);
+    duk_put_prop_string(ctx, obj, "modifyTime");
+    duk_push_number(ctx, (double)info.access_time);
+    duk_put_prop_string(ctx, obj, "accessTime");
+    return 1;
+}
+
+// fs.mkdir(path)
+static duk_ret_t fs_mkdir(duk_context *ctx) {
+    std::string rpath = resolve_path(duk_require_string(ctx, 0));
+    if (!SDL_CreateDirectory(rpath.c_str())) {
+        return duk_error(ctx, DUK_ERR_ERROR, "Failed to create directory: %s", rpath.c_str());
+    }
+    return 0;
+}
+
+// fs.remove(path)
+static duk_ret_t fs_remove(duk_context *ctx) {
+    std::string rpath = resolve_path(duk_require_string(ctx, 0));
+    if (!SDL_RemovePath(rpath.c_str())) {
+        return duk_error(ctx, DUK_ERR_ERROR, "Failed to remove: %s", rpath.c_str());
+    }
+    return 0;
+}
+
+// fs.rename(oldPath, newPath)
+static duk_ret_t fs_rename(duk_context *ctx) {
+    std::string rold = resolve_path(duk_require_string(ctx, 0));
+    std::string rnew = resolve_path(duk_require_string(ctx, 1));
+    if (!SDL_RenamePath(rold.c_str(), rnew.c_str())) {
+        return duk_error(ctx, DUK_ERR_ERROR, "Failed to rename: %s -> %s", rold.c_str(), rnew.c_str());
+    }
+    return 0;
+}
+
+// fs.readText(path) => string
+static duk_ret_t fs_readText(duk_context *ctx) {
+    std::string rpath = resolve_path(duk_require_string(ctx, 0));
+    size_t sz = 0;
+    void *data = SDL_LoadFile(rpath.c_str(), &sz);
+    if (!data) return duk_error(ctx, DUK_ERR_ERROR, "Cannot read file: %s", rpath.c_str());
+    duk_push_lstring(ctx, (const char*)data, sz);
+    SDL_free(data);
+    return 1;
+}
+
+// fs.writeText(path, text)
+static duk_ret_t fs_writeText(duk_context *ctx) {
+    std::string rpath = resolve_path(duk_require_string(ctx, 0));
+    duk_size_t len;
+    const char *text = duk_require_lstring(ctx, 1, &len);
+    if (!SDL_SaveFile(rpath.c_str(), text, len)) {
+        return duk_error(ctx, DUK_ERR_ERROR, "Failed to write file: %s", rpath.c_str());
+    }
+    return 0;
+}
+
+static void fs_register(duk_context *ctx) {
+    duk_idx_t obj = duk_push_object(ctx);
+
+    duk_push_c_function(ctx, fs_getFileHandle, 2);
+    duk_put_prop_string(ctx, obj, "getFileHandle");
+    duk_push_c_function(ctx, fs_getDirectoryHandle, 2);
+    duk_put_prop_string(ctx, obj, "getDirectoryHandle");
+    duk_push_c_function(ctx, fs_exists, 1);
+    duk_put_prop_string(ctx, obj, "exists");
+    duk_push_c_function(ctx, fs_stat, 1);
+    duk_put_prop_string(ctx, obj, "stat");
+    duk_push_c_function(ctx, fs_mkdir, 1);
+    duk_put_prop_string(ctx, obj, "mkdir");
+    duk_push_c_function(ctx, fs_remove, 1);
+    duk_put_prop_string(ctx, obj, "remove");
+    duk_push_c_function(ctx, fs_rename, 2);
+    duk_put_prop_string(ctx, obj, "rename");
+    duk_push_c_function(ctx, fs_readText, 1);
+    duk_put_prop_string(ctx, obj, "readText");
+    duk_push_c_function(ctx, fs_writeText, 2);
+    duk_put_prop_string(ctx, obj, "writeText");
+
+    // fs.basePath を設定
+    JsEngine *engine = JsEngine::getInstance();
+    if (engine) {
+        duk_push_string(ctx, engine->getBasePath().c_str());
+        duk_put_prop_string(ctx, obj, "basePath");
+    }
+
+    duk_put_global_string(ctx, "fs");
+}
+
+// ============================================================
 // localStorage (Web Storage API)
 // データは SDL_GetPrefPath 配下の localStorage.json に保存
 // ============================================================
@@ -458,11 +1007,34 @@ static void fatal_handler(void *udata, const char *msg) {
     SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Duktape fatal error: %s", msg ? msg : "unknown");
 }
 
+JsEngine* JsEngine::instance_ = nullptr;
+
 JsEngine::JsEngine() : ctx_(nullptr) {
+    instance_ = this;
 }
 
 JsEngine::~JsEngine() {
     done();
+    instance_ = nullptr;
+}
+
+void JsEngine::setBasePath(const char *path) {
+    basePath_ = path;
+    // 末尾に / がなければ追加
+    if (!basePath_.empty() && basePath_.back() != '/' && basePath_.back() != '\\') {
+        basePath_ += '/';
+    }
+}
+
+std::string JsEngine::resolvePath(const char *path) const {
+    if (!path || path[0] == '\0') return basePath_;
+    // 絶対パスならそのまま返す
+    if (path[0] == '/' || path[0] == '\\') return path;
+#ifdef _WIN32
+    // ドライブレター付き (C:\... 等)
+    if (path[1] == ':') return path;
+#endif
+    return basePath_ + path;
 }
 
 bool JsEngine::init() {
@@ -494,6 +1066,9 @@ bool JsEngine::init() {
     duk_push_object(ctx_);
     duk_put_global_string(ctx_, "__eventListeners");
 
+    // File System Access API 登録
+    fs_register(ctx_);
+
     // localStorage 登録
     storage_register(ctx_);
 
@@ -507,25 +1082,26 @@ bool JsEngine::init() {
 bool JsEngine::loadFile(const char *path) {
     if (!ctx_) return false;
 
+    std::string resolved = resolvePath(path);
     size_t size = 0;
-    char *source = load_file_sdl(path, &size);
+    char *source = load_file_sdl(resolved.c_str(), &size);
     if (!source) return false;
 
     duk_push_lstring(ctx_, source, size);
     SDL_free(source);
     duk_push_string(ctx_, path);
     if (duk_pcompile(ctx_, DUK_COMPILE_EVAL) != 0) {
-        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "JS compile error (%s): %s", path, duk_safe_to_string(ctx_, -1));
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "JS compile error (%s): %s", resolved.c_str(), duk_safe_to_string(ctx_, -1));
         duk_pop(ctx_);
         return false;
     }
     if (duk_pcall(ctx_, 0) != 0) {
-        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "JS exec error (%s): %s", path, duk_safe_to_string(ctx_, -1));
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "JS exec error (%s): %s", resolved.c_str(), duk_safe_to_string(ctx_, -1));
         duk_pop(ctx_);
         return false;
     }
     duk_pop(ctx_); // 実行結果を捨てる
-    SDL_Log("Loaded JS: %s", path);
+    SDL_Log("Loaded JS: %s", resolved.c_str());
     return true;
 }
 
