@@ -6,6 +6,7 @@
 #include <SDL3/SDL.h>
 #include <SDL3_image/SDL_image.h>
 #include <cstring>
+#include <vector>
 
 // console.log バインディング
 static duk_ret_t native_console_log(duk_context *ctx) {
@@ -66,6 +67,90 @@ static duk_ret_t native_load_script(duk_context *ctx) {
         return duk_throw(ctx);
     }
     return 1; // 実行結果を返す
+}
+
+// ============================================================
+// setTimeout / setInterval / requestAnimationFrame
+// ============================================================
+
+struct TimerEntry {
+    int id;
+    uint32_t fireTime;   // SDL_GetTicks ベースの発火時刻
+    bool interval;
+    uint32_t delay;
+    bool cancelled;
+};
+
+static int g_timerNextId = 1;
+static std::vector<TimerEntry> g_timers;
+static uint32_t g_currentTime = 0;
+
+// setTimeout(callback, delay) / setInterval(callback, delay)
+static duk_ret_t native_setTimeout(duk_context *ctx) {
+    bool isInterval = false;
+    // 関数名で区別（setInterval かどうか）
+    duk_push_current_function(ctx);
+    duk_get_prop_string(ctx, -1, "_isInterval");
+    if (duk_is_boolean(ctx, -1)) isInterval = duk_get_boolean(ctx, -1) != 0;
+    duk_pop_2(ctx);
+
+    duk_require_function(ctx, 0);
+    uint32_t delay = duk_get_top(ctx) > 1 ? (uint32_t)duk_get_uint(ctx, 1) : 0;
+
+    int id = g_timerNextId++;
+    TimerEntry entry;
+    entry.id = id;
+    entry.fireTime = g_currentTime + delay;
+    entry.interval = isInterval;
+    entry.delay = delay;
+    entry.cancelled = false;
+    g_timers.push_back(entry);
+
+    // コールバックを __timers[id] に保存
+    duk_get_global_string(ctx, "__timers");
+    duk_dup(ctx, 0);
+    duk_put_prop_index(ctx, -2, (duk_uarridx_t)id);
+    duk_pop(ctx);
+
+    duk_push_int(ctx, id);
+    return 1;
+}
+
+static duk_ret_t native_clearTimeout(duk_context *ctx) {
+    int id = duk_get_int(ctx, 0);
+    for (auto &t : g_timers) {
+        if (t.id == id) { t.cancelled = true; break; }
+    }
+    // __timers[id] を削除
+    duk_get_global_string(ctx, "__timers");
+    duk_del_prop_index(ctx, -1, (duk_uarridx_t)id);
+    duk_pop(ctx);
+    return 0;
+}
+
+// requestAnimationFrame(callback) => id
+static duk_ret_t native_requestAnimationFrame(duk_context *ctx) {
+    duk_require_function(ctx, 0);
+    duk_get_global_string(ctx, "__rafCallbacks");
+    duk_get_prop_string(ctx, -1, "length");
+    duk_uarridx_t len = (duk_uarridx_t)duk_to_uint(ctx, -1);
+    duk_pop(ctx);
+    duk_dup(ctx, 0);
+    duk_put_prop_index(ctx, -2, len);
+    duk_pop(ctx);
+    duk_push_uint(ctx, len + 1);
+    return 1;
+}
+
+static duk_ret_t native_cancelAnimationFrame(duk_context *ctx) {
+    (void)ctx;
+    return 0;
+}
+
+// performance.now()
+static duk_ret_t native_performance_now(duk_context *ctx) {
+    duk_push_number(ctx, (double)SDL_GetTicks());
+    return 1;
 }
 
 // ============================================================
@@ -1104,6 +1189,12 @@ bool JsEngine::init() {
     duk_push_object(ctx_);
     duk_push_c_function(ctx_, native_console_log, DUK_VARARGS);
     duk_put_prop_string(ctx_, -2, "log");
+    duk_push_c_function(ctx_, native_console_log, DUK_VARARGS);
+    duk_put_prop_string(ctx_, -2, "warn");
+    duk_push_c_function(ctx_, native_console_log, DUK_VARARGS);
+    duk_put_prop_string(ctx_, -2, "info");
+    duk_push_c_function(ctx_, native_console_log, DUK_VARARGS);
+    duk_put_prop_string(ctx_, -2, "debug");
     duk_push_c_function(ctx_, native_console_error, DUK_VARARGS);
     duk_put_prop_string(ctx_, -2, "error");
     duk_put_global_string(ctx_, "console");
@@ -1125,6 +1216,40 @@ bool JsEngine::init() {
     // イベントリスナー格納用オブジェクト
     duk_push_object(ctx_);
     duk_put_global_string(ctx_, "__eventListeners");
+
+    // タイマー格納用
+    duk_push_object(ctx_);
+    duk_put_global_string(ctx_, "__timers");
+    duk_push_array(ctx_);
+    duk_put_global_string(ctx_, "__rafCallbacks");
+
+    // setTimeout / setInterval
+    duk_push_c_function(ctx_, native_setTimeout, DUK_VARARGS);
+    duk_push_boolean(ctx_, 0);
+    duk_put_prop_string(ctx_, -2, "_isInterval");
+    duk_put_global_string(ctx_, "setTimeout");
+
+    duk_push_c_function(ctx_, native_setTimeout, DUK_VARARGS);
+    duk_push_boolean(ctx_, 1);
+    duk_put_prop_string(ctx_, -2, "_isInterval");
+    duk_put_global_string(ctx_, "setInterval");
+
+    duk_push_c_function(ctx_, native_clearTimeout, 1);
+    duk_put_global_string(ctx_, "clearTimeout");
+    duk_push_c_function(ctx_, native_clearTimeout, 1);
+    duk_put_global_string(ctx_, "clearInterval");
+
+    // requestAnimationFrame
+    duk_push_c_function(ctx_, native_requestAnimationFrame, 1);
+    duk_put_global_string(ctx_, "requestAnimationFrame");
+    duk_push_c_function(ctx_, native_cancelAnimationFrame, 1);
+    duk_put_global_string(ctx_, "cancelAnimationFrame");
+
+    // performance.now()
+    duk_push_object(ctx_);
+    duk_push_c_function(ctx_, native_performance_now, 0);
+    duk_put_prop_string(ctx_, -2, "now");
+    duk_put_global_string(ctx_, "performance");
 
     // File System Access API 登録
     fs_register(ctx_);
@@ -1171,8 +1296,88 @@ bool JsEngine::loadFile(const char *path) {
     return true;
 }
 
+void JsEngine::processTimers() {
+    if (!ctx_) return;
+    g_currentTime = (uint32_t)SDL_GetTicks();
+
+    size_t i = 0;
+    while (i < g_timers.size()) {
+        if (g_timers[i].cancelled) {
+            g_timers.erase(g_timers.begin() + (ptrdiff_t)i);
+            continue;
+        }
+        if (g_currentTime >= g_timers[i].fireTime) {
+            int id = g_timers[i].id;
+            bool isInterval = g_timers[i].interval;
+            uint32_t delay = g_timers[i].delay;
+
+            duk_get_global_string(ctx_, "__timers");
+            duk_get_prop_index(ctx_, -1, (duk_uarridx_t)id);
+            if (duk_is_function(ctx_, -1)) {
+                if (duk_pcall(ctx_, 0) != 0) {
+                    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Timer error: %s", duk_safe_to_string(ctx_, -1));
+                }
+                duk_pop(ctx_);
+            } else {
+                duk_pop(ctx_);
+            }
+            duk_pop(ctx_);
+
+            if (isInterval) {
+                g_timers[i].fireTime = g_currentTime + delay;
+                i++;
+            } else {
+                duk_get_global_string(ctx_, "__timers");
+                duk_del_prop_index(ctx_, -1, (duk_uarridx_t)id);
+                duk_pop(ctx_);
+                g_timers.erase(g_timers.begin() + (ptrdiff_t)i);
+            }
+        } else {
+            i++;
+        }
+    }
+}
+
+void JsEngine::processRAF() {
+    if (!ctx_) return;
+
+    // __rafCallbacks を取得、新しい配列に入れ替え
+    duk_get_global_string(ctx_, "__rafCallbacks");
+    duk_get_prop_string(ctx_, -1, "length");
+    duk_uint_t len = duk_to_uint(ctx_, -1);
+    duk_pop(ctx_);
+
+    if (len == 0) {
+        duk_pop(ctx_);
+        return;
+    }
+
+    // 空の配列に入れ替え
+    duk_push_array(ctx_);
+    duk_put_global_string(ctx_, "__rafCallbacks");
+
+    // コールバック実行
+    double now = (double)SDL_GetTicks();
+    for (duk_uint_t i = 0; i < len; i++) {
+        duk_get_prop_index(ctx_, -1, (duk_uarridx_t)i);
+        if (duk_is_function(ctx_, -1)) {
+            duk_push_number(ctx_, now);
+            if (duk_pcall(ctx_, 1) != 0) {
+                SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "RAF error: %s", duk_safe_to_string(ctx_, -1));
+            }
+            duk_pop(ctx_);
+        } else {
+            duk_pop(ctx_);
+        }
+    }
+    duk_pop(ctx_); // old array
+}
+
 void JsEngine::update(uint32_t delta) {
     if (!ctx_) return;
+
+    processTimers();
+    processRAF();
 
     // グローバルに update 関数があれば呼び出す
     duk_get_global_string(ctx_, "update");

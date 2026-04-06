@@ -21,6 +21,8 @@ public:
 
     bool init();
     void update(uint32_t delta);
+    void processTimers();       // setTimeout コールバック実行
+    void processRAF();          // requestAnimationFrame コールバック実行
     void render();
     void done();
 

@@ -1,9 +1,10 @@
 // main.js - デモスクリプト
-// 数字キー 1～4 でデモ切り替え
+// 数字キー 1～5 でデモ切り替え
 //   1: 頂点カラー三角形 + テクスチャクワッド（WASD移動、ホイール透明度）
 //   2: Canvas2D 図形描画（矩形、円、パス、グラデーション風）
 //   3: Canvas2D テキスト描画（要フォントファイル）
 //   4: Canvas2D アニメーション（回転する図形）
+//   5: pixi.js v5 テスト
 // Space: ビープ音再生  R: リセット
 
 // ============================================================
@@ -392,6 +393,148 @@ function renderDemo4() {
 }
 
 // ============================================================
+// デモ5: pixi.js v5
+// ============================================================
+
+var pixiApp = null;
+var pixiBox = null;
+var pixiInited = false;
+
+function initDemo5() {
+    if (pixiInited) return;
+    pixiInited = true;
+
+    // ポリフィル・シム読み込み
+    loadScript("lib/polyfill.js");
+    loadScript("lib/browser_shim.js");
+    loadScript("lib/pixi.min.js");
+    console.log("PIXI " + PIXI.VERSION + " loaded");
+
+    pixiApp = new PIXI.Application({
+        width: 1280,
+        height: 720,
+        backgroundColor: 0x1099bb,
+        backgroundAlpha: 1,
+        resolution: 1,
+        antialias: false,
+        transparent: false,
+        clearBeforeRender: true,
+        preserveDrawingBuffer: false
+    });
+
+    // 白テクスチャを手動で作成して PIXI の内部テクスチャに設定
+    // pixi.js は document.createElement("canvas") + getContext("2d") で白テクスチャを作るが
+    // 私たちの環境では 2D canvas → texImage2D の連携が不完全なため手動で作成
+    (function() {
+        var whiteTex = gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_2D, whiteTex);
+        var white = new Uint8Array([255,255,255,255, 255,255,255,255, 255,255,255,255, 255,255,255,255,
+                                    255,255,255,255, 255,255,255,255, 255,255,255,255, 255,255,255,255,
+                                    255,255,255,255, 255,255,255,255, 255,255,255,255, 255,255,255,255,
+                                    255,255,255,255, 255,255,255,255, 255,255,255,255, 255,255,255,255]);
+        // 4x4 白テクスチャ
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 4, 4, 0, gl.RGBA, gl.UNSIGNED_BYTE, white);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+        gl.bindTexture(gl.TEXTURE_2D, null);
+
+        // pixi の内部テクスチャを差し替え
+        var renderer = pixiApp.renderer;
+        var uid = renderer.CONTEXT_UID;
+        if (PIXI.Texture.WHITE && PIXI.Texture.WHITE.baseTexture) {
+            var bt = PIXI.Texture.WHITE.baseTexture;
+            if (!bt._glTextures) bt._glTextures = {};
+            bt._glTextures[uid] = {
+                texture: whiteTex,
+                width: 4,
+                height: 4,
+                dirtyId: -1,
+                dirtyStyleId: -1,
+                mipmap: false,
+                wrapMode: 33071,
+                type: gl.UNSIGNED_BYTE,
+                internalFormat: gl.RGBA
+            };
+            bt.valid = true;
+            bt.width = 4;
+            bt.height = 4;
+            console.log("White texture replaced (CONTEXT_UID=" + uid + ")");
+        }
+    })();
+
+    // 背景色の alpha を強制的に 1.0 に設定
+    if (pixiApp.renderer._backgroundColorRgba) {
+        pixiApp.renderer._backgroundColorRgba[3] = 1;
+        console.log("bgColorRgba: " + pixiApp.renderer._backgroundColorRgba.join(","));
+    }
+
+    // デバッグ: canvas サイズと GL 状態を確認
+    var view = pixiApp.renderer.view || pixiApp.view;
+    if (view) {
+        console.log("pixi view: " + view.width + "x" + view.height);
+    }
+    console.log("pixi screen: " + pixiApp.screen.width + "x" + pixiApp.screen.height);
+    console.log("pixi renderer size: " + pixiApp.renderer.width + "x" + pixiApp.renderer.height);
+
+    var g = new PIXI.Graphics();
+
+    // 赤い矩形
+    g.beginFill(0xFF3300);
+    g.drawRect(100, 100, 250, 180);
+    g.endFill();
+
+    // 白枠 + 青い円
+    g.lineStyle(4, 0xFFFFFF, 1);
+    g.beginFill(0x66CCFF);
+    g.drawCircle(600, 300, 100);
+    g.endFill();
+
+    // 緑の角丸矩形
+    g.lineStyle(2, 0x00FF00, 1);
+    g.beginFill(0x00AA00, 0.5);
+    g.drawRoundedRect(900, 150, 200, 150, 20);
+    g.endFill();
+
+    // 黄色い三角形
+    g.beginFill(0xFFFF00, 0.8);
+    g.moveTo(400, 500);
+    g.lineTo(500, 350);
+    g.lineTo(600, 500);
+    g.closePath();
+    g.endFill();
+
+    // ピンクの線
+    g.lineStyle(3, 0xFF00FF, 1);
+    g.moveTo(50, 600);
+    g.lineTo(400, 650);
+    g.lineTo(750, 580);
+    g.lineTo(1100, 670);
+
+    pixiApp.stage.addChild(g);
+
+    // 回転する白い矩形
+    pixiBox = new PIXI.Graphics();
+    pixiBox.beginFill(0xFFFFFF);
+    pixiBox.drawRect(-30, -30, 60, 60);
+    pixiBox.endFill();
+    pixiBox.x = 640;
+    pixiBox.y = 360;
+    pixiApp.stage.addChild(pixiBox);
+
+    console.log("pixi.js demo initialized");
+}
+
+function renderDemo5() {
+    if (!pixiApp) return;
+    if (pixiBox) {
+        pixiBox.rotation = time * 0.002;
+        pixiBox.x = 640 + Math.cos(time * 0.001) * 200;
+        pixiBox.y = 360 + Math.sin(time * 0.0015) * 100;
+    }
+    pixiApp.renderer.render(pixiApp.stage);
+}
+
+// ============================================================
 // 初期化
 // ============================================================
 
@@ -443,6 +586,7 @@ addEventListener("keydown", function(e) {
     if (e.key === "2") { demoMode = 2; console.log("Demo 2: Canvas2D Shapes"); }
     if (e.key === "3") { demoMode = 3; console.log("Demo 3: Canvas2D Text"); }
     if (e.key === "4") { demoMode = 4; console.log("Demo 4: Canvas2D Animation"); }
+    if (e.key === "5") { demoMode = 5; initDemo5(); console.log("Demo 5: pixi.js"); }
 
     if (e.key === "r" || e.key === "R") {
         offsetX = 0.0; offsetY = 0.0; alpha = 1.0;
@@ -504,6 +648,8 @@ function render() {
     } else if (demoMode === 4) {
         renderDemo4();
         drawCanvas2DFullscreen(canvas2d);
+    } else if (demoMode === 5) {
+        renderDemo5();
     }
 }
 

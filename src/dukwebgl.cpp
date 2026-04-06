@@ -8,6 +8,7 @@
 #include "dukwebgl.h"
 #include "glad/gles2.h"
 #include <duktape.h>
+#include <SDL3/SDL.h>
 #include <cstdlib>
 #include <cstring>
 
@@ -59,6 +60,38 @@ static GLint dukwebgl_get_object_id_int(duk_context *ctx, duk_idx_t obj_idx) {
 // ヘルパー: ピクセルデータ取得
 // ============================================================
 
+// TypedArray / plain buffer からバッファデータを取得するヘルパー
+// TypedArray の byteOffset / byteLength を正しく考慮する
+static int g_bufferDebugCount = 0;
+static void* dukwebgl_get_buffer(duk_context *ctx, duk_idx_t idx, duk_size_t *out_size) {
+    // TypedArray チェック（byteOffset 対応）を先に行う
+    if (duk_is_object(ctx, idx) &&
+        duk_has_prop_string(ctx, idx, "buffer") &&
+        duk_has_prop_string(ctx, idx, "byteOffset") &&
+        duk_has_prop_string(ctx, idx, "byteLength")) {
+        duk_get_prop_string(ctx, idx, "byteOffset");
+        duk_size_t byteOffset = (duk_size_t)duk_to_uint(ctx, -1);
+        duk_pop(ctx);
+        duk_get_prop_string(ctx, idx, "byteLength");
+        duk_size_t byteLength = (duk_size_t)duk_to_uint(ctx, -1);
+        duk_pop(ctx);
+        duk_get_prop_string(ctx, idx, "buffer");
+        duk_size_t bufSize = 0;
+        void *bufPtr = duk_get_buffer_data(ctx, -1, &bufSize);
+        duk_pop(ctx);
+        if (bufPtr && byteOffset + byteLength <= bufSize) {
+            if (out_size) *out_size = byteLength;
+            return (char*)bufPtr + byteOffset;
+        }
+    }
+    // plain buffer
+    if (duk_is_buffer_data(ctx, idx)) {
+        return duk_get_buffer_data(ctx, idx, out_size);
+    }
+    if (out_size) *out_size = 0;
+    return NULL;
+}
+
 static void* dukwebgl_get_pixels(duk_context *ctx, duk_idx_t idx) {
     if (duk_is_buffer_data(ctx, idx)) {
         return duk_get_buffer_data(ctx, idx, NULL);
@@ -103,6 +136,26 @@ static duk_ret_t dukwebgl_getSupportedExtensions(duk_context *ctx) {
 }
 
 static duk_ret_t dukwebgl_getExtension(duk_context *ctx) {
+    const char *name = duk_get_string(ctx, 0);
+    if (name) {
+        // GLES3 で標準サポートされている拡張は空オブジェクトを返す
+        if (strcmp(name, "OES_element_index_uint") == 0 ||
+            strcmp(name, "OES_vertex_array_object") == 0 ||
+            strcmp(name, "OES_texture_float") == 0 ||
+            strcmp(name, "OES_texture_half_float") == 0 ||
+            strcmp(name, "ANGLE_instanced_arrays") == 0 ||
+            strcmp(name, "EXT_blend_minmax") == 0 ||
+            strcmp(name, "EXT_frag_depth") == 0 ||
+            strcmp(name, "EXT_shader_texture_lod") == 0 ||
+            strcmp(name, "WEBGL_depth_texture") == 0 ||
+            strcmp(name, "EXT_color_buffer_float") == 0 ||
+            strcmp(name, "WEBGL_draw_buffers") == 0 ||
+            strcmp(name, "EXT_disjoint_timer_query") == 0 ||
+            strcmp(name, "OES_standard_derivatives") == 0) {
+            duk_push_object(ctx);
+            return 1;
+        }
+    }
     duk_push_null(ctx);
     return 1;
 }
@@ -359,11 +412,11 @@ static duk_ret_t dukwebgl_bufferData(duk_context *ctx) {
     GLenum target = (GLenum)duk_get_uint(ctx, 0);
 
     duk_size_t data_size = 0;
-    GLvoid *data = NULL;
-    if (duk_is_buffer_data(ctx, 1)) {
-        data = duk_get_buffer_data(ctx, 1, &data_size);
-    } else {
-        data_size = (duk_size_t)duk_get_uint(ctx, 1);
+    GLvoid *data = (GLvoid *)dukwebgl_get_buffer(ctx, 1, &data_size);
+    if (!data) {
+        if (duk_is_number(ctx, 1)) {
+            data_size = (duk_size_t)duk_get_uint(ctx, 1);
+        }
     }
     GLenum usage = (GLenum)duk_get_uint(ctx, 2);
 
@@ -386,10 +439,7 @@ static duk_ret_t dukwebgl_bufferSubData(duk_context *ctx) {
     GLintptr offset = (GLintptr)duk_get_uint(ctx, 1);
 
     duk_size_t data_size = 0;
-    GLvoid *data = NULL;
-    if (duk_is_buffer_data(ctx, 2)) {
-        data = duk_get_buffer_data(ctx, 2, &data_size);
-    }
+    GLvoid *data = (GLvoid *)dukwebgl_get_buffer(ctx, 2, &data_size);
     if (argc > 3) {
         GLuint src_offset = (GLuint)duk_get_uint(ctx, 3);
         data = (GLvoid*)((char*)data + src_offset);
@@ -825,8 +875,10 @@ static duk_ret_t dukwebgl_uniform4f(duk_context *ctx) {
     static duk_ret_t dukwebgl_##name(duk_context *ctx) { \
         GLint loc = dukwebgl_get_object_id_int(ctx, 0); \
         duk_size_t count = 0; \
-        const cType *value = (const cType *)duk_get_buffer_data(ctx, 1, &count); \
-        glFunc(loc, (GLsizei)count, value); \
+        const cType *value = (const cType *)dukwebgl_get_buffer(ctx, 1, &count); \
+        if (value && loc >= 0) { \
+            glFunc(loc, (GLsizei)count, value); \
+        } \
         return 0; \
     }
 
@@ -849,8 +901,10 @@ DEFINE_UNIFORM_FV(uniform4uiv, GLuint, glUniform4uiv)
         GLint loc = dukwebgl_get_object_id_int(ctx, 0); \
         GLboolean transpose = duk_get_boolean(ctx, 1) ? GL_TRUE : GL_FALSE; \
         duk_size_t count = 0; \
-        const GLfloat *value = (const GLfloat *)duk_get_buffer_data(ctx, 2, &count); \
-        glFunc(loc, 1, transpose, value); \
+        const GLfloat *value = (const GLfloat *)dukwebgl_get_buffer(ctx, 2, &count); \
+        if (value && loc >= 0) { \
+            glFunc(loc, 1, transpose, value); \
+        } \
         return 0; \
     }
 
@@ -1155,9 +1209,86 @@ static duk_ret_t dukwebgl_getParameter(duk_context *ctx) {
     case GL_SHADING_LANGUAGE_VERSION:
         duk_push_string(ctx, (const char*)glGetString(pname));
         break;
-    default:
-        duk_push_undefined(ctx);
+    // Int32Array (4要素) returns
+    case GL_VIEWPORT:
+    case GL_SCISSOR_BOX:
+    {
+        GLint v[4] = {0};
+        glGetIntegerv(pname, v);
+        void *buf = duk_push_buffer(ctx, sizeof(v), 0);
+        memcpy(buf, v, sizeof(v));
+        duk_push_buffer_object(ctx, -1, 0, sizeof(v), DUK_BUFOBJ_INT32ARRAY);
+        duk_remove(ctx, -2);
         break;
+    }
+    // Float32Array (4要素) returns
+    case GL_COLOR_CLEAR_VALUE:
+    case GL_BLEND_COLOR:
+    case GL_DEPTH_RANGE:
+    {
+        GLfloat v[4] = {0};
+        glGetFloatv(pname, v);
+        void *buf = duk_push_buffer(ctx, sizeof(v), 0);
+        memcpy(buf, v, sizeof(v));
+        duk_push_buffer_object(ctx, -1, 0, sizeof(v), DUK_BUFOBJ_FLOAT32ARRAY);
+        duk_remove(ctx, -2);
+        break;
+    }
+    // Uint8Array (4要素) returns
+    case GL_COLOR_WRITEMASK:
+    {
+        GLboolean v[4] = {0};
+        glGetBooleanv(pname, v);
+        void *buf = duk_push_buffer(ctx, 4, 0);
+        for (int i = 0; i < 4; i++) ((uint8_t*)buf)[i] = v[i] ? 1 : 0;
+        duk_push_buffer_object(ctx, -1, 0, 4, DUK_BUFOBJ_UINT8ARRAY);
+        duk_remove(ctx, -2);
+        break;
+    }
+    // WebGL2 追加 GLint returns
+    case GL_MAX_3D_TEXTURE_SIZE:
+    case GL_MAX_ARRAY_TEXTURE_LAYERS:
+    case GL_MAX_COLOR_ATTACHMENTS:
+    case GL_MAX_DRAW_BUFFERS:
+    case GL_MAX_ELEMENTS_INDICES:
+    case GL_MAX_ELEMENTS_VERTICES:
+    case GL_MAX_FRAGMENT_UNIFORM_COMPONENTS:
+    case GL_MAX_SAMPLES:
+    case GL_MAX_UNIFORM_BLOCK_SIZE:
+    case GL_MAX_UNIFORM_BUFFER_BINDINGS:
+    case GL_MAX_VERTEX_UNIFORM_COMPONENTS:
+    case GL_MAX_VARYING_COMPONENTS:
+    {
+        GLint v = 0; glGetIntegerv(pname, &v);
+        duk_push_int(ctx, v);
+        break;
+    }
+    // バインディング参照 (object として返す)
+    case GL_CURRENT_PROGRAM:
+    case GL_ARRAY_BUFFER_BINDING:
+    case GL_ELEMENT_ARRAY_BUFFER_BINDING:
+    case GL_FRAMEBUFFER_BINDING:
+    case GL_RENDERBUFFER_BINDING:
+    case GL_TEXTURE_BINDING_2D:
+    case GL_TEXTURE_BINDING_CUBE_MAP:
+    {
+        GLint v = 0; glGetIntegerv(pname, &v);
+        if (v == 0) { duk_push_null(ctx); }
+        else { dukwebgl_create_object_uint(ctx, (GLuint)v); }
+        break;
+    }
+    default:
+    {
+        // 未知のパラメータは GLint として試行
+        GLint v = 0;
+        glGetIntegerv(pname, &v);
+        if (glGetError() == GL_NO_ERROR) {
+            duk_push_int(ctx, v);
+        } else {
+            duk_push_undefined(ctx);
+        }
+        break;
+    }
     }
     return 1;
 }
@@ -1726,6 +1857,60 @@ static void dukwebgl_bind_constants(duk_context *ctx) {
     PUSH_CONST(DEPTH);
     PUSH_CONST(STENCIL);
 
+    // getParameter で使う追加定数
+    PUSH_CONST(VIEWPORT);
+    PUSH_CONST(SCISSOR_BOX);
+    PUSH_CONST(COLOR_CLEAR_VALUE);
+    PUSH_CONST(COLOR_WRITEMASK);
+    PUSH_CONST(BLEND_COLOR);
+    PUSH_CONST(STENCIL_BACK_FAIL);
+    PUSH_CONST(STENCIL_BACK_FUNC);
+    PUSH_CONST(STENCIL_BACK_PASS_DEPTH_FAIL);
+    PUSH_CONST(STENCIL_BACK_PASS_DEPTH_PASS);
+    PUSH_CONST(STENCIL_BACK_REF);
+    PUSH_CONST(STENCIL_BACK_VALUE_MASK);
+    PUSH_CONST(STENCIL_BACK_WRITEMASK);
+    PUSH_CONST(STENCIL_CLEAR_VALUE);
+    PUSH_CONST(STENCIL_VALUE_MASK);
+    PUSH_CONST(STENCIL_WRITEMASK);
+
+    // WebGL2 追加定数
+    PUSH_CONST(MAX_3D_TEXTURE_SIZE);
+    PUSH_CONST(MAX_ARRAY_TEXTURE_LAYERS);
+    PUSH_CONST(MAX_COLOR_ATTACHMENTS);
+    PUSH_CONST(MAX_DRAW_BUFFERS);
+    PUSH_CONST(MAX_ELEMENTS_INDICES);
+    PUSH_CONST(MAX_ELEMENTS_VERTICES);
+    PUSH_CONST(MAX_FRAGMENT_UNIFORM_COMPONENTS);
+    PUSH_CONST(MAX_SAMPLES);
+    PUSH_CONST(MAX_UNIFORM_BLOCK_SIZE);
+    PUSH_CONST(MAX_UNIFORM_BUFFER_BINDINGS);
+    PUSH_CONST(MAX_VERTEX_UNIFORM_COMPONENTS);
+    PUSH_CONST(MAX_VARYING_COMPONENTS);
+    PUSH_CONST(MAX_VERTEX_OUTPUT_COMPONENTS);
+    PUSH_CONST(MAX_FRAGMENT_INPUT_COMPONENTS);
+    PUSH_CONST(TEXTURE_BINDING_2D);
+    PUSH_CONST(TEXTURE_BINDING_CUBE_MAP);
+    PUSH_CONST(TEXTURE_BINDING_3D);
+    PUSH_CONST(TEXTURE_BINDING_2D_ARRAY);
+    PUSH_CONST(UNPACK_IMAGE_HEIGHT);
+    PUSH_CONST(UNPACK_SKIP_IMAGES);
+    PUSH_CONST(VERTEX_ARRAY_BINDING);
+
+    // WebGL 固有定数（GLES ヘッダに無い）
+    duk_push_uint(ctx, 0x9240); duk_put_prop_string(ctx, -2, "UNPACK_FLIP_Y_WEBGL");
+    duk_push_uint(ctx, 0x9241); duk_put_prop_string(ctx, -2, "UNPACK_PREMULTIPLY_ALPHA_WEBGL");
+
+    // OES_element_index_uint
+    PUSH_CONST(UNSIGNED_INT);
+
+    // sync
+    PUSH_CONST(SYNC_GPU_COMMANDS_COMPLETE);
+    PUSH_CONST(ALREADY_SIGNALED);
+    PUSH_CONST(TIMEOUT_EXPIRED);
+    PUSH_CONST(CONDITION_SATISFIED);
+    PUSH_CONST(WAIT_FAILED);
+
 #undef PUSH_CONST
 }
 
@@ -1738,14 +1923,7 @@ static void dukwebgl_bind_constants(duk_context *ctx) {
     duk_put_prop_string(ctx, -2, #jsName)
 
 void dukwebgl_bind(duk_context *ctx) {
-    // WebGL2RenderingContext コンストラクタ
-    duk_push_c_function(ctx, [](duk_context *c) -> duk_ret_t {
-        duk_push_object(c);
-        if (!duk_is_constructor_call(c)) return DUK_RET_TYPE_ERROR;
-        return 0;
-    }, 0);
-
-    // prototype オブジェクト
+    // gl オブジェクトを直接作成（prototype 経由ではなく直接プロパティ設定）
     duk_push_object(ctx);
 
     // 定数登録
@@ -1952,13 +2130,12 @@ void dukwebgl_bind(duk_context *ctx) {
     BIND_FUNC(samplerParameteri, dukwebgl_samplerParameteri, 3);
     BIND_FUNC(samplerParameterf, dukwebgl_samplerParameterf, 3);
 
-    // prototype 設定
-    duk_put_prop_string(ctx, -2, "prototype");
-    duk_put_global_string(ctx, "WebGL2RenderingContext");
-
-    // グローバルに gl オブジェクトとして即座に使えるインスタンスも作成
-    duk_eval_string(ctx, "new WebGL2RenderingContext()");
+    // gl としてグローバル登録
     duk_put_global_string(ctx, "gl");
+
+    // WebGL2RenderingContext コンストラクタ（互換性のため）
+    duk_eval_string(ctx, "(function WebGL2RenderingContext(){})");
+    duk_put_global_string(ctx, "WebGL2RenderingContext");
 }
 
 #undef BIND_FUNC

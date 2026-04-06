@@ -26,7 +26,7 @@
 // ============================================================
 
 void canvas2d_init() {
-    tvg::Initializer::init(0);
+    tvg::Initializer::init(1);
     SDL_Log("Canvas2D (ThorVG) initialized");
 }
 
