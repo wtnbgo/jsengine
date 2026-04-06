@@ -112,6 +112,7 @@ SDL_AppResult App::update(uint32_t delta)
     if (jsEngine_) {
         jsEngine_->update(delta);
     }
+    webaudio_gc();
     return result_;
 }
 

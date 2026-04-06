@@ -44,9 +44,17 @@ bool webaudio_init()
     return true;
 }
 
+// 再生終了待ちストリーム（source_finalizer から移動される）
+static std::vector<AudioStream*> g_playingStreams;
+
 void webaudio_uninit()
 {
     AudioEngine::GetInstance().StopAll();
+    // 遅延破棄待ちのストリームを全て解放
+    for (auto *s : g_playingStreams) {
+        delete s;
+    }
+    g_playingStreams.clear();
 }
 
 // ============================================================
@@ -61,12 +69,32 @@ static AudioStream* get_audio_stream(duk_context *ctx) {
     return stream;
 }
 
-// ファイナライザ
+// 再生完了したストリームを回収（update 等から呼ぶ）
+void webaudio_gc()
+{
+    for (auto it = g_playingStreams.begin(); it != g_playingStreams.end(); ) {
+        if (!(*it)->IsPlaying()) {
+            delete *it;
+            it = g_playingStreams.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
+// ファイナライザ: 再生中なら g_playingStreams に移して延命
 static duk_ret_t source_finalizer(duk_context *ctx) {
     duk_get_prop_string(ctx, 0, "\xff" "ptr");
     if (duk_is_pointer(ctx, -1)) {
         AudioStream *stream = (AudioStream*)duk_get_pointer(ctx, -1);
-        delete stream;
+        if (stream) {
+            if (stream->IsPlaying()) {
+                // 再生中なので破棄を遅延
+                g_playingStreams.push_back(stream);
+            } else {
+                delete stream;
+            }
+        }
     }
     duk_pop(ctx);
     return 0;
