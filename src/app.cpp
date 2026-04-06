@@ -1,5 +1,6 @@
 #include "app.hpp"
 #include "jsengine.hpp"
+#include "webaudio.h"
 #include "glad/gles2.h"
 
 // 静的メンバ初期化
@@ -62,6 +63,9 @@ bool App::init(int argc, char *argv[])
         }
     }
 
+    // オーディオシステム初期化
+    webaudio_init();
+
     // JsEngine 初期化
     jsEngine_ = std::make_unique<JsEngine>();
     jsEngine_->setBasePath(dataPath);
@@ -86,6 +90,9 @@ App::~App()
     if (jsEngine_) {
         jsEngine_.reset();
     }
+
+    // オーディオシステム終了
+    webaudio_uninit();
 
     if (context_) {
         SDL_GL_DestroyContext(context_);

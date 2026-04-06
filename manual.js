@@ -36,6 +36,32 @@ gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, img.width, img.height, 0,
               gl.RGBA, gl.UNSIGNED_BYTE, img);
 
 // ************************************************************
+// Web Audio API（miniaudio + SDL3 ベース）
+// ************************************************************
+// miniaudio エンジンで再生
+// 対応フォーマット: WAV, MP3, FLAC 等（miniaudio がサポートする形式）
+
+var audioCtx = new AudioContext();
+audioCtx.sampleRate;                   // 読み取り専用（通常 48000）
+audioCtx.state;                        // "running" | "suspended" | "closed"
+audioCtx.destination;                  // ダミーノード（互換性のため）
+audioCtx.masterVolume = 0.8;           // マスターボリューム（0.0 ~ 1.0+）
+audioCtx.resume();                     // 再生再開
+audioCtx.suspend();                    // 一時停止
+audioCtx.close();                      // 全停止
+
+// --- AudioBufferSourceNode ---
+// ファイルパスはベースパスからの相対パス
+var source = audioCtx.createBufferSource("sound.wav");
+source.volume = 1.0;                   // ボリューム（0.0 ~ 1.0+）
+source.pitch = 1.0;                    // ピッチ（1.0 = 原速）
+source.pan = 0.0;                      // パン（-1.0=左, 0.0=中央, 1.0=右）
+source.loop = false;                   // ループ再生
+source.ended;                          // 読み取り専用: 再生終了したか
+source.start();                        // 再生開始（先頭から）
+source.stop();                         // 再生停止
+
+// ************************************************************
 // コンソール
 // ************************************************************
 

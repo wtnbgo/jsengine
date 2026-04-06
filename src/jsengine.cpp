@@ -1,5 +1,6 @@
 #include "jsengine.hpp"
 #include "dukwebgl.h"
+#include "webaudio.h"
 #include <duktape.h>
 #include <SDL3/SDL.h>
 #include <SDL3_image/SDL_image.h>
@@ -1132,6 +1133,9 @@ bool JsEngine::init() {
 
     // WebGL バインディング登録
     dukwebgl_bind(ctx_);
+
+    // Web Audio API バインディング登録
+    webaudio_bind(ctx_);
 
     SDL_Log("JsEngine initialized");
     return true;

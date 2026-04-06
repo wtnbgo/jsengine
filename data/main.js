@@ -228,11 +228,27 @@ localStorage.setItem("launchCount", String(launchCount));
 console.log("Launch count: " + launchCount);
 
 // ============================================================
+// Web Audio サンプル: スペースキーでビープ音再生
+// ============================================================
+
+var audioCtx = new AudioContext();
+console.log("AudioContext state: " + audioCtx.state + ", sampleRate: " + audioCtx.sampleRate);
+
+// ============================================================
 // イベントリスナー登録
 // ============================================================
 
 addEventListener("keydown", function(e) {
     keysDown[e.code] = true;
+
+    // スペースキーでビープ音再生
+    if (e.code === "Space" && !e.repeat) {
+        var beep = audioCtx.createBufferSource("beep.wav");
+        beep.volume = 0.5;
+        beep.start();
+        console.log("Beep!");
+    }
+
     if (e.key === "r" || e.key === "R") {
         offsetX = 0.0;
         offsetY = 0.0;

@@ -3,7 +3,10 @@
   "version": "1.0.0",
   "dependencies": [
     "glm",
-    "duktape"
+    "duktape",
+    "libvorbis",
+    "libogg",
+    "opusfile"
   ],
   "vcpkg-configuration": {
     "registries": [

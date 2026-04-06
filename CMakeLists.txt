@@ -74,6 +74,10 @@ find_package(unofficial-duktape CONFIG REQUIRED)
 # vcpkg でインストールされた glm を見つける
 find_package(glm CONFIG REQUIRED)
 
+# vorbis / opus (オプション)
+find_package(Vorbis CONFIG QUIET)
+find_package(OpusFile CONFIG QUIET)
+
 # ----------------------------------------------------
 # executable source
 # ----------------------------------------------------
@@ -82,8 +86,18 @@ set(SOURCES
 	src/app.cpp
 	src/jsengine.cpp
 	src/dukwebgl.cpp
+	src/webaudio.cpp
+	src/audio/AudioEngine.cpp
+	src/audio/AudioStream.cpp
 	src/main.cpp
 )
+
+if(Vorbis_FOUND)
+	list(APPEND SOURCES src/audio/ma_libvorbis.c)
+endif()
+if(OpusFile_FOUND)
+	list(APPEND SOURCES src/audio/ma_libopus.c)
+endif()
 
 # ----------------------------------------------------
 # executable
@@ -101,6 +115,15 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
 	glad
 	unofficial::duktape::duktape
 )
+
+if(Vorbis_FOUND)
+	target_compile_definitions(${PROJECT_NAME} PRIVATE HAS_VORBIS)
+	target_link_libraries(${PROJECT_NAME} PRIVATE Vorbis::vorbisfile Vorbis::vorbis)
+endif()
+if(OpusFile_FOUND)
+	target_compile_definitions(${PROJECT_NAME} PRIVATE HAS_OPUS)
+	target_link_libraries(${PROJECT_NAME} PRIVATE OpusFile::opusfile)
+endif()
 
 
 add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
