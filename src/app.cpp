@@ -108,3 +108,10 @@ void App::render()
 
     SDL_GL_SwapWindow(window_);
 }
+
+void App::handleEvent(const SDL_Event *event)
+{
+    if (jsEngine_) {
+        jsEngine_->handleEvent(event);
+    }
+}

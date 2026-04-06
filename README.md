@@ -39,9 +39,9 @@ make run
 
 ### C++ 側
 
-- `src/main.cpp` - SDL3 コールバックエントリポイント（SDL_AppInit / SDL_AppIterate / SDL_AppEvent / SDL_AppQuit）
-- `src/app.hpp / app.cpp` - `App` シングルトン。SDL ウィンドウと GL コンテキストの管理、JsEngine の所有
-- `src/jsengine.hpp / jsengine.cpp` - `JsEngine` クラス。duktape ヒープの管理、JS ファイルの読み込み・実行
+- `src/main.cpp` - SDL3 コールバックエントリポイント（SDL_AppInit / SDL_AppIterate / SDL_AppEvent / SDL_AppQuit）。入力イベントを App 経由で JsEngine に配信。
+- `src/app.hpp / app.cpp` - `App` シングルトン。SDL ウィンドウと GL コンテキストの管理、JsEngine の所有。
+- `src/jsengine.hpp / jsengine.cpp` - `JsEngine` クラス。duktape ヒープの管理、JS ファイルの読み込み・実行、イベントディスパッチ。
 - `src/dukwebgl.h / dukwebgl.cpp` - WebGL 2.0 互換バインディング（GLES 3.0 ベース）
 
 ### JavaScript ライフサイクル
@@ -59,22 +59,34 @@ make run
 - **`gl`** - WebGL2RenderingContext 互換オブジェクト（グローバル）
 - **`console.log()` / `console.error()`** - SDL ログへの出力
 - **`loadScript(path)`** - 追加の JS ファイルを読み込み実行
+- **`addEventListener(type, callback)`** - ブラウザ互換イベントリスナー登録
+- **`removeEventListener(type, callback)`** - イベントリスナー解除
+
+### 入力イベント
+
+ブラウザと同じ `addEventListener` パターンで入力を受け取れます。SDL3 イベントがブラウザ互換のイベントオブジェクトに変換されます。
+
+| イベント名 | 説明 | 主なプロパティ |
+|-----------|------|---------------|
+| `keydown` / `keyup` | キーボード | `key`, `code`, `keyCode`, `altKey`, `ctrlKey`, `shiftKey`, `metaKey`, `repeat` |
+| `mousedown` / `mouseup` / `mousemove` | マウス | `clientX`, `clientY`, `button`, `buttons`, `movementX`, `movementY`, 修飾キー |
+| `wheel` | ホイール | `deltaX`, `deltaY`, `deltaZ`, `deltaMode`, `clientX`, `clientY`, 修飾キー |
+| `touchstart` / `touchmove` / `touchend` / `touchcancel` | タッチ | `touches[]`, `changedTouches[]`（各要素: `identifier`, `clientX`, `clientY`, `force`） |
 
 ### WebGL バインディング対応範囲
 
 シェーダ/プログラム、バッファ（VBO/UBO）、テクスチャ（2D/3D/CubeMap）、フレームバッファ/レンダーバッファ、VAO、uniform（scalar/vector/matrix）、描画（instanced 含む）、ステート管理、clearBuffer、Transform Feedback、Query、Sampler など WebGL 2.0 の主要 API をカバーしています。
 
+## API リファレンス
+
+`manual.js` に全 API の一覧を JavaScript コード風にまとめています。
+
 ## サンプル
 
-`main.js` に RGB 三角形を描画するサンプルスクリプトが含まれています。
+`main.js` に入力操作で三角形を動かせるサンプルが含まれています。
 
-```javascript
-function render() {
-    gl.clearColor(0.2, 0.2, 0.2, 1.0);
-    gl.clear(gl.COLOR_BUFFER_BIT);
-    gl.useProgram(program);
-    gl.bindVertexArray(vao);
-    gl.drawArrays(gl.TRIANGLES, 0, 3);
-    gl.bindVertexArray(null);
-}
-```
+- **WASD / 矢印キー** — 三角形を移動
+- **マウスドラッグ** — 三角形をドラッグ移動
+- **ホイール** — 透明度を変更
+- **タッチ** — タッチ位置に移動
+- **R キー** — リセット

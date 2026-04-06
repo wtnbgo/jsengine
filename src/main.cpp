@@ -5,15 +5,21 @@
 
 #include "app.hpp"
 
-SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) 
+SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event)
 {
     switch (event->type) {
     case SDL_EVENT_QUIT:
-        return SDL_APP_SUCCESS; // アプリを正常終了    
+        return SDL_APP_SUCCESS; // アプリを正常終了
     case SDL_EVENT_TERMINATING:
         break;
+    default:
+        // 入力イベントを JS に配信
+        if (appstate) {
+            static_cast<App*>(appstate)->handleEvent(event);
+        }
+        break;
     }
-	return SDL_APP_CONTINUE; // イベントを無視
+	return SDL_APP_CONTINUE;
 }
 
 SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[])

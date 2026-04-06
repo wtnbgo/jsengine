@@ -1,0 +1,209 @@
+// ============================================================
+// jsengine API リファレンス
+// ============================================================
+//
+// このファイルは利用可能な JavaScript API の一覧です。
+// 実行用ではなく参照用です。
+//
+
+// ************************************************************
+// ライフサイクル（グローバル関数として定義すると C++ 側から呼ばれる）
+// ************************************************************
+
+function update(dt) {}   // 毎フレーム呼ばれる。dt = 前フレームからの経過ミリ秒
+function render() {}     // 毎フレーム（update の後）呼ばれる。描画処理を記述
+function done() {}       // アプリ終了時に呼ばれる。リソース解放用
+
+// ************************************************************
+// ファイル読み込み
+// ************************************************************
+
+loadScript("path/to/file.js");  // JS ファイルを SDL_LoadFile 経由で読み込み実行
+
+// ************************************************************
+// コンソール
+// ************************************************************
+
+console.log("message", arg1, arg2);   // SDL_Log へ出力
+console.error("message", arg1, arg2); // SDL_LogError へ出力
+
+// ************************************************************
+// イベントシステム（ブラウザ互換）
+// ************************************************************
+
+addEventListener("eventType", callback);    // イベントリスナー登録
+removeEventListener("eventType", callback); // イベントリスナー解除
+
+// --- KeyboardEvent ("keydown", "keyup") ---
+addEventListener("keydown", function(e) {
+    e.type;      // "keydown"
+    e.key;       // "a", "Enter", "ArrowLeft", "Shift", "Control", "Alt", "Meta", ...
+    e.code;      // "KeyA", "Enter", "ArrowLeft", "ShiftLeft", "ControlRight", ...
+    e.keyCode;   // SDL_Keycode 値（レガシー互換）
+    e.altKey;    // boolean
+    e.ctrlKey;   // boolean
+    e.shiftKey;  // boolean
+    e.metaKey;   // boolean (Windows/Command キー)
+    e.repeat;    // boolean (キーリピート)
+});
+
+addEventListener("keyup", function(e) {
+    // keydown と同じプロパティ（repeat は常に false）
+});
+
+// --- MouseEvent ("mousedown", "mouseup", "mousemove") ---
+addEventListener("mousedown", function(e) {
+    e.type;       // "mousedown"
+    e.clientX;    // マウス X 座標（ウィンドウ内ピクセル）
+    e.clientY;    // マウス Y 座標（ウィンドウ内ピクセル）
+    e.button;     // 0=左, 1=中, 2=右, 3=X1, 4=X2
+    e.buttons;    // 押下中ボタンのビットマスク
+    e.movementX;  // X 移動量
+    e.movementY;  // Y 移動量
+    e.altKey;     // boolean
+    e.ctrlKey;    // boolean
+    e.shiftKey;   // boolean
+    e.metaKey;    // boolean
+});
+
+addEventListener("mouseup", function(e) {
+    // mousedown と同じプロパティ
+});
+
+addEventListener("mousemove", function(e) {
+    // mousedown と同じプロパティ（movementX/Y に前フレームからの差分）
+});
+
+// --- WheelEvent ("wheel") ---
+addEventListener("wheel", function(e) {
+    e.type;       // "wheel"
+    e.deltaX;     // 横スクロール量（ピクセル近似）
+    e.deltaY;     // 縦スクロール量（下方向が正、ピクセル近似）
+    e.deltaZ;     // 常に 0
+    e.deltaMode;  // 常に 0 (DOM_DELTA_PIXEL)
+    e.clientX;    // マウス X 座標
+    e.clientY;    // マウス Y 座標
+    e.altKey;     // boolean
+    e.ctrlKey;    // boolean
+    e.shiftKey;   // boolean
+    e.metaKey;    // boolean
+});
+
+// --- TouchEvent ("touchstart", "touchmove", "touchend", "touchcancel") ---
+addEventListener("touchstart", function(e) {
+    e.type;                        // "touchstart"
+    e.touches;                     // Touch オブジェクトの配列
+    e.changedTouches;              // 変更のあった Touch の配列
+    e.touches[0].identifier;       // タッチ識別子
+    e.touches[0].clientX;          // X 座標（ウィンドウ内ピクセル）
+    e.touches[0].clientY;          // Y 座標（ウィンドウ内ピクセル）
+    e.touches[0].pageX;            // = clientX
+    e.touches[0].pageY;            // = clientY
+    e.touches[0].force;            // 圧力（0.0 ~ 1.0）
+});
+
+addEventListener("touchmove", function(e) {
+    // touchstart と同じプロパティ
+});
+
+addEventListener("touchend", function(e) {
+    // touches は空配列、changedTouches に離れた指の情報
+});
+
+addEventListener("touchcancel", function(e) {
+    // touchend と同じ構造
+});
+
+// ************************************************************
+// WebGL 2.0 互換 API（グローバル gl オブジェクト）
+// ************************************************************
+//
+// WebGL2RenderingContext 互換。GLES 3.0 にマッピングされている。
+// シェーダは "#version 300 es" を使用する。
+//
+// 対応機能カテゴリ:
+//
+//   コンテキスト情報
+//     getContextAttributes, isContextLost, getSupportedExtensions,
+//     getExtension, getParameter, getError
+//
+//   シェーダ / プログラム
+//     createShader, deleteShader, shaderSource, compileShader,
+//     getShaderParameter, getShaderInfoLog, getShaderSource, isShader,
+//     createProgram, deleteProgram, attachShader, detachShader,
+//     linkProgram, useProgram, validateProgram, isProgram,
+//     getProgramParameter, getProgramInfoLog,
+//     bindAttribLocation, getAttribLocation, getUniformLocation,
+//     getActiveAttrib, getActiveUniform
+//
+//   バッファ (VBO/IBO/UBO)
+//     createBuffer, deleteBuffer, isBuffer, bindBuffer,
+//     bufferData, bufferSubData
+//
+//   テクスチャ (2D/3D/CubeMap/2DArray)
+//     createTexture, deleteTexture, isTexture, bindTexture,
+//     activeTexture, texParameteri, texParameterf,
+//     texImage2D, texSubImage2D, texImage3D,
+//     copyTexImage2D, copyTexSubImage2D,
+//     generateMipmap, pixelStorei, readPixels
+//
+//   フレームバッファ / レンダーバッファ
+//     createFramebuffer, deleteFramebuffer, isFramebuffer, bindFramebuffer,
+//     framebufferTexture2D, framebufferRenderbuffer, checkFramebufferStatus,
+//     createRenderbuffer, deleteRenderbuffer, isRenderbuffer, bindRenderbuffer,
+//     renderbufferStorage, drawBuffers, blitFramebuffer
+//
+//   VAO (Vertex Array Object)
+//     createVertexArray, deleteVertexArray, isVertexArray, bindVertexArray
+//
+//   頂点属性
+//     enableVertexAttribArray, disableVertexAttribArray,
+//     vertexAttribPointer, vertexAttribIPointer, vertexAttribDivisor,
+//     vertexAttrib1f, vertexAttrib2f, vertexAttrib3f, vertexAttrib4f
+//
+//   Uniform
+//     uniform[1234][fi](location, ...)        — スカラー
+//     uniform[1234][fiu]v(location, array)     — ベクトル/配列 (TypedArray)
+//     uniformMatrix[234]fv(location, transpose, array)
+//     uniformMatrix[2x3|2x4|3x2|3x4|4x2|4x3]fv(location, transpose, array)
+//
+//   描画
+//     drawArrays, drawElements,
+//     drawArraysInstanced, drawElementsInstanced
+//
+//   ステート管理
+//     enable, disable, isEnabled, viewport, scissor
+//
+//   クリア
+//     clearColor, clearDepth, clearStencil, clear,
+//     clearBufferfv, clearBufferiv, clearBufferuiv, clearBufferfi
+//
+//   カラー / 深度 / ステンシル
+//     colorMask, depthMask, depthFunc, depthRange,
+//     blendFunc, blendFuncSeparate, blendEquation, blendEquationSeparate, blendColor,
+//     stencilFunc, stencilFuncSeparate, stencilMask, stencilMaskSeparate,
+//     stencilOp, stencilOpSeparate
+//
+//   ラスタライザ
+//     cullFace, frontFace, lineWidth, polygonOffset, sampleCoverage
+//
+//   Uniform Block
+//     getUniformBlockIndex, uniformBlockBinding,
+//     bindBufferBase, bindBufferRange
+//
+//   Transform Feedback
+//     createTransformFeedback, deleteTransformFeedback, bindTransformFeedback,
+//     beginTransformFeedback, endTransformFeedback, transformFeedbackVaryings
+//
+//   Query
+//     createQuery, deleteQuery, beginQuery, endQuery
+//
+//   Sampler
+//     createSampler, deleteSampler, bindSampler,
+//     samplerParameteri, samplerParameterf
+//
+//   その他
+//     hint, flush, finish
+//
+// 定数は WebGL 2.0 仕様に準拠（gl.TRIANGLES, gl.TEXTURE_2D, gl.FLOAT 等）。
+// 詳細は MDN WebGL2RenderingContext リファレンスを参照。

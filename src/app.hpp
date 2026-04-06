@@ -13,6 +13,7 @@ public:
     bool init(int argc, char *argv[]);
     SDL_AppResult update(uint32_t delta);
     void render();
+    void handleEvent(const SDL_Event *event);
 
     SDL_Window* getWindow() const { return window_; }
 
