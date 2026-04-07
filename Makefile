@@ -46,6 +46,24 @@ clean:
 install:
 	cmake --install $(BUILD_PATH) --config $(BUILD_TYPE) --prefix $(INSTALL_PREFIX)
 
+# three.js ES5 トランスパイル
+# 前提: npm install --save-dev @babel/core @babel/cli @babel/preset-env
+THREEJS_SRC = data/lib/three.min.js
+THREEJS_ES5 = data/lib/three.es5.js
+
+$(THREEJS_ES5): $(THREEJS_SRC)
+	npx babel $(THREEJS_SRC) --presets=@babel/preset-env -o $(THREEJS_ES5)
+
+transpile: $(THREEJS_ES5)
+
+# three.min.js のダウンロード（未取得時）
+$(THREEJS_SRC):
+	curl -sL "https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js" -o $(THREEJS_SRC)
+
+# npm 依存のセットアップ
+setup-npm:
+	npm install --save-dev @babel/core @babel/cli @babel/preset-env
+
 ifeq (windows,$(findstring windows,$(PRESET)))
 
 EXEFILE=$(BUILD_PATH)/$(BUILD_TYPE)/jsengine.exe

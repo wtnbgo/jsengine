@@ -118,7 +118,19 @@ jsengine -quiet             # 警告以上のログのみ
 | **5** | pixi.js v5 テスト（Graphics 描画、アニメーション） |
 | **6** | Canvas2D drawImage / getImageData / putImageData テスト |
 | **7** | Canvas2D dirty rect 差分更新テスト |
+| **8** | three.js r128 テスト（立方体、球体、床面） |
 | **Space** | ビープ音再生 |
 | **R** | リセット |
+
+`-demo N` オプションで起動時のデモモードを指定できます。
+
+### three.js ES5 トランスパイル
+
+three.js r128 は ES6 class 構文を使用しており、duktape では直接実行できません。Babel で ES5 に変換する必要があります。
+
+```bash
+make setup-npm          # Babel インストール（初回のみ）
+make transpile          # data/lib/three.min.js → data/lib/three.es5.js
+```
 
 フォントファイルは `data/fonts/` に配置してください（OpenSans, Roboto 等）。

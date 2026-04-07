@@ -25,3 +25,7 @@ savedata
 .claude/
 .venv/
 test/
+node_modules/
+package.json
+package-lock.json
+regexp_log.txt

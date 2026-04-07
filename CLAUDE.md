@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Build System
 
-CMake with presets + Ninja Multi-Config generator. Dependencies are managed via vcpkg (glm, duktape, freetype, miniaudio, libvorbis, libopus) and FetchContent (SDL3, SDL3_image, ThorVG, HarfBuzz).
+CMake with presets + Ninja Multi-Config generator. Dependencies are managed via vcpkg (glm, freetype, miniaudio, libvorbis, libopus) and FetchContent (SDL3, SDL3_image, ThorVG, HarfBuzz). duktape 2.7.0 is self-built from src/duktape/.
 
 **Prerequisites:** vcpkg installed with `VCPKG_ROOT` environment variable set.
 
@@ -30,6 +30,15 @@ make clean
 ```
 
 The Makefile auto-selects the preset based on OS: `x64-windows`, `x64-linux`, or `x64-macos`. Override with `PRESET=<name>`.
+
+### three.js ES5 Transpile
+
+```bash
+make setup-npm          # Install Babel (first time)
+make transpile          # Transpile three.min.js → three.es5.js
+```
+
+three.js r128 (UMD) uses ES6 class syntax which duktape cannot parse. Babel transpiles it to ES5. The source `data/lib/three.min.js` is downloaded from CDN if missing.
 
 ### Available CMake Presets
 
