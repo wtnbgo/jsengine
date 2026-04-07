@@ -957,8 +957,8 @@ function initDemo8() {
             }
         })();
 
-        // 正規表現テスト（THREE ロード済み）
-        try { loadScript("test_regexp.js"); } catch(e) { console.error("regexp test: " + e); }
+        // 正規表現テスト（duktape バグ検証用、QuickJS では不要）
+        // try { loadScript("test_regexp.js"); } catch(e) { console.error("regexp test: " + e); }
     } catch(e) {
         console.error("three.js init error: " + e);
         if (e.stack) console.error(e.stack);
