@@ -712,6 +712,46 @@ static duk_ret_t ctx_scale(duk_context *ctx) {
     tvg::Matrix sc = {(float)duk_get_number(ctx,0),0,0, 0,(float)duk_get_number(ctx,1),0, 0,0,1};
     d->state.transform = mat_mul(d->state.transform, sc); return 0;
 }
+// resize: バッファサイズを変更（内容はクリアされる）
+static duk_ret_t ctx_resize(duk_context *ctx) {
+    auto *d = get_data(ctx);
+    uint32_t w = (uint32_t)duk_require_uint(ctx, 0);
+    uint32_t h = (uint32_t)duk_require_uint(ctx, 1);
+    if (w < 1) w = 1;
+    if (h < 1) h = 1;
+    if (w == d->width && h == d->height) return 0;
+
+    // 蓄積分を破棄
+    for (auto *p : d->pendingPaints) p->unref();
+    d->pendingPaints.clear();
+    d->hasPending = false;
+
+    d->width = w;
+    d->height = h;
+    d->pixels.assign(w * h, 0);
+    d->rgbaCache.clear();
+    d->rgbaCacheDirty = true;
+    d->hasDirty = false;
+
+    // SwCanvas のターゲットを再設定
+    d->canvas->target(d->pixels.data(), w, w, h, tvg::ColorSpace::ARGB8888);
+
+    // GL テクスチャも再作成
+    if (d->glTexture) {
+        glBindTexture(GL_TEXTURE_2D, d->glTexture);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+        glBindTexture(GL_TEXTURE_2D, 0);
+    }
+
+    // JS 側の width/height プロパティも更新
+    duk_push_this(ctx);
+    duk_push_uint(ctx, w); duk_put_prop_string(ctx, -2, "width");
+    duk_push_uint(ctx, h); duk_put_prop_string(ctx, -2, "height");
+    duk_pop(ctx);
+
+    return 0;
+}
+
 static duk_ret_t ctx_setTransform(duk_context *ctx) {
     auto *d = get_data(ctx);
     if (duk_get_top(ctx) >= 6) {
@@ -907,6 +947,7 @@ static duk_ret_t canvas2d_constructor(duk_context *ctx) {
     M("setTransform", ctx_setTransform, DUK_VARARGS);
     M("flush", ctx_flush, 0);
     M("_getRGBA", ctx_getRGBA, 0);
+    M("_resize", ctx_resize, 2);
     #undef M
 
     #define P(name, g, s) duk_push_string(ctx, name); duk_push_c_function(ctx, g, 0); duk_push_c_function(ctx, s, 1); \

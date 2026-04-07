@@ -519,16 +519,16 @@ var canvas2d_demo6 = null;
 
 function renderDemo6() {
     if (!canvas2d_demo6) {
-        canvas2d_demo6 = new Canvas2D(400, 400);
+        canvas2d_demo6 = new Canvas2D(500, 700);
     }
     var c = canvas2d_demo6;
 
     // 背景クリア
-    c.clearRect(0, 0, 400, 400);
+    c.clearRect(0, 0, 500, 700);
 
     // 背景色
     c.fillStyle = "#222233";
-    c.fillRect(0, 0, 400, 400);
+    c.fillRect(0, 0, 500, 700);
 
     // タイトル
     c.font = "18px OpenSans-Bold";
@@ -571,29 +571,96 @@ function renderDemo6() {
         c.fillText("test_pattern.png not loaded", 10, 80);
     }
 
-    // --- getImageData / putImageData テスト ---
+    // === セクション2: Image シム経由テスト (Y=240〜) ===
+    c.fillStyle = "#333355";
+    c.fillRect(0, 230, 500, 200);
     c.font = "14px OpenSans-Bold";
-    c.fillStyle = "white";
-    c.fillText("getImageData / putImageData:", 10, 240);
+    c.fillStyle = "#ffcc00";
+    c.fillText("Image shim drawImage (RPG Maker MV style):", 10, 250);
 
-    // テスト用: 矩形を描いてからピクセル操作
+    if (typeof Image === "undefined") {
+        c.fillStyle = "#ff4444";
+        c.fillText("Image not available (load polyfill first via Demo 5)", 10, 270);
+    }
+    var testImg = (typeof Image !== "undefined") ? new Image() : null;
+    if (testImg) testImg.src = "test_pattern.png";
+    c.font = "12px OpenSans-Regular";
+    if (testImg) {
+        c.fillStyle = "white";
+        c.fillText("_data=" + (testImg._data ? "yes(" + testImg._data.byteLength + "B)" : "NO") +
+            "  w=" + testImg.width + "  h=" + testImg.height, 10, 270);
+    }
+
+    if (testImg && testImg._data) {
+        // A: Image シム → Canvas2D drawImage
+        c.fillStyle = "#444466";
+        c.fillRect(10, 280, 74, 74);
+        c.drawImage(testImg, 15, 285);
+        c.fillStyle = "white";
+        c.fillText("A: direct", 15, 370);
+
+        // B: 別 Canvas2D にコピーして getImageData で確認
+        var testCanvas = new Canvas2D(testImg.width, testImg.height);
+        testCanvas.drawImage(testImg, 0, 0);
+        var td = testCanvas.getImageData(0, 0, testImg.width, testImg.height);
+        var nonzero = 0;
+        if (td && td.data) {
+            for (var ti = 0; ti < td.data.length; ti += 4) {
+                if (td.data[ti+3] !== 0) nonzero++;
+            }
+        }
+        c.fillStyle = "white";
+        c.fillText("B: canvas copy " + nonzero + "/" + (testImg.width * testImg.height) + " opaque", 100, 310);
+        // C: HTMLCanvasElement 経由（RPG Maker MV の Bitmap._createCanvas と同じフロー）
+        if (typeof HTMLCanvasElement !== "undefined") {
+            var htmlCanvas = new HTMLCanvasElement(testImg.width, testImg.height);
+            htmlCanvas.width = testImg.width;
+            htmlCanvas.height = testImg.height;
+            var htmlCtx = htmlCanvas.getContext("2d");
+            htmlCtx.drawImage(testImg, 0, 0);
+            var td2 = htmlCtx.getImageData(0, 0, testImg.width, testImg.height);
+            var nonzero2 = 0;
+            if (td2 && td2.data) {
+                for (var ti2 = 0; ti2 < td2.data.length; ti2 += 4) {
+                    if (td2.data[ti2+3] !== 0) nonzero2++;
+                }
+            }
+            c.fillStyle = "white";
+            c.fillText("C: HTMLCanvas " + nonzero2 + "/" + (testImg.width * testImg.height) + " opaque", 100, 330);
+
+            // data getter テスト（texImage2D で使われる）
+            var canvasData = htmlCanvas.data;
+            c.fillText("D: canvas.data=" + (canvasData ? "yes(" + canvasData.byteLength + "B)" : "NO"), 100, 350);
+        }
+    } else {
+        c.fillStyle = "#ff4444";
+        c.fillText("Image._data is empty!", 10, 290);
+    }
+
+    // === セクション3: getImageData / putImageData (Y=440〜) ===
+    c.fillStyle = "#222233";
+    c.fillRect(0, 430, 500, 200);
+    c.font = "14px OpenSans-Bold";
+    c.fillStyle = "#ffcc00";
+    c.fillText("getImageData / putImageData:", 10, 450);
+
     c.fillStyle = "#ff6600";
-    c.fillRect(10, 250, 80, 50);
+    c.fillRect(10, 460, 80, 50);
     c.fillStyle = "#0066ff";
-    c.fillRect(50, 270, 80, 50);
+    c.fillRect(50, 480, 80, 50);
 
     // getImageData で読み出し
-    var imgData = c.getImageData(10, 250, 120, 70);
+    var imgData = c.getImageData(10, 460, 120, 70);
 
     if (imgData && imgData.data) {
         // コピー1: そのまま貼り付け
-        c.putImageData(imgData, 150, 250);
+        c.putImageData(imgData, 150, 460);
         c.font = "12px OpenSans-Regular";
         c.fillStyle = "white";
-        c.fillText("copy", 150, 335);
+        c.fillText("copy", 150, 545);
 
         // コピー2: 色反転して貼り付け
-        var inverted = c.getImageData(10, 250, 120, 70);
+        var inverted = c.getImageData(10, 460, 120, 70);
         for (var pi = 0; pi < inverted.data.length; pi += 4) {
             if (inverted.data[pi + 3] > 0) {
                 inverted.data[pi]     = 255 - inverted.data[pi];
@@ -601,15 +668,15 @@ function renderDemo6() {
                 inverted.data[pi + 2] = 255 - inverted.data[pi + 2];
             }
         }
-        c.putImageData(inverted, 280, 250);
+        c.putImageData(inverted, 280, 460);
         c.fillStyle = "white";
-        c.fillText("inverted", 280, 335);
+        c.fillText("inverted", 280, 545);
     }
 
     // original ラベル
     c.font = "12px OpenSans-Regular";
     c.fillStyle = "white";
-    c.fillText("original", 10, 335);
+    c.fillText("original", 10, 545);
 
     c.flush();
 }

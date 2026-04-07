@@ -39,12 +39,35 @@ window.location = location;
 // --- HTMLCanvasElement シム ---
 // pixi.js が document.createElement("canvas") で取得してくるキャンバス
 function HTMLCanvasElement(width, height) {
-    this.width = width || 1;
-    this.height = height || 1;
+    this._width = width || 1;
+    this._height = height || 1;
     this.style = {};
     this.classList = { add: function(){}, remove: function(){} };
     this._glContext = null;
 }
+
+// width/height setter: 変更時に Canvas2D を再作成
+Object.defineProperty(HTMLCanvasElement.prototype, "width", {
+    get: function() { return this._width; },
+    set: function(v) {
+        v = Math.max(1, v | 0);
+        this._width = v;
+        // キャッシュ済み Canvas2D があればリサイズ
+        if (this._ctx2d && typeof this._ctx2d._resize === "function") {
+            this._ctx2d._resize(this._width, this._height);
+        }
+    }
+});
+Object.defineProperty(HTMLCanvasElement.prototype, "height", {
+    get: function() { return this._height; },
+    set: function(v) {
+        v = Math.max(1, v | 0);
+        this._height = v;
+        if (this._ctx2d && typeof this._ctx2d._resize === "function") {
+            this._ctx2d._resize(this._width, this._height);
+        }
+    }
+});
 
 // data プロパティ: 2D コンテキストの RGBA ピクセルデータを返す（texImage2D 連携用）
 Object.defineProperty(HTMLCanvasElement.prototype, "data", {

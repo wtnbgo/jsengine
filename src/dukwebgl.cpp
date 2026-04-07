@@ -638,6 +638,9 @@ static duk_ret_t dukwebgl_copyTexSubImage2D(duk_context *ctx) {
 static duk_ret_t dukwebgl_pixelStorei(duk_context *ctx) {
     GLenum pname = (GLenum)duk_get_uint(ctx, 0);
     GLint param = (GLint)duk_get_int(ctx, 1);
+    // WebGL 固有パラメータ（GLES3 にはない）はスキップ
+    // UNPACK_FLIP_Y_WEBGL (0x9240), UNPACK_PREMULTIPLY_ALPHA_WEBGL (0x9241)
+    if (pname == 0x9240 || pname == 0x9241) return 0;
     glPixelStorei(pname, param);
     return 0;
 }
