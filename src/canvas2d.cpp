@@ -239,12 +239,9 @@ struct Canvas2DData {
             canvas->add(p);
         }
         canvas->update();
-        canvas->draw(false);  // バッファクリアしない（蓄積描画）
+        canvas->draw(false);
         canvas->sync();
-        // 全 paint を除去
-        for (auto *p : pendingPaints) {
-            canvas->remove(p);
-        }
+        canvas->remove(); // 全 paint を除去
         pendingPaints.clear();
         hasPending = false;
         markAllDirty();
@@ -529,15 +526,13 @@ static void drawImageViaPicture(Canvas2DData *d,
     if (sw <= 0 || sh <= 0 || dw <= 0 || dh <= 0) return;
     if (!srcRGBA || srcW <= 0 || srcH <= 0) return;
 
-    // 切り出しが必要な場合（sx,sy != 0 or sw,sh != srcW,srcH）は
-    // 切り出し済みのピクセルデータを作成する
+    // 切り出しが必要な場合は切り出し済みデータを作成
     const uint32_t *pixelData = nullptr;
     int loadW = srcW, loadH = srcH;
     std::vector<uint32_t> clipped;
 
     bool needClip = (sx != 0 || sy != 0 || sw != srcW || sh != srcH);
     if (needClip) {
-        // 切り出し範囲をクランプ
         int cx0 = SDL_max(0, sx), cy0 = SDL_max(0, sy);
         int cx1 = SDL_min(srcW, sx + sw), cy1 = SDL_min(srcH, sy + sh);
         int cw = cx1 - cx0, ch = cy1 - cy0;
@@ -548,14 +543,12 @@ static void drawImageViaPicture(Canvas2DData *d,
             for (int px = 0; px < cw; px++) {
                 int si = ((cy0 + py) * srcW + (cx0 + px)) * 4;
                 uint8_t r = srcRGBA[si], g = srcRGBA[si+1], b = srcRGBA[si+2], a = srcRGBA[si+3];
-                // ABGR8888S (straight alpha) for ThorVG
                 clipped[py * cw + px] = ((uint32_t)a << 24) | ((uint32_t)b << 16) | ((uint32_t)g << 8) | r;
             }
         }
         pixelData = clipped.data();
         loadW = cw; loadH = ch;
     } else {
-        // RGBA → ABGR8888S 変換
         clipped.resize(srcW * srcH);
         for (int i = 0; i < srcW * srcH; i++) {
             int si = i * 4;
@@ -573,7 +566,6 @@ static void drawImageViaPicture(Canvas2DData *d,
         return;
     }
 
-    // スケーリング + 位置指定
     float scaleX = (float)dw / loadW;
     float scaleY = (float)dh / loadH;
     tvg::Matrix m = {scaleX, 0, (float)dx, 0, scaleY, (float)dy, 0, 0, 1};
@@ -587,8 +579,8 @@ static duk_ret_t ctx_drawImage(duk_context *ctx) {
     auto *d = get_data(ctx);
     int argc = duk_get_top(ctx);
 
-    // source オブジェクトからピクセルデータを取得
-    const uint8_t *srcData = nullptr;
+    // source オブジェクトからピクセルデータをローカルにコピー
+    std::vector<uint8_t> srcCopy;
     int srcW = 0, srcH = 0;
 
     if (duk_is_object(ctx, 0)) {
@@ -597,22 +589,26 @@ static duk_ret_t ctx_drawImage(duk_context *ctx) {
         duk_get_prop_string(ctx, 0, "height");
         srcH = duk_to_int(ctx, -1); duk_pop(ctx);
 
+        const uint8_t *bufPtr = nullptr;
+        duk_size_t bufSz = 0;
         // data (ImageBitmap / createImageBitmap)
         if (duk_has_prop_string(ctx, 0, "data")) {
             duk_get_prop_string(ctx, 0, "data");
-            duk_size_t sz = 0;
-            srcData = (const uint8_t*)duk_get_buffer_data(ctx, -1, &sz);
+            bufPtr = (const uint8_t*)duk_get_buffer_data(ctx, -1, &bufSz);
             duk_pop(ctx);
         }
         // _data (Image シム)
-        if (!srcData && duk_has_prop_string(ctx, 0, "_data")) {
+        if (!bufPtr && duk_has_prop_string(ctx, 0, "_data")) {
             duk_get_prop_string(ctx, 0, "_data");
-            duk_size_t sz = 0;
-            srcData = (const uint8_t*)duk_get_buffer_data(ctx, -1, &sz);
+            bufPtr = (const uint8_t*)duk_get_buffer_data(ctx, -1, &bufSz);
             duk_pop(ctx);
         }
+        // ローカルにコピー（duktape GC によるポインタ無効化を防止）
+        if (bufPtr && bufSz >= (duk_size_t)(srcW * srcH * 4)) {
+            srcCopy.assign(bufPtr, bufPtr + srcW * srcH * 4);
+        }
     }
-    if (!srcData || srcW <= 0 || srcH <= 0) return 0;
+    if (srcCopy.empty() || srcW <= 0 || srcH <= 0) return 0;
 
     int sx=0, sy=0, sw=srcW, sh=srcH;
     int dx=0, dy=0, dw=srcW, dh=srcH;
@@ -629,7 +625,7 @@ static duk_ret_t ctx_drawImage(duk_context *ctx) {
         dx=(int)duk_get_number(ctx,1); dy=(int)duk_get_number(ctx,2);
     }
 
-    drawImageViaPicture(d, srcData, srcW, srcH, sx, sy, sw, sh, dx, dy, dw, dh);
+    drawImageViaPicture(d, srcCopy.data(), srcW, srcH, sx, sy, sw, sh, dx, dy, dw, dh);
     return 0;
 }
 
@@ -746,9 +742,8 @@ static duk_ret_t ctx_getRGBA(duk_context *ctx) {
     auto *d = get_data(ctx);
     const uint8_t *rgba = d->getRGBACache();
     size_t sz = d->width * d->height * 4;
-    // 外部バッファとして直接参照（コピーなし）
-    duk_push_external_buffer(ctx);
-    duk_config_buffer(ctx, -1, (void*)rgba, sz);
+    void *buf = duk_push_buffer(ctx, sz, 0);
+    memcpy(buf, rgba, sz);
     return 1;
 }
 
