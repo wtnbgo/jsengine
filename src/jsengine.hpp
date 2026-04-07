@@ -19,7 +19,7 @@ public:
     // ベースパスからの相対パスをフルパスに解決
     std::string resolvePath(const char *path) const;
 
-    bool init();
+    bool init(int argc = 0, char **argv = nullptr);
     void update(uint32_t delta);
     void processTimers();       // setTimeout コールバック実行
     void processRAF();          // requestAnimationFrame コールバック実行

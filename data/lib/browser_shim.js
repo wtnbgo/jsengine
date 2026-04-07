@@ -243,6 +243,71 @@ if (typeof gl !== "undefined") {
     if (!gl.texStorage3D) {
         gl.texStorage3D = function() {};
     }
+    // three.js 用 WebGL2 メソッドスタブ
+    if (!gl.drawRangeElements) {
+        gl.drawRangeElements = function(mode, start, end, count, type, offset) {
+            gl.drawElements(mode, count, type, offset);
+        };
+    }
+    if (!gl.readBuffer) {
+        gl.readBuffer = function() {};
+    }
+    if (!gl.getBufferSubData) {
+        gl.getBufferSubData = function() {};
+    }
+    if (!gl.copyBufferSubData) {
+        gl.copyBufferSubData = function() {};
+    }
+    if (!gl.getIndexedParameter) {
+        gl.getIndexedParameter = function() { return null; };
+    }
+    if (!gl.texSubImage3D) {
+        gl.texSubImage3D = function() {};
+    }
+}
+
+// --- TextDecoder / TextEncoder ---
+if (typeof TextDecoder === "undefined") {
+    var TextDecoder = function(encoding) {
+        this.encoding = encoding || "utf-8";
+    };
+    TextDecoder.prototype.decode = function(input) {
+        if (!input) return "";
+        var bytes = new Uint8Array(input.buffer || input);
+        var result = "";
+        for (var i = 0; i < bytes.length; i++) {
+            result += String.fromCharCode(bytes[i]);
+        }
+        return result;
+    };
+    window.TextDecoder = TextDecoder;
+}
+if (typeof TextEncoder === "undefined") {
+    var TextEncoder = function() {};
+    TextEncoder.prototype.encode = function(str) {
+        var buf = new Uint8Array(str.length);
+        for (var i = 0; i < str.length; i++) {
+            buf[i] = str.charCodeAt(i) & 0xFF;
+        }
+        return buf;
+    };
+    window.TextEncoder = TextEncoder;
+}
+
+// --- Blob ---
+if (typeof Blob === "undefined") {
+    var Blob = function(parts, options) {
+        this.parts = parts || [];
+        this.type = (options && options.type) || "";
+        var total = 0;
+        for (var i = 0; i < this.parts.length; i++) {
+            var p = this.parts[i];
+            if (typeof p === "string") total += p.length;
+            else if (p.byteLength !== undefined) total += p.byteLength;
+        }
+        this.size = total;
+    };
+    window.Blob = Blob;
 }
 
 // --- document ---

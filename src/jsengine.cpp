@@ -1179,12 +1179,22 @@ std::string JsEngine::resolvePath(const char *path) const {
     return basePath_ + path;
 }
 
-bool JsEngine::init() {
+bool JsEngine::init(int argc, char **argv) {
     ctx_ = duk_create_heap(nullptr, nullptr, nullptr, nullptr, fatal_handler);
     if (!ctx_) {
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to create Duktape context");
         return false;
     }
+
+    // コマンドライン引数を JS グローバル __args に設定
+    duk_push_array(ctx_);
+    if (argv) {
+        for (int i = 0; i < argc; i++) {
+            duk_push_string(ctx_, argv[i]);
+            duk_put_prop_index(ctx_, -2, (duk_uarridx_t)i);
+        }
+    }
+    duk_put_global_string(ctx_, "__args");
 
     // console オブジェクト登録
     duk_push_object(ctx_);

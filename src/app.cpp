@@ -74,7 +74,7 @@ bool App::init(int argc, char *argv[])
     jsEngine_ = std::make_unique<JsEngine>();
     jsEngine_->setBasePath(dataPath);
     SDL_Log("Data path: %s", jsEngine_->getBasePath().c_str());
-    if (!jsEngine_->init()) {
+    if (!jsEngine_->init(argc, argv)) {
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to initialize JsEngine");
         return false;
     }

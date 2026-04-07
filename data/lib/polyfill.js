@@ -353,4 +353,44 @@ if (!Array.prototype.fill) {
     };
 }
 
+// --- Reflect.get / Reflect.set ---
+// duktape の組み込み Reflect.get は "unsupported" を投げるので強制上書き
+if (typeof Reflect !== "undefined") {
+    {
+        Reflect.get = function(target, prop, receiver) {
+            var desc = Object.getOwnPropertyDescriptor(target, prop);
+            if (desc && desc.get) {
+                return desc.get.call(receiver || target);
+            }
+            if (desc) return desc.value;
+            var proto = Object.getPrototypeOf(target);
+            if (proto) return Reflect.get(proto, prop, receiver);
+            return undefined;
+        };
+    }
+    {
+        Reflect.set = function(target, prop, value, receiver) {
+            var desc = Object.getOwnPropertyDescriptor(target, prop);
+            if (desc && desc.set) {
+                desc.set.call(receiver || target, value);
+                return true;
+            }
+            target[prop] = value;
+            return true;
+        };
+    }
+}
+
+// --- Object.getOwnPropertyDescriptors ---
+if (!Object.getOwnPropertyDescriptors) {
+    Object.getOwnPropertyDescriptors = function(obj) {
+        var result = {};
+        var keys = Object.getOwnPropertyNames(obj);
+        for (var i = 0; i < keys.length; i++) {
+            result[keys[i]] = Object.getOwnPropertyDescriptor(obj, keys[i]);
+        }
+        return result;
+    };
+}
+
 console.log("polyfill.js loaded");

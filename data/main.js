@@ -1,5 +1,5 @@
 // main.js - デモスクリプト
-// 数字キー 1～7 でデモ切り替え
+// 数字キー 1～8 でデモ切り替え
 //   1: 頂点カラー三角形（WASD移動、ホイール透明度）
 //   2: Canvas2D 図形描画（矩形、円、パス）
 //   3: Canvas2D テキスト描画（要フォントファイル）
@@ -7,7 +7,19 @@
 //   5: pixi.js v5 テスト
 //   6: Canvas2D drawImage / getImageData / putImageData テスト
 //   7: Canvas2D dirty rect 差分更新テスト
+//   8: three.js r128 テスト
 // Space: ビープ音再生  R: リセット
+// 起動オプション: -demo N で初期デモモード指定
+
+// コマンドライン引数からオプション解析
+var initialDemo = 0;
+if (typeof __args !== "undefined") {
+    for (var _ai = 0; _ai < __args.length; _ai++) {
+        if (__args[_ai] === "-demo" && _ai + 1 < __args.length) {
+            initialDemo = parseInt(__args[_ai + 1]) || 0;
+        }
+    }
+}
 
 // ============================================================
 // シェーダソース
@@ -760,6 +772,107 @@ function renderDemo7() {
 }
 
 // ============================================================
+// デモ8: three.js r128 テスト
+// ============================================================
+
+var threeInited = false;
+var threeScene = null;
+var threeCamera = null;
+var threeRenderer = null;
+var threeCube = null;
+
+function initDemo8() {
+    if (threeInited) return;
+    threeInited = true;
+
+    // ポリフィル・シム読み込み（未ロードの場合）
+    if (typeof Map === "undefined") loadScript("lib/polyfill.js");
+    if (typeof window === "undefined" || !window.HTMLCanvasElement) loadScript("lib/browser_shim.js");
+
+    // three.js ES5 ビルド読み込み
+    console.log("Loading three.js...");
+    try {
+        loadScript("lib/three.es5.js");
+        console.log("THREE loaded: r" + THREE.REVISION);
+    } catch(e) {
+        console.error("three.js load failed: " + e);
+        if (e.stack) console.error(e.stack);
+        return;
+    }
+
+    try {
+        // HTMLCanvasElement を作成して WebGL コンテキストを取得
+        var canvas = new HTMLCanvasElement(1280, 720);
+        canvas.width = 1280;
+        canvas.height = 720;
+
+        // gl に canvas を紐付け
+        gl.canvas = canvas;
+
+        // WebGLRenderer 作成
+        threeRenderer = new THREE.WebGLRenderer({
+            canvas: canvas,
+            context: gl,
+            antialias: false
+        });
+        threeRenderer.setSize(1280, 720, false);
+        threeRenderer.setClearColor(0x222233, 1);
+        console.log("THREE.WebGLRenderer created");
+
+        // シーンとカメラ
+        threeScene = new THREE.Scene();
+        threeCamera = new THREE.PerspectiveCamera(75, 1280 / 720, 0.1, 1000);
+        threeCamera.position.z = 5;
+
+        // 立方体
+        var geometry = new THREE.BoxGeometry(1, 1, 1);
+        var material = new THREE.MeshNormalMaterial();
+        threeCube = new THREE.Mesh(geometry, material);
+        threeScene.add(threeCube);
+
+        // 追加: ワイヤーフレーム球
+        var sphereGeo = new THREE.SphereGeometry(0.5, 16, 12);
+        var sphereMat = new THREE.MeshBasicMaterial({ color: 0x00ff88, wireframe: true });
+        var sphere = new THREE.Mesh(sphereGeo, sphereMat);
+        sphere.position.x = 2;
+        threeScene.add(sphere);
+
+        // 追加: 平面
+        var planeGeo = new THREE.PlaneGeometry(4, 4);
+        var planeMat = new THREE.MeshBasicMaterial({ color: 0x444466, side: THREE.DoubleSide });
+        var plane = new THREE.Mesh(planeGeo, planeMat);
+        plane.position.y = -1;
+        plane.rotation.x = Math.PI / 2;
+        threeScene.add(plane);
+
+        console.log("three.js scene created");
+    } catch(e) {
+        console.error("three.js init error: " + e);
+        if (e.stack) console.error(e.stack);
+    }
+}
+
+function renderDemo8() {
+    if (!threeRenderer || !threeScene || !threeCamera) return;
+
+    if (threeCube) {
+        threeCube.rotation.x = time * 0.001;
+        threeCube.rotation.y = time * 0.0013;
+    }
+
+    try {
+        threeRenderer.resetState();
+        threeRenderer.render(threeScene, threeCamera);
+    } catch(e) {
+        // 初回エラーのみ表示（スタックトレース付き）
+        if (time < 100) {
+            console.error("three.js render: " + e);
+            if (e.stack) console.error(e.stack);
+        }
+    }
+}
+
+// ============================================================
 // 初期化
 // ============================================================
 
@@ -800,7 +913,15 @@ console.log("Launch count: " + launchCount);
 // Audio
 var audioCtx = new AudioContext();
 
-console.log("Demo ready. Press 1-4 to switch demos, Space for beep, R to reset");
+console.log("Demo ready. Press 1-8 to switch demos, Space for beep, R to reset");
+
+// 起動オプションで初期デモモード設定
+if (initialDemo > 0) {
+    demoMode = initialDemo;
+    console.log("Initial demo mode: " + demoMode);
+    if (demoMode === 5) initDemo5();
+    if (demoMode === 8) initDemo8();
+}
 
 // ============================================================
 // イベント
@@ -823,6 +944,7 @@ addEventListener("keydown", function(e) {
     if (e.key === "5") { demoMode = 5; initDemo5(); console.log("Demo 5: pixi.js"); }
     if (e.key === "6") { demoMode = 6; console.log("Demo 6: drawImage/ImageData"); }
     if (e.key === "7") { demoMode = 7; demo7Inited = false; console.log("Demo 7: Dirty Rect"); }
+    if (e.key === "8") { demoMode = 8; initDemo8(); console.log("Demo 8: three.js"); }
 
     if (e.key === "r" || e.key === "R") {
         offsetX = 0.0; offsetY = 0.0; alpha = 1.0;
@@ -892,6 +1014,8 @@ function render() {
     } else if (demoMode === 7) {
         renderDemo7();
         drawCanvas2DAt(canvas2d_demo7);
+    } else if (demoMode === 8) {
+        renderDemo8();
     }
 }
 

@@ -62,10 +62,8 @@ FetchContent_MakeAvailable(SDL3_image)
 add_subdirectory(glad ${CMAKE_CURRENT_BINARY_DIR}/glad)
 
 # ----------------------------------------------------
-# duktape
+# duktape（自前ビルド）
 # ----------------------------------------------------
-
-find_package(unofficial-duktape CONFIG REQUIRED)
 
 
 # ----------------------------------------------------
@@ -136,6 +134,7 @@ set(SOURCES
 	src/dukwebgl.cpp
 	src/webaudio.cpp
 	src/canvas2d.cpp
+	src/duktape/duktape.c
 	src/audio/AudioEngine.cpp
 	src/audio/AudioStream.cpp
 	src/main.cpp
@@ -157,8 +156,9 @@ add_executable(${PROJECT_NAME}
 	${SOURCES}
 )
 
-target_include_directories(${PROJECT_NAME} PRIVATE 
+target_include_directories(${PROJECT_NAME} PRIVATE
 	"${thorvg_SOURCE_DIR}/inc"
+	"${CMAKE_CURRENT_SOURCE_DIR}/src/duktape"
 )
 
 target_link_libraries(${PROJECT_NAME} PRIVATE
@@ -166,7 +166,6 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
 	SDL3_image::SDL3_image
 	glm::glm
 	glad
-	unofficial::duktape::duktape
 	thorvg
 	freetype
 	harfbuzz
