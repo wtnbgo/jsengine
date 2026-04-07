@@ -846,6 +846,55 @@ function initDemo8() {
         threeScene.add(plane);
 
         console.log("three.js scene created");
+
+        // three.js のシェーダプリプロセスを正規表現なしの実装にオーバーライド
+        // duktape の regexp エンジンで特定パターンがハングする問題の回避
+        (function() {
+            // resolveIncludes を文字列操作ベースに差し替え
+            var origResolve = THREE.WebGLProgram ? null : null;
+
+            // ShaderChunk の #include 展開を indexOf ベースで実装
+            function resolveIncludesManual(src) {
+                var result = "";
+                var lines = src.split("\n");
+                for (var i = 0; i < lines.length; i++) {
+                    var line = lines[i];
+                    var trimmed = line.replace(/^[ \t]+/, "");
+                    if (trimmed.indexOf("#include") === 0) {
+                        var lt = trimmed.indexOf("<");
+                        var gt = trimmed.indexOf(">");
+                        if (lt >= 0 && gt > lt) {
+                            var name = trimmed.substring(lt + 1, gt);
+                            var chunk = THREE.ShaderChunk[name];
+                            if (chunk !== undefined) {
+                                result += resolveIncludesManual(chunk) + "\n";
+                                continue;
+                            }
+                        }
+                    }
+                    result += line + "\n";
+                }
+                return result;
+            }
+
+            // THREE.ShaderLib のシェーダを事前展開
+            if (THREE.ShaderLib) {
+                var libs = Object.keys(THREE.ShaderLib);
+                for (var li = 0; li < libs.length; li++) {
+                    var lib = THREE.ShaderLib[libs[li]];
+                    if (lib.vertexShader) {
+                        lib.vertexShader = resolveIncludesManual(lib.vertexShader);
+                    }
+                    if (lib.fragmentShader) {
+                        lib.fragmentShader = resolveIncludesManual(lib.fragmentShader);
+                    }
+                }
+                console.log("Shader includes pre-resolved for " + libs.length + " shader libs");
+            }
+        })();
+
+        // 正規表現テスト（THREE ロード済み）
+        try { loadScript("test_regexp.js"); } catch(e) { console.error("regexp test: " + e); }
     } catch(e) {
         console.error("three.js init error: " + e);
         if (e.stack) console.error(e.stack);
@@ -862,10 +911,14 @@ function renderDemo8() {
 
     try {
         threeRenderer.resetState();
+        // 初回のみ: compile 前にシェーダプログラムのキャッシュを確認
+        if (time < 100 && !threeRenderer._firstRenderDone) {
+            console.log("three.js: first render attempt...");
+            threeRenderer._firstRenderDone = true;
+        }
         threeRenderer.render(threeScene, threeCamera);
     } catch(e) {
-        // 初回エラーのみ表示（スタックトレース付き）
-        if (time < 100) {
+        if (time < 200) {
             console.error("three.js render: " + e);
             if (e.stack) console.error(e.stack);
         }
@@ -914,6 +967,8 @@ console.log("Launch count: " + launchCount);
 var audioCtx = new AudioContext();
 
 console.log("Demo ready. Press 1-8 to switch demos, Space for beep, R to reset");
+
+// 正規表現テスト（-demo 8 で自動実行、THREE ロード後）
 
 // 起動オプションで初期デモモード設定
 if (initialDemo > 0) {

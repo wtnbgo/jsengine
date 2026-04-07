@@ -50296,10 +50296,6 @@ DUK_INTERNAL void duk_hbuffer_resize(duk_hthread *thr, duk_hbuffer_dynamic *buf,
 	 */
 
 	if (new_size > DUK_HBUFFER_MAX_BYTELEN) {
-		fprintf(stderr, "DUKTAPE hbuffer_resize: buffer too long: new_size=0x%llx (%llu) max=0x%llx sizeof_size_t=%d\n",
-			(unsigned long long)new_size, (unsigned long long)new_size,
-			(unsigned long long)DUK_HBUFFER_MAX_BYTELEN,
-			(int)sizeof(duk_size_t));
 		DUK_ERROR_RANGE(thr, "buffer too long");
 		DUK_WO_NORETURN(return;);
 	}
@@ -92686,6 +92682,9 @@ internal_error:
  *  Output stack: [ ... result ]
  */
 
+static int duk__re_log_count = 0;
+static FILE *duk__re_log_fp = NULL;
+
 DUK_LOCAL void duk__regexp_match_helper(duk_hthread *thr, duk_small_int_t force_global) {
 	duk_re_matcher_ctx re_ctx;
 	duk_hobject *h_regexp;
@@ -92701,6 +92700,31 @@ DUK_LOCAL void duk__regexp_match_helper(duk_hthread *thr, duk_small_int_t force_
 	duk_uint32_t char_offset;
 
 	DUK_ASSERT(thr != NULL);
+
+	/* regexp 呼び出しログ */
+	duk__re_log_count++;
+	if (duk__re_log_count <= 500) {
+		duk_get_prop_string(thr, -2, "source");
+		duk_get_prop_string(thr, -3, "global");
+		{
+			const char *src = duk_safe_to_string(thr, -2);
+			int is_global = duk_to_boolean(thr, -1);
+			duk_size_t src_len = (duk_size_t)strlen(src);
+			const char *inp = duk_is_string(thr, -4) ? duk_get_string(thr, -4) : "(non-string)";
+			duk_size_t inp_len = (duk_size_t)strlen(inp);
+
+			if (!duk__re_log_fp) duk__re_log_fp = fopen("regexp_log.txt", "w");
+			if (duk__re_log_fp) {
+				fprintf(duk__re_log_fp, "[%d] /%.*s/%s input_len=%llu\n",
+					duk__re_log_count,
+					(int)(src_len > 200 ? 200 : src_len), src,
+					is_global ? "g" : "",
+					(unsigned long long)inp_len);
+				fflush(duk__re_log_fp);
+			}
+		}
+		duk_pop_2(thr);
+	}
 
 	DUK_DD(DUK_DDPRINT("regexp match: regexp=%!T, input=%!T",
 	                   (duk_tval *) duk_get_tval(thr, -2),
@@ -100389,11 +100413,8 @@ DUK_INTERNAL duk_uint8_t *duk_bw_resize(duk_hthread *thr, duk_bufwriter_ctx *bw_
 	curr_off = (duk_size_t) (bw_ctx->p - bw_ctx->p_base);
 	add_sz = (curr_off >> DUK_BW_SLACK_SHIFT) + DUK_BW_SLACK_ADD;
 	new_sz = curr_off + sz + add_sz;
-	if (DUK_UNLIKELY(new_sz < curr_off || new_sz > DUK_HBUFFER_MAX_BYTELEN)) {
-		/* overflow or too large */
-		fprintf(stderr, "DUKTAPE BW: too large! curr_off=0x%llx sz=0x%llx add_sz=0x%llx new_sz=0x%llx\n",
-			(unsigned long long)curr_off, (unsigned long long)sz,
-			(unsigned long long)add_sz, (unsigned long long)new_sz);
+	if (DUK_UNLIKELY(new_sz < curr_off)) {
+		/* overflow */
 		DUK_ERROR_RANGE(thr, DUK_STR_BUFFER_TOO_LONG);
 		DUK_WO_NORETURN(return NULL;);
 	}
