@@ -41,9 +41,9 @@ jsengine -quiet             # 警告以上のログのみ
 | SDL3 | FetchContent | ウィンドウ管理、入力、ファイルI/O |
 | SDL3_image | FetchContent | 画像読み込み（BMP, JPG, PNG） |
 | GLAD | ローカル (glad/) | OpenGL ES 3.0 ローダー |
-| duktape | vcpkg | JavaScript エンジン |
+| duktape 2.7.0 | ローカル (src/duktape/) | JavaScript エンジン |
 | glm | vcpkg | 数学ライブラリ |
-| miniaudio | src/audio/ | オーディオエンジン（WAV, MP3, FLAC, OGG） |
+| miniaudio 0.11.25 | ローカル (src/audio/) | オーディオエンジン（WAV, MP3, FLAC, OGG） |
 | ThorVG | FetchContent | 2D ベクターグラフィックス（Canvas 2D API） |
 | FreeType | vcpkg | フォントラスタライズ |
 | HarfBuzz | FetchContent | テキストシェーピング |
@@ -136,3 +136,28 @@ make transpile          # data/lib/three.min.js → data/lib/three.es5.js
 ```
 
 フォントファイルは `data/fonts/` に配置してください（OpenSans, Roboto 等）。
+
+## ライセンス
+
+本プロジェクトは [MIT License](LICENSE) の下で公開されています。
+
+### サードパーティライブラリのライセンス
+
+| ライブラリ | ライセンス | 備考 |
+|-----------|-----------|------|
+| [SDL3](https://github.com/libsdl-org/SDL) | zlib License | ウィンドウ管理、入力、ファイル I/O |
+| [SDL3_image](https://github.com/libsdl-org/SDL_image) | zlib License | 画像読み込み |
+| [duktape](https://duktape.org/) | MIT License | JavaScript エンジン（src/duktape/ に同梱） |
+| [GLAD](https://github.com/Dav1dde/glad) | MIT License / Public Domain | OpenGL ES 3.0 ローダー（glad/ に同梱） |
+| [miniaudio](https://miniaud.io/) | MIT-0 / Public Domain | オーディオエンジン（src/audio/ に同梱） |
+| [ThorVG](https://www.thorvg.org/) | MIT License | 2D ベクターグラフィックス |
+| [glm](https://github.com/g-truc/glm) | MIT License | 数学ライブラリ |
+| [FreeType](https://freetype.org/) | FreeType License (BSD-style) | フォントラスタライズ |
+| [HarfBuzz](https://harfbuzz.github.io/) | MIT License | テキストシェーピング |
+| [libvorbis](https://xiph.org/vorbis/) | BSD License | Vorbis オーディオデコード（オプション） |
+| [libogg](https://xiph.org/ogg/) | BSD License | Ogg コンテナ形式（オプション） |
+| [opusfile](https://opus-codec.org/) | BSD License | Opus オーディオデコード（オプション） |
+| [pixi.js](https://pixijs.com/) v5.3.12 | MIT License | 2D レンダラー（data/lib/ に同梱） |
+| [three.js](https://threejs.org/) r128 | MIT License | 3D グラフィックス（data/lib/ に同梱） |
+
+EGL/KHR ヘッダは Khronos Group により Apache-2.0 License で提供されています。
