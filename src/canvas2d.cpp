@@ -1,7 +1,9 @@
 /**
  * Canvas 2D API (ブラウザ互換サブセット)
  *
- * ThorVG SwCanvas でオフスクリーン描画し、GL テクスチャにアップロード
+ * ビットマップ保持型: 各描画操作は即座にピクセルバッファに反映される。
+ * ThorVG SwCanvas で描画し、結果をバッファに蓄積。
+ * clearRect で明示的にクリアされるまで内容を維持。
  */
 
 #include "canvas2d.h"
@@ -15,7 +17,6 @@
 #include <cmath>
 #include <vector>
 #include <string>
-#include <memory>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -67,66 +68,14 @@ static Color4 parse_color(const char *str) {
 }
 
 // ============================================================
-// パスコマンド記録（duplicate が無いため自前で管理）
+// パスコマンド
 // ============================================================
 
 enum PathOp { PathMoveTo, PathLineTo, PathCubicTo, PathClose, PathRect, PathArc };
-
-struct PathCmd {
-    PathOp op;
-    float args[7]; // 最大7引数 (arc)
-};
-
-// 円弧をベジェ曲線で近似してシェイプに追加
-// cx,cy: 中心, r: 半径, startDeg: 開始角度(度), sweepDeg: 掃引角度(度)
-static void shape_arc(tvg::Shape *shape, float cx, float cy, float r, float startDeg, float sweepDeg) {
-    if (fabsf(sweepDeg) < 0.001f) return;
-    // 90度以下のセグメントに分割
-    int segments = (int)(fabsf(sweepDeg) / 90.0f) + 1;
-    float segSweep = sweepDeg / segments;
-    float segRad = segSweep * (float)(M_PI / 180.0);
-
-    float curAngle = startDeg * (float)(M_PI / 180.0);
-    float sx = cx + r * cosf(curAngle);
-    float sy = cy + r * sinf(curAngle);
-    shape->moveTo(sx, sy);
-
-    for (int i = 0; i < segments; i++) {
-        float a1 = curAngle;
-        float a2 = curAngle + segRad;
-        // ベジェ近似の制御点
-        float alpha = 4.0f * tanf(segRad * 0.25f) / 3.0f;
-        float x1 = cx + r * cosf(a1);
-        float y1 = cy + r * sinf(a1);
-        float x2 = cx + r * cosf(a2);
-        float y2 = cy + r * sinf(a2);
-        float cp1x = x1 - alpha * r * sinf(a1);
-        float cp1y = y1 + alpha * r * cosf(a1);
-        float cp2x = x2 + alpha * r * sinf(a2);
-        float cp2y = y2 - alpha * r * cosf(a2);
-        shape->cubicTo(cp1x, cp1y, cp2x, cp2y, x2, y2);
-        curAngle = a2;
-    }
-}
-
-// パスコマンドから tvg::Shape を構築
-static tvg::Shape* build_shape(const std::vector<PathCmd> &cmds) {
-    auto *shape = tvg::Shape::gen();
-    for (auto &c : cmds) {
-        switch (c.op) {
-        case PathMoveTo: shape->moveTo(c.args[0], c.args[1]); break;
-        case PathLineTo: shape->lineTo(c.args[0], c.args[1]); break;
-        case PathCubicTo: shape->cubicTo(c.args[0],c.args[1],c.args[2],c.args[3],c.args[4],c.args[5]); break;
-        case PathClose: shape->close(); break;
-        case PathRect: shape->appendRect(c.args[0],c.args[1],c.args[2],c.args[3],0,0); break;
-        case PathArc: shape_arc(shape, c.args[0],c.args[1],c.args[2],c.args[3],c.args[4]); break;
-        }
-    }
-    return shape;
-}
+struct PathCmd { PathOp op; float args[7]; };
 
 // ============================================================
-// Canvas2D 内部データ
+// Canvas2D 内部データ — ビットマップ保持型
 // ============================================================
 
 struct DrawState {
@@ -144,10 +93,10 @@ struct DrawState {
 
 struct Canvas2DData {
     uint32_t width = 0, height = 0;
-    std::vector<uint32_t> pixels;
+    std::vector<uint32_t> pixels;  // ARGB8888 ビットマップバッファ（保持型）
     tvg::SwCanvas *canvas = nullptr;
     GLuint glTexture = 0;
-    bool dirty = true;
+    bool texDirty = true;
 
     std::vector<PathCmd> pathCmds;
     DrawState state;
@@ -156,6 +105,82 @@ struct Canvas2DData {
     ~Canvas2DData() {
         if (canvas) delete canvas;
         if (glTexture) glDeleteTextures(1, &glTexture);
+    }
+
+    // ThorVG で1つのシェイプを描画してバッファに合成
+    void renderShape(tvg::Shape *shape) {
+        // canvas に追加 → update → draw(false: バッファクリアしない) → sync → 除去
+        canvas->add(shape);
+        canvas->update();
+        canvas->draw(false);  // false = バッファをクリアしない（蓄積描画）
+        canvas->sync();
+        canvas->remove(shape);
+        texDirty = true;
+    }
+
+    // ThorVG で Text を描画してバッファに合成
+    void renderText(tvg::Text *text) {
+        canvas->add(text);
+        canvas->update();
+        canvas->draw(false);
+        canvas->sync();
+        canvas->remove(text);
+        texDirty = true;
+    }
+
+    // ピクセルバッファの一部を直接クリア
+    void clearPixels(int x, int y, int w, int h) {
+        int x0 = SDL_max(0, x);
+        int y0 = SDL_max(0, y);
+        int x1 = SDL_min((int)width, x + w);
+        int y1 = SDL_min((int)height, y + h);
+        for (int py = y0; py < y1; py++) {
+            memset(&pixels[py * width + x0], 0, (x1 - x0) * sizeof(uint32_t));
+        }
+        texDirty = true;
+    }
+
+    // ピクセルバッファに直接ビットブリット（スケーリング対応）
+    void blitPixels(const uint8_t *srcRGBA, int srcW, int srcH,
+                    int sx, int sy, int sw, int sh,
+                    int dx, int dy, int dw, int dh) {
+        if (sw <= 0 || sh <= 0 || dw <= 0 || dh <= 0) return;
+
+        for (int py = 0; py < dh; py++) {
+            int dstY = dy + py;
+            if (dstY < 0 || dstY >= (int)height) continue;
+            // ソース Y をスケーリング計算
+            int srcY = sy + (py * sh) / dh;
+            if (srcY < 0 || srcY >= srcH) continue;
+
+            for (int px = 0; px < dw; px++) {
+                int dstX = dx + px;
+                if (dstX < 0 || dstX >= (int)width) continue;
+                // ソース X をスケーリング計算
+                int srcX = sx + (px * sw) / dw;
+                if (srcX < 0 || srcX >= srcW) continue;
+
+                int si = (srcY * srcW + srcX) * 4;
+                uint8_t sr = srcRGBA[si], sg = srcRGBA[si+1], sb = srcRGBA[si+2], sa = srcRGBA[si+3];
+                if (sa == 0) continue;
+
+                uint32_t &dst = pixels[dstY * width + dstX];
+                if (sa == 255) {
+                    dst = (255u << 24) | ((uint32_t)sr << 16) | ((uint32_t)sg << 8) | sb;
+                } else {
+                    uint8_t da = (dst >> 24) & 0xFF;
+                    uint8_t dr = (dst >> 16) & 0xFF;
+                    uint8_t dg = (dst >> 8) & 0xFF;
+                    uint8_t db = dst & 0xFF;
+                    uint8_t oa = sa + (da * (255 - sa)) / 255;
+                    uint8_t or_ = oa ? (uint8_t)((sr * sa + dr * da * (255 - sa) / 255) / oa) : 0;
+                    uint8_t og = oa ? (uint8_t)((sg * sa + dg * da * (255 - sa) / 255) / oa) : 0;
+                    uint8_t ob = oa ? (uint8_t)((sb * sa + db * da * (255 - sa) / 255) / oa) : 0;
+                    dst = ((uint32_t)oa << 24) | ((uint32_t)or_ << 16) | ((uint32_t)og << 8) | ob;
+                }
+            }
+        }
+        texDirty = true;
     }
 };
 
@@ -175,8 +200,42 @@ static tvg::Matrix mat_mul(const tvg::Matrix &a, const tvg::Matrix &b) {
     };
 }
 
+// 円弧をベジェ曲線で近似
+static void shape_arc(tvg::Shape *shape, float cx, float cy, float r, float startDeg, float sweepDeg) {
+    if (fabsf(sweepDeg) < 0.001f) return;
+    int segments = (int)(fabsf(sweepDeg) / 90.0f) + 1;
+    float segRad = (sweepDeg / segments) * (float)(M_PI / 180.0);
+    float curAngle = startDeg * (float)(M_PI / 180.0);
+    float sx = cx + r * cosf(curAngle), sy = cy + r * sinf(curAngle);
+    shape->moveTo(sx, sy);
+    for (int i = 0; i < segments; i++) {
+        float a1 = curAngle, a2 = curAngle + segRad;
+        float alpha = 4.0f * tanf(segRad * 0.25f) / 3.0f;
+        float x2 = cx + r*cosf(a2), y2 = cy + r*sinf(a2);
+        shape->cubicTo(
+            cx + r*cosf(a1) - alpha*r*sinf(a1), cy + r*sinf(a1) + alpha*r*cosf(a1),
+            x2 + alpha*r*sinf(a2), y2 - alpha*r*cosf(a2), x2, y2);
+        curAngle = a2;
+    }
+}
+
+static tvg::Shape* build_shape(const std::vector<PathCmd> &cmds) {
+    auto *shape = tvg::Shape::gen();
+    for (auto &c : cmds) {
+        switch (c.op) {
+        case PathMoveTo: shape->moveTo(c.args[0], c.args[1]); break;
+        case PathLineTo: shape->lineTo(c.args[0], c.args[1]); break;
+        case PathCubicTo: shape->cubicTo(c.args[0],c.args[1],c.args[2],c.args[3],c.args[4],c.args[5]); break;
+        case PathClose: shape->close(); break;
+        case PathRect: shape->appendRect(c.args[0],c.args[1],c.args[2],c.args[3],0,0); break;
+        case PathArc: shape_arc(shape, c.args[0],c.args[1],c.args[2],c.args[3],c.args[4]); break;
+        }
+    }
+    return shape;
+}
+
 // ============================================================
-// 矩形
+// 矩形（即座にバッファに描画）
 // ============================================================
 
 static duk_ret_t ctx_fillRect(duk_context *ctx) {
@@ -188,8 +247,7 @@ static duk_ret_t ctx_fillRect(duk_context *ctx) {
     uint8_t a = (uint8_t)(d->state.fillStyle.a * d->state.globalAlpha);
     shape->fill(d->state.fillStyle.r, d->state.fillStyle.g, d->state.fillStyle.b, a);
     shape->transform(d->state.transform);
-    d->canvas->add(shape);
-    d->dirty = true;
+    d->renderShape(shape);
     return 0;
 }
 
@@ -202,28 +260,16 @@ static duk_ret_t ctx_strokeRect(duk_context *ctx) {
     uint8_t a = (uint8_t)(d->state.strokeStyle.a * d->state.globalAlpha);
     shape->strokeFill(d->state.strokeStyle.r, d->state.strokeStyle.g, d->state.strokeStyle.b, a);
     shape->strokeWidth(d->state.lineWidth);
-    shape->strokeCap(d->state.lineCap);
-    shape->strokeJoin(d->state.lineJoin);
     shape->transform(d->state.transform);
-    d->canvas->add(shape);
-    d->dirty = true;
+    d->renderShape(shape);
     return 0;
 }
 
 static duk_ret_t ctx_clearRect(duk_context *ctx) {
     auto *d = get_data(ctx);
-    float x=(float)duk_get_number(ctx,0), y=(float)duk_get_number(ctx,1);
-    float w=(float)duk_get_number(ctx,2), h=(float)duk_get_number(ctx,3);
-    // ピクセルバッファを直接クリア（変換なしの簡易版）
-    int ix = (int)x, iy = (int)y, iw = (int)w, ih = (int)h;
-    for (int py = iy; py < iy + ih && py < (int)d->height; py++) {
-        if (py < 0) continue;
-        for (int px = ix; px < ix + iw && px < (int)d->width; px++) {
-            if (px < 0) continue;
-            d->pixels[py * d->width + px] = 0;
-        }
-    }
-    d->dirty = true;
+    int x=(int)duk_get_number(ctx,0), y=(int)duk_get_number(ctx,1);
+    int w=(int)duk_get_number(ctx,2), h=(int)duk_get_number(ctx,3);
+    d->clearPixels(x, y, w, h);
     return 0;
 }
 
@@ -231,64 +277,44 @@ static duk_ret_t ctx_clearRect(duk_context *ctx) {
 // パス
 // ============================================================
 
-static duk_ret_t ctx_beginPath(duk_context *ctx) {
-    get_data(ctx)->pathCmds.clear();
-    return 0;
-}
-
+static duk_ret_t ctx_beginPath(duk_context *ctx) { get_data(ctx)->pathCmds.clear(); return 0; }
 static duk_ret_t ctx_moveTo(duk_context *ctx) {
     auto *d = get_data(ctx);
     PathCmd c = {PathMoveTo, {(float)duk_get_number(ctx,0),(float)duk_get_number(ctx,1)}};
-    d->pathCmds.push_back(c);
-    return 0;
+    d->pathCmds.push_back(c); return 0;
 }
-
 static duk_ret_t ctx_lineTo(duk_context *ctx) {
     auto *d = get_data(ctx);
     PathCmd c = {PathLineTo, {(float)duk_get_number(ctx,0),(float)duk_get_number(ctx,1)}};
-    d->pathCmds.push_back(c);
-    return 0;
+    d->pathCmds.push_back(c); return 0;
 }
-
 static duk_ret_t ctx_bezierCurveTo(duk_context *ctx) {
     auto *d = get_data(ctx);
-    PathCmd c = {PathCubicTo, {
-        (float)duk_get_number(ctx,0),(float)duk_get_number(ctx,1),
+    PathCmd c = {PathCubicTo, {(float)duk_get_number(ctx,0),(float)duk_get_number(ctx,1),
         (float)duk_get_number(ctx,2),(float)duk_get_number(ctx,3),
         (float)duk_get_number(ctx,4),(float)duk_get_number(ctx,5)}};
-    d->pathCmds.push_back(c);
-    return 0;
+    d->pathCmds.push_back(c); return 0;
 }
-
 static duk_ret_t ctx_rect(duk_context *ctx) {
     auto *d = get_data(ctx);
     PathCmd c = {PathRect, {(float)duk_get_number(ctx,0),(float)duk_get_number(ctx,1),
         (float)duk_get_number(ctx,2),(float)duk_get_number(ctx,3)}};
-    d->pathCmds.push_back(c);
-    return 0;
+    d->pathCmds.push_back(c); return 0;
 }
-
 static duk_ret_t ctx_arc(duk_context *ctx) {
     auto *d = get_data(ctx);
-    float cx=(float)duk_get_number(ctx,0), cy=(float)duk_get_number(ctx,1);
-    float r=(float)duk_get_number(ctx,2);
+    float cx=(float)duk_get_number(ctx,0), cy=(float)duk_get_number(ctx,1), r=(float)duk_get_number(ctx,2);
     float sa=(float)duk_get_number(ctx,3), ea=(float)duk_get_number(ctx,4);
     bool ccw = duk_get_top(ctx) > 5 ? (duk_get_boolean(ctx,5)!=0) : false;
-    float sd = sa * (float)(180.0/M_PI), ed = ea * (float)(180.0/M_PI);
+    float sd = sa*(float)(180.0/M_PI), ed = ea*(float)(180.0/M_PI);
     float sweep = ed - sd;
-    if (ccw) { if (sweep > 0) sweep -= 360.0f; }
-    else     { if (sweep < 0) sweep += 360.0f; }
+    if (ccw) { if (sweep > 0) sweep -= 360.0f; } else { if (sweep < 0) sweep += 360.0f; }
     PathCmd c = {PathArc, {cx, cy, r, sd, sweep, 0}};
-    d->pathCmds.push_back(c);
-    return 0;
+    d->pathCmds.push_back(c); return 0;
 }
-
 static duk_ret_t ctx_closePath(duk_context *ctx) {
-    PathCmd c = {PathClose, {}};
-    get_data(ctx)->pathCmds.push_back(c);
-    return 0;
+    PathCmd c = {PathClose, {}}; get_data(ctx)->pathCmds.push_back(c); return 0;
 }
-
 static duk_ret_t ctx_fill(duk_context *ctx) {
     auto *d = get_data(ctx);
     if (d->pathCmds.empty()) return 0;
@@ -296,11 +322,9 @@ static duk_ret_t ctx_fill(duk_context *ctx) {
     uint8_t a = (uint8_t)(d->state.fillStyle.a * d->state.globalAlpha);
     shape->fill(d->state.fillStyle.r, d->state.fillStyle.g, d->state.fillStyle.b, a);
     shape->transform(d->state.transform);
-    d->canvas->add(shape);
-    d->dirty = true;
+    d->renderShape(shape);
     return 0;
 }
-
 static duk_ret_t ctx_stroke(duk_context *ctx) {
     auto *d = get_data(ctx);
     if (d->pathCmds.empty()) return 0;
@@ -308,11 +332,8 @@ static duk_ret_t ctx_stroke(duk_context *ctx) {
     uint8_t a = (uint8_t)(d->state.strokeStyle.a * d->state.globalAlpha);
     shape->strokeFill(d->state.strokeStyle.r, d->state.strokeStyle.g, d->state.strokeStyle.b, a);
     shape->strokeWidth(d->state.lineWidth);
-    shape->strokeCap(d->state.lineCap);
-    shape->strokeJoin(d->state.lineJoin);
     shape->transform(d->state.transform);
-    d->canvas->add(shape);
-    d->dirty = true;
+    d->renderShape(shape);
     return 0;
 }
 
@@ -323,132 +344,280 @@ static duk_ret_t ctx_stroke(duk_context *ctx) {
 static duk_ret_t ctx_fillText(duk_context *ctx) {
     auto *d = get_data(ctx);
     const char *str = duk_require_string(ctx, 0);
-    float x = (float)duk_get_number(ctx, 1);
-    float y = (float)duk_get_number(ctx, 2);
-
+    float x = (float)duk_get_number(ctx, 1), y = (float)duk_get_number(ctx, 2);
     auto *text = tvg::Text::gen();
     text->font(d->state.fontName.c_str());
     text->size(d->state.fontSize);
     text->text(str);
     text->fill(d->state.fillStyle.r, d->state.fillStyle.g, d->state.fillStyle.b);
-    uint8_t a = (uint8_t)(d->state.fillStyle.a * d->state.globalAlpha);
-    text->opacity(a);
-
-    // y をベースライン位置として扱う（フォントサイズ分上にオフセット）
+    text->opacity((uint8_t)(d->state.fillStyle.a * d->state.globalAlpha));
     tvg::Matrix t = {1,0,x, 0,1,y - d->state.fontSize * 0.85f, 0,0,1};
     text->transform(mat_mul(d->state.transform, t));
-
-    d->canvas->add(text);
-    d->dirty = true;
+    d->renderText(text);
     return 0;
 }
 
 static duk_ret_t ctx_strokeText(duk_context *ctx) {
     auto *d = get_data(ctx);
     const char *str = duk_require_string(ctx, 0);
-    float x = (float)duk_get_number(ctx, 1);
-    float y = (float)duk_get_number(ctx, 2);
-
+    float x = (float)duk_get_number(ctx, 1), y = (float)duk_get_number(ctx, 2);
     auto *text = tvg::Text::gen();
     text->font(d->state.fontName.c_str());
     text->size(d->state.fontSize);
     text->text(str);
     text->outline(d->state.lineWidth, d->state.strokeStyle.r, d->state.strokeStyle.g, d->state.strokeStyle.b);
-    uint8_t a = (uint8_t)(d->state.strokeStyle.a * d->state.globalAlpha);
-    text->opacity(a);
-
+    text->opacity((uint8_t)(d->state.strokeStyle.a * d->state.globalAlpha));
     tvg::Matrix t = {1,0,x, 0,1,y - d->state.fontSize * 0.85f, 0,0,1};
     text->transform(mat_mul(d->state.transform, t));
-
-    d->canvas->add(text);
-    d->dirty = true;
+    d->renderText(text);
     return 0;
 }
 
 static duk_ret_t ctx_measureText(duk_context *ctx) {
     auto *d = get_data(ctx);
     const char *str = duk_require_string(ctx, 0);
-
-    auto *text = tvg::Text::gen();
-    text->font(d->state.fontName.c_str());
-    text->size(d->state.fontSize);
-    text->text(str);
-
-    // bounds を取得するために一時的に canvas に追加して update
-    // 簡易実装: フォントサイズからの推定
     float estimatedWidth = (float)strlen(str) * d->state.fontSize * 0.6f;
-
     duk_idx_t obj = duk_push_object(ctx);
     duk_push_number(ctx, estimatedWidth);
     duk_put_prop_string(ctx, obj, "width");
-
-    // text は canvas に追加しないので手動解放できないが、
-    // tvg::Text のデストラクタは protected なので ref/unref を使う
-    // gen() で作ったものは unref で解放
-    text->unref();
-
     return 1;
 }
 
 // ============================================================
-// 変換
+// drawImage (ThorVG Picture ベース)
 // ============================================================
 
-static duk_ret_t ctx_save(duk_context *ctx) {
+// ソースの RGBA データから Canvas2DData のバッファ上に描画する
+// ThorVG Picture でロードし、translate/scale/clip で位置・サイズ・切り出しを制御
+static void drawImageViaPicture(Canvas2DData *d,
+    const uint8_t *srcRGBA, int srcW, int srcH,
+    int sx, int sy, int sw, int sh,
+    int dx, int dy, int dw, int dh)
+{
+    if (sw <= 0 || sh <= 0 || dw <= 0 || dh <= 0) return;
+    if (!srcRGBA || srcW <= 0 || srcH <= 0) return;
+
+    // 切り出しが必要な場合（sx,sy != 0 or sw,sh != srcW,srcH）は
+    // 切り出し済みのピクセルデータを作成する
+    const uint32_t *pixelData = nullptr;
+    int loadW = srcW, loadH = srcH;
+    std::vector<uint32_t> clipped;
+
+    bool needClip = (sx != 0 || sy != 0 || sw != srcW || sh != srcH);
+    if (needClip) {
+        // 切り出し範囲をクランプ
+        int cx0 = SDL_max(0, sx), cy0 = SDL_max(0, sy);
+        int cx1 = SDL_min(srcW, sx + sw), cy1 = SDL_min(srcH, sy + sh);
+        int cw = cx1 - cx0, ch = cy1 - cy0;
+        if (cw <= 0 || ch <= 0) return;
+
+        clipped.resize(cw * ch);
+        for (int py = 0; py < ch; py++) {
+            for (int px = 0; px < cw; px++) {
+                int si = ((cy0 + py) * srcW + (cx0 + px)) * 4;
+                uint8_t r = srcRGBA[si], g = srcRGBA[si+1], b = srcRGBA[si+2], a = srcRGBA[si+3];
+                // ABGR8888S (straight alpha) for ThorVG
+                clipped[py * cw + px] = ((uint32_t)a << 24) | ((uint32_t)b << 16) | ((uint32_t)g << 8) | r;
+            }
+        }
+        pixelData = clipped.data();
+        loadW = cw; loadH = ch;
+    } else {
+        // RGBA → ABGR8888S 変換
+        clipped.resize(srcW * srcH);
+        for (int i = 0; i < srcW * srcH; i++) {
+            int si = i * 4;
+            uint8_t r = srcRGBA[si], g = srcRGBA[si+1], b = srcRGBA[si+2], a = srcRGBA[si+3];
+            clipped[i] = ((uint32_t)a << 24) | ((uint32_t)b << 16) | ((uint32_t)g << 8) | r;
+        }
+        pixelData = clipped.data();
+    }
+
+    auto *pic = tvg::Picture::gen();
+    if (pic->load(pixelData, loadW, loadH, tvg::ColorSpace::ABGR8888S, true) != tvg::Result::Success) {
+        // フォールバック: blitPixels
+        d->blitPixels(srcRGBA, srcW, srcH, sx, sy, sw, sh, dx, dy, dw, dh);
+        pic->unref();
+        return;
+    }
+
+    // スケーリング + 位置指定
+    float scaleX = (float)dw / loadW;
+    float scaleY = (float)dh / loadH;
+    tvg::Matrix m = {scaleX, 0, (float)dx, 0, scaleY, (float)dy, 0, 0, 1};
+    pic->transform(m);
+    pic->opacity((uint8_t)(d->state.globalAlpha * 255));
+
+    d->canvas->add(pic);
+    d->canvas->update();
+    d->canvas->draw(false);
+    d->canvas->sync();
+    d->canvas->remove(pic);
+    d->texDirty = true;
+}
+
+static duk_ret_t ctx_drawImage(duk_context *ctx) {
     auto *d = get_data(ctx);
-    d->stateStack.push_back(d->state);
+    int argc = duk_get_top(ctx);
+
+    // source オブジェクトからピクセルデータを取得
+    const uint8_t *srcData = nullptr;
+    int srcW = 0, srcH = 0;
+
+    if (duk_is_object(ctx, 0)) {
+        duk_get_prop_string(ctx, 0, "width");
+        srcW = duk_to_int(ctx, -1); duk_pop(ctx);
+        duk_get_prop_string(ctx, 0, "height");
+        srcH = duk_to_int(ctx, -1); duk_pop(ctx);
+
+        // data (ImageBitmap / createImageBitmap)
+        if (duk_has_prop_string(ctx, 0, "data")) {
+            duk_get_prop_string(ctx, 0, "data");
+            duk_size_t sz = 0;
+            srcData = (const uint8_t*)duk_get_buffer_data(ctx, -1, &sz);
+            duk_pop(ctx);
+        }
+        // _data (Image シム)
+        if (!srcData && duk_has_prop_string(ctx, 0, "_data")) {
+            duk_get_prop_string(ctx, 0, "_data");
+            duk_size_t sz = 0;
+            srcData = (const uint8_t*)duk_get_buffer_data(ctx, -1, &sz);
+            duk_pop(ctx);
+        }
+    }
+    if (!srcData || srcW <= 0 || srcH <= 0) return 0;
+
+    int sx=0, sy=0, sw=srcW, sh=srcH;
+    int dx=0, dy=0, dw=srcW, dh=srcH;
+
+    if (argc >= 9) {
+        sx=(int)duk_get_number(ctx,1); sy=(int)duk_get_number(ctx,2);
+        sw=(int)duk_get_number(ctx,3); sh=(int)duk_get_number(ctx,4);
+        dx=(int)duk_get_number(ctx,5); dy=(int)duk_get_number(ctx,6);
+        dw=(int)duk_get_number(ctx,7); dh=(int)duk_get_number(ctx,8);
+    } else if (argc >= 5) {
+        dx=(int)duk_get_number(ctx,1); dy=(int)duk_get_number(ctx,2);
+        dw=(int)duk_get_number(ctx,3); dh=(int)duk_get_number(ctx,4);
+    } else {
+        dx=(int)duk_get_number(ctx,1); dy=(int)duk_get_number(ctx,2);
+    }
+
+    drawImageViaPicture(d, srcData, srcW, srcH, sx, sy, sw, sh, dx, dy, dw, dh);
     return 0;
 }
 
+// ============================================================
+// getImageData / putImageData
+// ============================================================
+
+static duk_ret_t ctx_getImageData(duk_context *ctx) {
+    auto *d = get_data(ctx);
+    int x=(int)duk_get_number(ctx,0), y=(int)duk_get_number(ctx,1);
+    int w=(int)duk_get_number(ctx,2), h=(int)duk_get_number(ctx,3);
+
+    duk_idx_t obj = duk_push_object(ctx);
+    duk_push_int(ctx, w); duk_put_prop_string(ctx, obj, "width");
+    duk_push_int(ctx, h); duk_put_prop_string(ctx, obj, "height");
+
+    void *buf = duk_push_buffer(ctx, w * h * 4, 0);
+    uint8_t *out = (uint8_t*)buf;
+    for (int py = 0; py < h; py++) {
+        for (int px = 0; px < w; px++) {
+            int srcX = x + px, srcY = y + py;
+            int di = (py * w + px) * 4;
+            if (srcX >= 0 && srcX < (int)d->width && srcY >= 0 && srcY < (int)d->height) {
+                uint32_t argb = d->pixels[srcY * d->width + srcX];
+                out[di]   = (argb >> 16) & 0xFF; // R
+                out[di+1] = (argb >> 8) & 0xFF;  // G
+                out[di+2] = argb & 0xFF;          // B
+                out[di+3] = (argb >> 24) & 0xFF;  // A
+            } else {
+                out[di] = out[di+1] = out[di+2] = out[di+3] = 0;
+            }
+        }
+    }
+    duk_put_prop_string(ctx, obj, "data");
+    return 1;
+}
+
+static duk_ret_t ctx_putImageData(duk_context *ctx) {
+    auto *d = get_data(ctx);
+    int dx = (int)duk_get_number(ctx, 1), dy = (int)duk_get_number(ctx, 2);
+
+    if (!duk_is_object(ctx, 0)) return 0;
+    duk_get_prop_string(ctx, 0, "width");
+    int w = duk_to_int(ctx, -1); duk_pop(ctx);
+    duk_get_prop_string(ctx, 0, "height");
+    int h = duk_to_int(ctx, -1); duk_pop(ctx);
+    duk_get_prop_string(ctx, 0, "data");
+    duk_size_t sz = 0;
+    const uint8_t *src = (const uint8_t*)duk_get_buffer_data(ctx, -1, &sz);
+    duk_pop(ctx);
+    if (!src) return 0;
+
+    for (int py = 0; py < h; py++) {
+        for (int px = 0; px < w; px++) {
+            int dstX = dx + px, dstY = dy + py;
+            if (dstX < 0 || dstX >= (int)d->width || dstY < 0 || dstY >= (int)d->height) continue;
+            int si = (py * w + px) * 4;
+            uint32_t argb = ((uint32_t)src[si+3] << 24) | ((uint32_t)src[si] << 16) |
+                            ((uint32_t)src[si+1] << 8) | src[si+2];
+            d->pixels[dstY * d->width + dstX] = argb;
+        }
+    }
+    d->texDirty = true;
+    return 0;
+}
+
+// ============================================================
+// 変換 / 状態
+// ============================================================
+
+static duk_ret_t ctx_save(duk_context *ctx) { get_data(ctx)->stateStack.push_back(get_data(ctx)->state); return 0; }
 static duk_ret_t ctx_restore(duk_context *ctx) {
     auto *d = get_data(ctx);
-    if (!d->stateStack.empty()) {
-        d->state = d->stateStack.back();
-        d->stateStack.pop_back();
+    if (!d->stateStack.empty()) { d->state = d->stateStack.back(); d->stateStack.pop_back(); }
+    return 0;
+}
+static duk_ret_t ctx_translate(duk_context *ctx) {
+    auto *d = get_data(ctx);
+    tvg::Matrix t = {1,0,(float)duk_get_number(ctx,0), 0,1,(float)duk_get_number(ctx,1), 0,0,1};
+    d->state.transform = mat_mul(d->state.transform, t); return 0;
+}
+static duk_ret_t ctx_rotate(duk_context *ctx) {
+    auto *d = get_data(ctx);
+    float a=(float)duk_get_number(ctx,0), c=cosf(a), s=sinf(a);
+    tvg::Matrix r = {c,-s,0, s,c,0, 0,0,1};
+    d->state.transform = mat_mul(d->state.transform, r); return 0;
+}
+static duk_ret_t ctx_scale(duk_context *ctx) {
+    auto *d = get_data(ctx);
+    tvg::Matrix sc = {(float)duk_get_number(ctx,0),0,0, 0,(float)duk_get_number(ctx,1),0, 0,0,1};
+    d->state.transform = mat_mul(d->state.transform, sc); return 0;
+}
+static duk_ret_t ctx_setTransform(duk_context *ctx) {
+    auto *d = get_data(ctx);
+    if (duk_get_top(ctx) >= 6) {
+        d->state.transform = {
+            (float)duk_get_number(ctx,0), (float)duk_get_number(ctx,2), (float)duk_get_number(ctx,4),
+            (float)duk_get_number(ctx,1), (float)duk_get_number(ctx,3), (float)duk_get_number(ctx,5),
+            0, 0, 1
+        };
+    } else {
+        d->state.transform = {1,0,0, 0,1,0, 0,0,1};
     }
     return 0;
 }
 
-static duk_ret_t ctx_translate(duk_context *ctx) {
-    auto *d = get_data(ctx);
-    float tx=(float)duk_get_number(ctx,0), ty=(float)duk_get_number(ctx,1);
-    tvg::Matrix t = {1,0,tx, 0,1,ty, 0,0,1};
-    d->state.transform = mat_mul(d->state.transform, t);
-    return 0;
-}
-
-static duk_ret_t ctx_rotate(duk_context *ctx) {
-    auto *d = get_data(ctx);
-    float a = (float)duk_get_number(ctx, 0);
-    float c = cosf(a), s = sinf(a);
-    tvg::Matrix r = {c,-s,0, s,c,0, 0,0,1};
-    d->state.transform = mat_mul(d->state.transform, r);
-    return 0;
-}
-
-static duk_ret_t ctx_scale(duk_context *ctx) {
-    auto *d = get_data(ctx);
-    float sx=(float)duk_get_number(ctx,0), sy=(float)duk_get_number(ctx,1);
-    tvg::Matrix sc = {sx,0,0, 0,sy,0, 0,0,1};
-    d->state.transform = mat_mul(d->state.transform, sc);
-    return 0;
-}
-
 // ============================================================
-// flush
+// flush: バッファ → GL テクスチャアップロード
 // ============================================================
 
 static duk_ret_t ctx_flush(duk_context *ctx) {
     auto *d = get_data(ctx);
-    if (!d->dirty) return 0;
+    if (!d->texDirty) return 0;
 
-    memset(d->pixels.data(), 0, d->pixels.size() * sizeof(uint32_t));
-
-    d->canvas->update();
-    d->canvas->draw(true);
-    d->canvas->sync();
-
-    // ARGB8888 (premultiplied) → GL RGBA (straight)
+    // ARGB8888 → RGBA8888 変換
     size_t n = d->width * d->height;
     std::vector<uint32_t> rgba(n);
     for (size_t i = 0; i < n; i++) {
@@ -457,21 +626,13 @@ static duk_ret_t ctx_flush(duk_context *ctx) {
         uint8_t r = (argb >> 16) & 0xFF;
         uint8_t g = (argb >> 8) & 0xFF;
         uint8_t b = argb & 0xFF;
-        if (a > 0 && a < 255) {
-            r = (uint8_t)((r * 255) / a);
-            g = (uint8_t)((g * 255) / a);
-            b = (uint8_t)((b * 255) / a);
-        }
         rgba[i] = r | (g << 8) | (b << 16) | (a << 24);
     }
 
     glBindTexture(GL_TEXTURE_2D, d->glTexture);
     glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, d->width, d->height, GL_RGBA, GL_UNSIGNED_BYTE, rgba.data());
     glBindTexture(GL_TEXTURE_2D, 0);
-
-    // 次フレーム用にクリア
-    d->canvas->remove();
-    d->dirty = false;
+    d->texDirty = false;
     return 0;
 }
 
@@ -480,86 +641,63 @@ static duk_ret_t ctx_flush(duk_context *ctx) {
 // ============================================================
 
 static duk_ret_t ctx_get_fillStyle(duk_context *ctx) {
-    auto *d = get_data(ctx);
-    char buf[32]; snprintf(buf, sizeof(buf), "rgba(%d,%d,%d,%.2f)",
-        d->state.fillStyle.r, d->state.fillStyle.g, d->state.fillStyle.b, d->state.fillStyle.a/255.0f);
+    auto *d = get_data(ctx); char buf[32];
+    snprintf(buf, sizeof(buf), "rgba(%d,%d,%d,%.2f)", d->state.fillStyle.r, d->state.fillStyle.g, d->state.fillStyle.b, d->state.fillStyle.a/255.0f);
     duk_push_string(ctx, buf); return 1;
 }
-static duk_ret_t ctx_set_fillStyle(duk_context *ctx) {
-    get_data(ctx)->state.fillStyle = parse_color(duk_to_string(ctx, 0)); return 0;
-}
+static duk_ret_t ctx_set_fillStyle(duk_context *ctx) { get_data(ctx)->state.fillStyle = parse_color(duk_to_string(ctx,0)); return 0; }
 static duk_ret_t ctx_get_strokeStyle(duk_context *ctx) {
-    auto *d = get_data(ctx);
-    char buf[32]; snprintf(buf, sizeof(buf), "rgba(%d,%d,%d,%.2f)",
-        d->state.strokeStyle.r, d->state.strokeStyle.g, d->state.strokeStyle.b, d->state.strokeStyle.a/255.0f);
+    auto *d = get_data(ctx); char buf[32];
+    snprintf(buf, sizeof(buf), "rgba(%d,%d,%d,%.2f)", d->state.strokeStyle.r, d->state.strokeStyle.g, d->state.strokeStyle.b, d->state.strokeStyle.a/255.0f);
     duk_push_string(ctx, buf); return 1;
 }
-static duk_ret_t ctx_set_strokeStyle(duk_context *ctx) {
-    get_data(ctx)->state.strokeStyle = parse_color(duk_to_string(ctx, 0)); return 0;
-}
+static duk_ret_t ctx_set_strokeStyle(duk_context *ctx) { get_data(ctx)->state.strokeStyle = parse_color(duk_to_string(ctx,0)); return 0; }
 static duk_ret_t ctx_get_lineWidth(duk_context *ctx) { duk_push_number(ctx, get_data(ctx)->state.lineWidth); return 1; }
 static duk_ret_t ctx_set_lineWidth(duk_context *ctx) { get_data(ctx)->state.lineWidth = (float)duk_require_number(ctx,0); return 0; }
 static duk_ret_t ctx_get_globalAlpha(duk_context *ctx) { duk_push_number(ctx, get_data(ctx)->state.globalAlpha); return 1; }
 static duk_ret_t ctx_set_globalAlpha(duk_context *ctx) { get_data(ctx)->state.globalAlpha = (float)duk_require_number(ctx,0); return 0; }
-
 static duk_ret_t ctx_get_font(duk_context *ctx) {
-    auto *d = get_data(ctx);
-    char buf[256]; snprintf(buf, sizeof(buf), "%.0fpx %s", d->state.fontSize, d->state.fontName.c_str());
+    auto *d = get_data(ctx); char buf[256];
+    snprintf(buf, sizeof(buf), "%.0fpx %s", d->state.fontSize, d->state.fontName.c_str());
     duk_push_string(ctx, buf); return 1;
 }
 static duk_ret_t ctx_set_font(duk_context *ctx) {
-    auto *d = get_data(ctx);
-    const char *str = duk_to_string(ctx, 0);
+    auto *d = get_data(ctx); const char *str = duk_to_string(ctx,0);
     float size = 16.0f; char name[256] = "";
-    if (sscanf(str, "%fpx %255[^\n]", &size, name) >= 1) {
-        d->state.fontSize = size;
-        if (name[0]) d->state.fontName = name;
-    }
+    if (sscanf(str, "%fpx %255[^\n]", &size, name) >= 1) { d->state.fontSize = size; if (name[0]) d->state.fontName = name; }
     return 0;
 }
-
 static duk_ret_t ctx_get_textAlign(duk_context *ctx) { duk_push_string(ctx, get_data(ctx)->state.textAlign.c_str()); return 1; }
 static duk_ret_t ctx_set_textAlign(duk_context *ctx) { get_data(ctx)->state.textAlign = duk_to_string(ctx,0); return 0; }
-
 static duk_ret_t ctx_get_lineCap(duk_context *ctx) {
-    auto *d = get_data(ctx);
-    const char *v = "butt";
+    auto *d = get_data(ctx); const char *v = "butt";
     if (d->state.lineCap == tvg::StrokeCap::Round) v = "round";
     else if (d->state.lineCap == tvg::StrokeCap::Square) v = "square";
     duk_push_string(ctx, v); return 1;
 }
 static duk_ret_t ctx_set_lineCap(duk_context *ctx) {
-    auto *d = get_data(ctx);
-    const char *v = duk_to_string(ctx, 0);
+    auto *d = get_data(ctx); const char *v = duk_to_string(ctx,0);
     if (strcmp(v,"round")==0) d->state.lineCap = tvg::StrokeCap::Round;
     else if (strcmp(v,"square")==0) d->state.lineCap = tvg::StrokeCap::Square;
-    else d->state.lineCap = tvg::StrokeCap::Butt;
-    return 0;
+    else d->state.lineCap = tvg::StrokeCap::Butt; return 0;
 }
 static duk_ret_t ctx_get_lineJoin(duk_context *ctx) {
-    auto *d = get_data(ctx);
-    const char *v = "miter";
+    auto *d = get_data(ctx); const char *v = "miter";
     if (d->state.lineJoin == tvg::StrokeJoin::Round) v = "round";
     else if (d->state.lineJoin == tvg::StrokeJoin::Bevel) v = "bevel";
     duk_push_string(ctx, v); return 1;
 }
 static duk_ret_t ctx_set_lineJoin(duk_context *ctx) {
-    auto *d = get_data(ctx);
-    const char *v = duk_to_string(ctx, 0);
+    auto *d = get_data(ctx); const char *v = duk_to_string(ctx,0);
     if (strcmp(v,"round")==0) d->state.lineJoin = tvg::StrokeJoin::Round;
     else if (strcmp(v,"bevel")==0) d->state.lineJoin = tvg::StrokeJoin::Bevel;
-    else d->state.lineJoin = tvg::StrokeJoin::Miter;
-    return 0;
+    else d->state.lineJoin = tvg::StrokeJoin::Miter; return 0;
 }
 
 static duk_ret_t ctx_get_texture(duk_context *ctx) {
     auto *d = get_data(ctx);
     if (d->glTexture == 0) { duk_push_null(ctx); }
-    else {
-        duk_idx_t obj = duk_push_object(ctx);
-        duk_push_uint(ctx, d->glTexture);
-        duk_put_prop_string(ctx, obj, "_id");
-    }
+    else { duk_idx_t obj = duk_push_object(ctx); duk_push_uint(ctx, d->glTexture); duk_put_prop_string(ctx, obj, "_id"); }
     return 1;
 }
 
@@ -569,9 +707,8 @@ static duk_ret_t static_loadFont(duk_context *ctx) {
     JsEngine *engine = JsEngine::getInstance();
     std::string resolved = engine ? engine->resolvePath(path) : path;
     auto result = tvg::Text::load(resolved.c_str());
-    if (result != tvg::Result::Success) {
+    if (result != tvg::Result::Success)
         return duk_error(ctx, DUK_ERR_ERROR, "Failed to load font: %s", resolved.c_str());
-    }
     SDL_Log("Font loaded: %s", resolved.c_str());
     return 0;
 }
@@ -583,8 +720,7 @@ static duk_ret_t static_loadFont(duk_context *ctx) {
 static duk_ret_t ctx_finalizer(duk_context *ctx) {
     duk_get_prop_string(ctx, 0, "\xff" "data");
     if (duk_is_pointer(ctx, -1)) delete (Canvas2DData*)duk_get_pointer(ctx, -1);
-    duk_pop(ctx);
-    return 0;
+    duk_pop(ctx); return 0;
 }
 
 static duk_ret_t canvas2d_constructor(duk_context *ctx) {
@@ -596,7 +732,11 @@ static duk_ret_t canvas2d_constructor(duk_context *ctx) {
     auto *data = new Canvas2DData();
     data->width = w; data->height = h;
     data->pixels.resize(w * h, 0);
-    data->canvas = tvg::SwCanvas::gen();
+    // EngineOption::None で dirty region（部分描画最適化）を無効化する。
+    // Default のままだと draw()/sync() 後に fulldraw フラグが false になり、
+    // 次回の draw() 時に preRender() が変更領域を 0x00000000 でクリアしてから
+    // 再描画するため、描画周辺の背景が黒で塗りつぶされてしまう。
+    data->canvas = tvg::SwCanvas::gen(tvg::EngineOption::None);
     data->canvas->target(data->pixels.data(), w, w, h, tvg::ColorSpace::ARGB8888);
 
     glGenTextures(1, &data->glTexture);
@@ -611,37 +751,26 @@ static duk_ret_t canvas2d_constructor(duk_context *ctx) {
     duk_push_this(ctx);
     duk_idx_t obj = duk_get_top_index(ctx);
 
-    duk_push_pointer(ctx, data);
-    duk_put_prop_string(ctx, obj, "\xff" "data");
+    duk_push_pointer(ctx, data); duk_put_prop_string(ctx, obj, "\xff" "data");
     duk_push_uint(ctx, w); duk_put_prop_string(ctx, obj, "width");
     duk_push_uint(ctx, h); duk_put_prop_string(ctx, obj, "height");
 
     #define M(name, func, n) duk_push_c_function(ctx, func, n); duk_put_prop_string(ctx, obj, name)
-    M("fillRect", ctx_fillRect, 4);
-    M("strokeRect", ctx_strokeRect, 4);
-    M("clearRect", ctx_clearRect, 4);
-    M("beginPath", ctx_beginPath, 0);
-    M("moveTo", ctx_moveTo, 2);
-    M("lineTo", ctx_lineTo, 2);
-    M("bezierCurveTo", ctx_bezierCurveTo, 6);
-    M("rect", ctx_rect, 4);
-    M("arc", ctx_arc, DUK_VARARGS);
-    M("closePath", ctx_closePath, 0);
-    M("fill", ctx_fill, 0);
-    M("stroke", ctx_stroke, 0);
-    M("fillText", ctx_fillText, 3);
-    M("strokeText", ctx_strokeText, 3);
-    M("measureText", ctx_measureText, 1);
-    M("save", ctx_save, 0);
-    M("restore", ctx_restore, 0);
-    M("translate", ctx_translate, 2);
-    M("rotate", ctx_rotate, 1);
-    M("scale", ctx_scale, 2);
+    M("fillRect", ctx_fillRect, 4); M("strokeRect", ctx_strokeRect, 4); M("clearRect", ctx_clearRect, 4);
+    M("beginPath", ctx_beginPath, 0); M("moveTo", ctx_moveTo, 2); M("lineTo", ctx_lineTo, 2);
+    M("bezierCurveTo", ctx_bezierCurveTo, 6); M("rect", ctx_rect, 4);
+    M("arc", ctx_arc, DUK_VARARGS); M("closePath", ctx_closePath, 0);
+    M("fill", ctx_fill, 0); M("stroke", ctx_stroke, 0);
+    M("fillText", ctx_fillText, 3); M("strokeText", ctx_strokeText, 3); M("measureText", ctx_measureText, 1);
+    M("drawImage", ctx_drawImage, DUK_VARARGS);
+    M("getImageData", ctx_getImageData, 4); M("putImageData", ctx_putImageData, 3);
+    M("save", ctx_save, 0); M("restore", ctx_restore, 0);
+    M("translate", ctx_translate, 2); M("rotate", ctx_rotate, 1); M("scale", ctx_scale, 2);
+    M("setTransform", ctx_setTransform, DUK_VARARGS);
     M("flush", ctx_flush, 0);
     #undef M
 
-    #define P(name, g, s) duk_push_string(ctx, name); \
-        duk_push_c_function(ctx, g, 0); duk_push_c_function(ctx, s, 1); \
+    #define P(name, g, s) duk_push_string(ctx, name); duk_push_c_function(ctx, g, 0); duk_push_c_function(ctx, s, 1); \
         duk_def_prop(ctx, obj, DUK_DEFPROP_HAVE_GETTER|DUK_DEFPROP_HAVE_SETTER|DUK_DEFPROP_SET_ENUMERABLE)
     P("fillStyle", ctx_get_fillStyle, ctx_set_fillStyle);
     P("strokeStyle", ctx_get_strokeStyle, ctx_set_strokeStyle);
@@ -652,6 +781,18 @@ static duk_ret_t canvas2d_constructor(duk_context *ctx) {
     P("lineCap", ctx_get_lineCap, ctx_set_lineCap);
     P("lineJoin", ctx_get_lineJoin, ctx_set_lineJoin);
     #undef P
+
+    // globalCompositeOperation (ダミー)
+    duk_push_string(ctx, "globalCompositeOperation");
+    duk_push_c_function(ctx, [](duk_context*c)->duk_ret_t{ duk_push_string(c,"source-over"); return 1; }, 0);
+    duk_push_c_function(ctx, [](duk_context*)->duk_ret_t{ return 0; }, 1);
+    duk_def_prop(ctx, obj, DUK_DEFPROP_HAVE_GETTER|DUK_DEFPROP_HAVE_SETTER|DUK_DEFPROP_SET_ENUMERABLE);
+
+    // imageSmoothingEnabled (ダミー)
+    duk_push_string(ctx, "imageSmoothingEnabled");
+    duk_push_c_function(ctx, [](duk_context*c)->duk_ret_t{ duk_push_true(c); return 1; }, 0);
+    duk_push_c_function(ctx, [](duk_context*)->duk_ret_t{ return 0; }, 1);
+    duk_def_prop(ctx, obj, DUK_DEFPROP_HAVE_GETTER|DUK_DEFPROP_HAVE_SETTER|DUK_DEFPROP_SET_ENUMERABLE);
 
     duk_push_string(ctx, "texture");
     duk_push_c_function(ctx, ctx_get_texture, 0);

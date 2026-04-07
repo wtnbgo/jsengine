@@ -1,10 +1,11 @@
 // main.js - デモスクリプト
-// 数字キー 1～5 でデモ切り替え
-//   1: 頂点カラー三角形 + テクスチャクワッド（WASD移動、ホイール透明度）
-//   2: Canvas2D 図形描画（矩形、円、パス、グラデーション風）
+// 数字キー 1～6 でデモ切り替え
+//   1: 頂点カラー三角形（WASD移動、ホイール透明度）
+//   2: Canvas2D 図形描画（矩形、円、パス）
 //   3: Canvas2D テキスト描画（要フォントファイル）
 //   4: Canvas2D アニメーション（回転する図形）
 //   5: pixi.js v5 テスト
+//   6: Canvas2D drawImage / getImageData / putImageData テスト
 // Space: ビープ音再生  R: リセット
 
 // ============================================================
@@ -130,12 +131,31 @@ function initFullscreenQuad() {
     gl.bindVertexArray(null);
 }
 
-// Canvas2D テクスチャを全画面に描画
-function drawCanvas2DFullscreen(c2d) {
+// Canvas2D テクスチャを左上寄せ原寸で描画
+// screenW/screenH: ウィンドウサイズ
+var screenW = 1280, screenH = 720;
+
+function drawCanvas2DAt(c2d) {
+    var w = c2d.width, h = c2d.height;
+    // NDC 座標: 左上 = (-1,1), 右下 = (1,-1)
+    var x0 = -1.0;
+    var y0 = 1.0;
+    var x1 = -1.0 + (w / screenW) * 2.0;
+    var y1 = 1.0 - (h / screenH) * 2.0;
+
+    var verts = new Float32Array([
+        x0, y0,  0, 0,
+        x1, y0,  1, 0,
+        x1, y1,  1, 1,
+        x0, y1,  0, 1
+    ]);
+
     gl.useProgram(texProgram);
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, c2d.texture);
     gl.bindVertexArray(texVao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, texVbo);
+    gl.bufferSubData(gl.ARRAY_BUFFER, 0, verts);
     gl.drawElements(gl.TRIANGLES, 6, gl.UNSIGNED_SHORT, 0);
     gl.bindVertexArray(null);
 }
@@ -535,6 +555,109 @@ function renderDemo5() {
 }
 
 // ============================================================
+// デモ6: Canvas2D drawImage / getImageData / putImageData テスト
+// ============================================================
+
+var canvas2d_demo6 = null;
+
+function renderDemo6() {
+    if (!canvas2d_demo6) {
+        canvas2d_demo6 = new Canvas2D(400, 400);
+    }
+    var c = canvas2d_demo6;
+
+    // 背景クリア
+    c.clearRect(0, 0, 400, 400);
+
+    // 背景色
+    c.fillStyle = "#222233";
+    c.fillRect(0, 0, 400, 400);
+
+    // タイトル
+    c.font = "18px OpenSans-Bold";
+    c.fillStyle = "white";
+    c.fillText("Demo 6: drawImage / ImageData", 10, 20);
+
+    // --- drawImage テスト ---
+    if (testPatternImg) {
+        // 1. そのまま描画 (3引数: img, dx, dy)
+        c.fillStyle = "#444466";
+        c.fillRect(10, 30, 74, 74);
+        c.drawImage(testPatternImg, 15, 35);
+        c.font = "12px OpenSans-Regular";
+        c.fillStyle = "white";
+        c.fillText("original", 15, 118);
+
+        // 2. リサイズ描画 (5引数: img, dx, dy, dw, dh)
+        c.fillStyle = "#444466";
+        c.fillRect(100, 30, 124, 74);
+        c.drawImage(testPatternImg, 105, 35, 120, 70);
+        c.fillStyle = "white";
+        c.fillText("resize 120x70", 105, 118);
+
+        // 3. 切り出し描画 (9引数: img, sx, sy, sw, sh, dx, dy, dw, dh)
+        c.fillStyle = "#444466";
+        c.fillRect(240, 30, 84, 84);
+        c.drawImage(testPatternImg, 16, 16, 32, 32, 245, 35, 80, 80);
+        c.fillStyle = "white";
+        c.fillText("clip+scale", 245, 128);
+
+        // 4. 同じ画像を複数回配置
+        c.fillStyle = "white";
+        c.fillText("tiled:", 10, 150);
+        for (var i = 0; i < 5; i++) {
+            c.drawImage(testPatternImg, 10 + i * 70, 155);
+        }
+    } else {
+        c.fillStyle = "#ff4444";
+        c.font = "16px OpenSans-Regular";
+        c.fillText("test_pattern.png not loaded", 10, 80);
+    }
+
+    // --- getImageData / putImageData テスト ---
+    c.font = "14px OpenSans-Bold";
+    c.fillStyle = "white";
+    c.fillText("getImageData / putImageData:", 10, 240);
+
+    // テスト用: 矩形を描いてからピクセル操作
+    c.fillStyle = "#ff6600";
+    c.fillRect(10, 250, 80, 50);
+    c.fillStyle = "#0066ff";
+    c.fillRect(50, 270, 80, 50);
+
+    // getImageData で読み出し
+    var imgData = c.getImageData(10, 250, 120, 70);
+
+    if (imgData && imgData.data) {
+        // コピー1: そのまま貼り付け
+        c.putImageData(imgData, 150, 250);
+        c.font = "12px OpenSans-Regular";
+        c.fillStyle = "white";
+        c.fillText("copy", 150, 335);
+
+        // コピー2: 色反転して貼り付け
+        var inverted = c.getImageData(10, 250, 120, 70);
+        for (var pi = 0; pi < inverted.data.length; pi += 4) {
+            if (inverted.data[pi + 3] > 0) {
+                inverted.data[pi]     = 255 - inverted.data[pi];
+                inverted.data[pi + 1] = 255 - inverted.data[pi + 1];
+                inverted.data[pi + 2] = 255 - inverted.data[pi + 2];
+            }
+        }
+        c.putImageData(inverted, 280, 250);
+        c.fillStyle = "white";
+        c.fillText("inverted", 280, 335);
+    }
+
+    // original ラベル
+    c.font = "12px OpenSans-Regular";
+    c.fillStyle = "white";
+    c.fillText("original", 10, 335);
+
+    c.flush();
+}
+
+// ============================================================
 // 初期化
 // ============================================================
 
@@ -542,6 +665,15 @@ initDemo1();
 initFullscreenQuad();
 
 canvas2d = new Canvas2D(512, 512);
+
+// テスト用画像読み込み
+var testPatternImg = null;
+try {
+    testPatternImg = createImageBitmap("test_pattern.png");
+    console.log("Test pattern loaded: " + testPatternImg.width + "x" + testPatternImg.height);
+} catch(e) {
+    console.error("Test pattern load failed: " + e);
+}
 
 // フォント読み込み
 try {
@@ -587,6 +719,7 @@ addEventListener("keydown", function(e) {
     if (e.key === "3") { demoMode = 3; console.log("Demo 3: Canvas2D Text"); }
     if (e.key === "4") { demoMode = 4; console.log("Demo 4: Canvas2D Animation"); }
     if (e.key === "5") { demoMode = 5; initDemo5(); console.log("Demo 5: pixi.js"); }
+    if (e.key === "6") { demoMode = 6; console.log("Demo 6: drawImage/ImageData"); }
 
     if (e.key === "r" || e.key === "R") {
         offsetX = 0.0; offsetY = 0.0; alpha = 1.0;
@@ -641,15 +774,18 @@ function render() {
         renderDemo1();
     } else if (demoMode === 2) {
         renderDemo2();
-        drawCanvas2DFullscreen(canvas2d);
+        drawCanvas2DAt(canvas2d);
     } else if (demoMode === 3) {
         renderDemo3();
-        drawCanvas2DFullscreen(canvas2d);
+        drawCanvas2DAt(canvas2d);
     } else if (demoMode === 4) {
         renderDemo4();
-        drawCanvas2DFullscreen(canvas2d);
+        drawCanvas2DAt(canvas2d);
     } else if (demoMode === 5) {
         renderDemo5();
+    } else if (demoMode === 6) {
+        renderDemo6();
+        drawCanvas2DAt(canvas2d_demo6);
     }
 }
 

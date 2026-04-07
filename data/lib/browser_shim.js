@@ -46,7 +46,37 @@ function HTMLCanvasElement(width, height) {
     this._glContext = null;
 }
 
+// data プロパティ: 2D コンテキストのピクセルデータを返す（texImage2D 連携用）
+Object.defineProperty(HTMLCanvasElement.prototype, "data", {
+    get: function() {
+        if (this._ctx2d && typeof this._ctx2d.getImageData === "function") {
+            var imgData = this._ctx2d.getImageData(0, 0, this.width, this.height);
+            return imgData ? imgData.data : null;
+        }
+        return null;
+    }
+});
+
 HTMLCanvasElement.prototype.getContext = function(type, options) {
+    // 2D コンテキストをキャッシュ
+    if (type === "2d" && this._ctx2d) return this._ctx2d;
+
+    if (type === "2d") {
+        // C++ Canvas2D を使用（ビットマップ保持型）
+        var canvas = this;
+        var c2d = new Canvas2D(canvas.width || 1, canvas.height || 1);
+        c2d.canvas = canvas;
+        // createLinearGradient 等の未実装メソッドのダミー
+        if (!c2d.createLinearGradient) c2d.createLinearGradient = function() { return { addColorStop: function(){} }; };
+        if (!c2d.createRadialGradient) c2d.createRadialGradient = function() { return { addColorStop: function(){} }; };
+        if (!c2d.createPattern) c2d.createPattern = function() { return null; };
+        if (!c2d.createImageData) c2d.createImageData = function(w,h) { return c2d.getImageData(0,0,w,h); };
+        if (!c2d.resetTransform) c2d.resetTransform = function() { c2d.setTransform(1,0,0,1,0,0); };
+        if (!c2d.clip) c2d.clip = function() {};
+        canvas._ctx2d = c2d;
+        return c2d;
+    }
+
     if (type === "webgl2" || type === "webgl" || type === "experimental-webgl") {
         // 既存の gl オブジェクトを返す
         // pixi.js は canvas.width/height も参照するので同期させる
@@ -54,152 +84,6 @@ HTMLCanvasElement.prototype.getContext = function(type, options) {
         // canvas プロパティを gl に設定
         gl.canvas = this;
         return gl;
-    }
-    if (type === "2d") {
-        // 簡易 CanvasRenderingContext2D シム
-        var canvas = this;
-        var ctx2d = {
-            canvas: canvas,
-            _fillStyle: "#000000",
-            _strokeStyle: "#000000",
-            _lineWidth: 1,
-            _font: "10px sans-serif",
-            _textAlign: "start",
-            _textBaseline: "alphabetic",
-            _globalAlpha: 1.0,
-            _globalCompositeOperation: "source-over",
-            _imageData: new Uint8Array(canvas.width * canvas.height * 4),
-            // ダミーのピクセルバッファ
-            _ensureSize: function() {
-                var needed = canvas.width * canvas.height * 4;
-                if (this._imageData.length < needed) {
-                    this._imageData = new Uint8Array(needed);
-                }
-            }
-        };
-        // プロパティ
-        Object.defineProperty(ctx2d, "fillStyle", { get: function(){ return this._fillStyle; }, set: function(v){ this._fillStyle = v; } });
-        Object.defineProperty(ctx2d, "strokeStyle", { get: function(){ return this._strokeStyle; }, set: function(v){ this._strokeStyle = v; } });
-        Object.defineProperty(ctx2d, "lineWidth", { get: function(){ return this._lineWidth; }, set: function(v){ this._lineWidth = v; } });
-        Object.defineProperty(ctx2d, "font", { get: function(){ return this._font; }, set: function(v){ this._font = v; } });
-        Object.defineProperty(ctx2d, "textAlign", { get: function(){ return this._textAlign; }, set: function(v){ this._textAlign = v; } });
-        Object.defineProperty(ctx2d, "textBaseline", { get: function(){ return this._textBaseline; }, set: function(v){ this._textBaseline = v; } });
-        Object.defineProperty(ctx2d, "globalAlpha", { get: function(){ return this._globalAlpha; }, set: function(v){ this._globalAlpha = v; } });
-        Object.defineProperty(ctx2d, "globalCompositeOperation", { get: function(){ return this._globalCompositeOperation; }, set: function(v){ this._globalCompositeOperation = v; } });
-        Object.defineProperty(ctx2d, "imageSmoothingEnabled", { get: function(){ return true; }, set: function(){} });
-        // メソッド
-        ctx2d.save = function() {};
-        ctx2d.restore = function() {};
-        ctx2d.scale = function() {};
-        ctx2d.rotate = function() {};
-        ctx2d.translate = function() {};
-        ctx2d.transform = function() {};
-        ctx2d.setTransform = function() {};
-        ctx2d.resetTransform = function() {};
-        ctx2d.beginPath = function() {};
-        ctx2d.closePath = function() {};
-        ctx2d.moveTo = function() {};
-        ctx2d.lineTo = function() {};
-        ctx2d.quadraticCurveTo = function() {};
-        ctx2d.bezierCurveTo = function() {};
-        ctx2d.arc = function() {};
-        ctx2d.arcTo = function() {};
-        ctx2d.rect = function() {};
-        ctx2d.fill = function() {};
-        ctx2d.stroke = function() {};
-        ctx2d.clip = function() {};
-        ctx2d.fillRect = function(x, y, w, h) {
-            this._ensureSize();
-            // 簡易: 全ピクセルを色で塗る（正確ではないがテクスチャ生成に最低限必要）
-            var c = this._fillStyle;
-            var r = 0, g = 0, b = 0, a = 255;
-            if (c === "white" || c === "#ffffff" || c === "#fff") { r = g = b = 255; }
-            else if (c === "black" || c === "#000000" || c === "#000") { /* default 0,0,0 */ }
-            else if (c.charAt(0) === "#" && c.length === 7) {
-                r = parseInt(c.substr(1,2), 16);
-                g = parseInt(c.substr(3,2), 16);
-                b = parseInt(c.substr(5,2), 16);
-            }
-            var cw = canvas.width;
-            var data = this._imageData;
-            var ix = Math.max(0, Math.floor(x));
-            var iy = Math.max(0, Math.floor(y));
-            var iw = Math.min(cw, Math.floor(x + w));
-            var ih = Math.min(canvas.height, Math.floor(y + h));
-            for (var py = iy; py < ih; py++) {
-                for (var px = ix; px < iw; px++) {
-                    var idx = (py * cw + px) * 4;
-                    data[idx] = r; data[idx+1] = g; data[idx+2] = b; data[idx+3] = a;
-                }
-            }
-        };
-        ctx2d.strokeRect = function() {};
-        ctx2d.clearRect = function(x, y, w, h) {
-            this._ensureSize();
-            var cw = canvas.width;
-            var data = this._imageData;
-            var ix = Math.max(0, Math.floor(x));
-            var iy = Math.max(0, Math.floor(y));
-            var iw = Math.min(cw, Math.floor(x + w));
-            var ih = Math.min(canvas.height, Math.floor(y + h));
-            for (var py = iy; py < ih; py++) {
-                for (var px = ix; px < iw; px++) {
-                    var idx = (py * cw + px) * 4;
-                    data[idx] = 0; data[idx+1] = 0; data[idx+2] = 0; data[idx+3] = 0;
-                }
-            }
-        };
-        ctx2d.fillText = function() {};
-        ctx2d.strokeText = function() {};
-        ctx2d.measureText = function(text) {
-            return { width: (text ? text.length : 0) * 7 };
-        };
-        ctx2d.drawImage = function() {
-            // source canvas/image からピクセルコピー（簡易版）
-        };
-        ctx2d.createImageData = function(w, h) {
-            return { width: w, height: h, data: new Uint8Array(w * h * 4) };
-        };
-        ctx2d.getImageData = function(x, y, w, h) {
-            this._ensureSize();
-            var result = { width: w, height: h, data: new Uint8Array(w * h * 4) };
-            var cw = canvas.width;
-            for (var py = 0; py < h; py++) {
-                for (var px = 0; px < w; px++) {
-                    var srcIdx = ((y + py) * cw + (x + px)) * 4;
-                    var dstIdx = (py * w + px) * 4;
-                    result.data[dstIdx]   = this._imageData[srcIdx];
-                    result.data[dstIdx+1] = this._imageData[srcIdx+1];
-                    result.data[dstIdx+2] = this._imageData[srcIdx+2];
-                    result.data[dstIdx+3] = this._imageData[srcIdx+3];
-                }
-            }
-            return result;
-        };
-        ctx2d.putImageData = function(imageData, x, y) {
-            this._ensureSize();
-            var cw = canvas.width;
-            var w = imageData.width, h = imageData.height;
-            for (var py = 0; py < h; py++) {
-                for (var px = 0; px < w; px++) {
-                    var srcIdx = (py * w + px) * 4;
-                    var dstIdx = ((y + py) * cw + (x + px)) * 4;
-                    this._imageData[dstIdx]   = imageData.data[srcIdx];
-                    this._imageData[dstIdx+1] = imageData.data[srcIdx+1];
-                    this._imageData[dstIdx+2] = imageData.data[srcIdx+2];
-                    this._imageData[dstIdx+3] = imageData.data[srcIdx+3];
-                }
-            }
-        };
-        ctx2d.createLinearGradient = function() {
-            return { addColorStop: function() {} };
-        };
-        ctx2d.createRadialGradient = function() {
-            return { addColorStop: function() {} };
-        };
-        ctx2d.createPattern = function() { return null; };
-        canvas._ctx2d = ctx2d;
-        return ctx2d;
     }
     return null;
 };
@@ -418,20 +302,21 @@ Object.defineProperty(Image.prototype, "src", {
             self._data = bitmap.data;
             self.complete = true;
             // onload + addEventListener('load') コールバック実行
-            var loadCbs = (self._listeners && self._listeners["load"]) || [];
+            // setTimeout 内で _listeners を参照（src 設定後に addEventListener される場合に対応）
             setTimeout(function() {
                 if (typeof self.onload === "function") self.onload();
-                for (var i = 0; i < loadCbs.length; i++) loadCbs[i].call(self);
+                var cbs = (self._listeners && self._listeners["load"]) || [];
+                for (var i = 0; i < cbs.length; i++) cbs[i].call(self);
             }, 0);
         } catch(e) {
             if (cleanUrl && cleanUrl.length > 0) {
                 console.error("Image load error: " + cleanUrl + " => " + e);
             }
             self.complete = true;
-            var errCbs = (self._listeners && self._listeners["error"]) || [];
             setTimeout(function() {
                 if (typeof self.onerror === "function") self.onerror(e);
-                for (var i = 0; i < errCbs.length; i++) errCbs[i].call(self, e);
+                var cbs = (self._listeners && self._listeners["error"]) || [];
+                for (var i = 0; i < cbs.length; i++) cbs[i].call(self, e);
             }, 0);
         }
     },
