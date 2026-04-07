@@ -69,7 +69,7 @@ cmake --build build/x64-windows --config Release
 - `manual.js` contains the full API reference for the JS environment.
 - QuickJS-ng は ES2023 対応。duktape 時代に必要だった ES6 ポリフィル（Promise, Map, Set, WeakMap 等）は不要。polyfill.js は最小限のみ。
 - three.js r128 は ES6 版（three.min.js）を直接使用可能。Babel トランスパイルは不要。
-- pixi.js v5.3.12 動作確認済み（data/lib/ に polyfill.js, browser_shim.js, pixi.min.js）。
+- pixi.js v6.5.10 動作確認済み（data/lib/ に polyfill.js, browser_shim.js, pixi.min.js）。
 - pixi.js v4.5.4（RPG Maker MV）は test/ で作業中。OES_vertex_array_object 拡張マッピング、CanvasRenderingContext2D シム等を追加済み。
 - `qjs_get_buffer()` は TypedArray の byteOffset を正しく処理する。
 - `getParameter()` は配列型（VIEWPORT 等）を JS Array で返す。

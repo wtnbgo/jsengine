@@ -4,7 +4,7 @@
 //   2: Canvas2D 図形描画（矩形、円、パス）
 //   3: Canvas2D テキスト描画（要フォントファイル）
 //   4: Canvas2D アニメーション（回転する図形）
-//   5: pixi.js v5 テスト
+//   5: pixi.js v6 テスト
 //   6: Canvas2D drawImage / getImageData / putImageData テスト
 //   7: Canvas2D dirty rect 差分更新テスト
 //   8: three.js r128 テスト
@@ -235,7 +235,7 @@ function renderDemo1HUD() {
             "2 : Canvas2D Shapes",
             "3 : Canvas2D Text",
             "4 : Canvas2D Animation",
-            "5 : pixi.js v5",
+            "5 : pixi.js v6",
             "6 : drawImage / ImageData",
             "7 : Dirty Rect Update",
             "8 : three.js r128",
@@ -490,7 +490,7 @@ function renderDemo4() {
 }
 
 // ============================================================
-// デモ5: pixi.js v5
+// デモ5: pixi.js v6
 // ============================================================
 
 var pixiApp = null;

@@ -134,6 +134,16 @@ HTMLCanvasElement.prototype.getAttribute = function(name) {
 
 window.HTMLCanvasElement = HTMLCanvasElement;
 
+// --- HTMLVideoElement / HTMLImageElement シム ---
+if (typeof HTMLVideoElement === "undefined") {
+    function HTMLVideoElement() {}
+    window.HTMLVideoElement = HTMLVideoElement;
+}
+if (typeof HTMLImageElement === "undefined") {
+    function HTMLImageElement() {}
+    window.HTMLImageElement = HTMLImageElement;
+}
+
 // --- WebGLRenderingContext / WebGL2RenderingContext ---
 // pixi.js が window.WebGLRenderingContext の存在をチェックする
 if (typeof WebGLRenderingContext === "undefined") {
