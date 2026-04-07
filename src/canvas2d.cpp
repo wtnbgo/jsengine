@@ -26,9 +26,40 @@
 // ThorVG 初期化 / 終了
 // ============================================================
 
+// ColorSpace ベンチマーク（起動時に実行）
+static void benchmark_colorspace() {
+    SDL_Log("=== ColorSpace benchmark ===");
+    tvg::ColorSpace modes[] = { tvg::ColorSpace::ARGB8888, tvg::ColorSpace::ABGR8888S };
+    const char *names[] = {"ARGB8888", "ABGR8888S"};
+    for (int m = 0; m < 2; m++) {
+        uint32_t w = 816, h = 624;
+        std::vector<uint32_t> buf(w * h, 0);
+        auto *canvas = tvg::SwCanvas::gen(tvg::EngineOption::None);
+        canvas->target(buf.data(), w, w, h, modes[m]);
+        Uint64 start = SDL_GetTicks();
+        for (int i = 0; i < 500; i++) {
+            auto *shape = tvg::Shape::gen();
+            shape->appendRect((float)(i % 50) * 16.0f, (float)(i / 50) * 16.0f, 14, 14, 0, 0);
+            shape->fill((uint8_t)(i % 256), (uint8_t)((i*7) % 256), (uint8_t)((i*13) % 256), 200);
+            canvas->add(shape);
+            canvas->update();
+            canvas->draw(false);
+            canvas->sync();
+            canvas->remove(shape);
+        }
+        Uint64 elapsed = SDL_GetTicks() - start;
+        int nonzero = 0;
+        for (uint32_t i = 0; i < w * h; i++) { if (buf[i] != 0) nonzero++; }
+        SDL_Log("  %s: 500x draw in %dms, %d non-zero pixels", names[m], (int)elapsed, nonzero);
+        delete canvas;
+    }
+    SDL_Log("=== benchmark done ===");
+}
+
 void canvas2d_init() {
     tvg::Initializer::init(1);
     SDL_Log("Canvas2D (ThorVG) initialized");
+    // benchmark_colorspace(); // 必要時にコメント解除
 }
 
 void canvas2d_uninit() {
@@ -143,7 +174,7 @@ struct Canvas2DData {
         int dw = dirtyX1 - dirtyX0, dh = dirtyY1 - dirtyY0;
         if (dw <= 0 || dh <= 0) { hasDirty = false; return; }
 
-        // dirty 領域のピクセルを ARGB → RGBA 変換
+        // dirty 領域のみ ARGB → RGBA 変換してアップロード
         std::vector<uint32_t> rgba(dw * dh);
         for (int py = 0; py < dh; py++) {
             for (int px = 0; px < dw; px++) {
@@ -155,14 +186,10 @@ struct Canvas2DData {
                 rgba[py * dw + px] = r | (g << 8) | (b << 16) | (a << 24);
             }
         }
-
         glBindTexture(GL_TEXTURE_2D, glTexture);
-        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-        // 部分アップロード時の行ピッチ指定（GLES3）
-        glPixelStorei(GL_UNPACK_ROW_LENGTH, dw);
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
         glTexSubImage2D(GL_TEXTURE_2D, 0, dx, dy, dw, dh,
                         GL_RGBA, GL_UNSIGNED_BYTE, rgba.data());
-        glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
         glBindTexture(GL_TEXTURE_2D, 0);
 
         hasDirty = false;
@@ -225,6 +252,7 @@ struct Canvas2DData {
                 uint8_t sr = srcRGBA[si], sg = srcRGBA[si+1], sb = srcRGBA[si+2], sa = srcRGBA[si+3];
                 if (sa == 0) continue;
 
+                // ARGB8888: (A<<24)|(R<<16)|(G<<8)|B
                 uint32_t &dst = pixels[dstY * width + dstX];
                 if (sa == 255) {
                     dst = (255u << 24) | ((uint32_t)sr << 16) | ((uint32_t)sg << 8) | sb;
@@ -811,6 +839,9 @@ static duk_ret_t canvas2d_constructor(duk_context *ctx) {
     // 次回の draw() 時に preRender() が変更領域を 0x00000000 でクリアしてから
     // 再描画するため、描画周辺の背景が黒で塗りつぶされてしまう。
     data->canvas = tvg::SwCanvas::gen(tvg::EngineOption::None);
+    // ARGB8888 (premultiplied) を使用。ABGR8888S は ThorVG の postRender() で
+    // 毎回全バッファ rasterUnpremultiply が走るため 100倍以上遅くなる。
+    // テクスチャアップロード時に dirty rect 分だけ ARGB→RGBA 変換する。
     data->canvas->target(data->pixels.data(), w, w, h, tvg::ColorSpace::ARGB8888);
 
     glGenTextures(1, &data->glTexture);
