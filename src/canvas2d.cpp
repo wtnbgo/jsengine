@@ -125,6 +125,8 @@ struct DrawState {
 struct Canvas2DData {
     uint32_t width = 0, height = 0;
     std::vector<uint32_t> pixels;  // ARGB8888 ビットマップバッファ（保持型）
+    std::vector<uint8_t> rgbaCache; // RGBA キャッシュ（_getRGBA / data getter 用）
+    bool rgbaCacheDirty = true;
     tvg::SwCanvas *canvas = nullptr;
     GLuint glTexture = 0;
 
@@ -161,6 +163,7 @@ struct Canvas2DData {
             if (nx1 > dirtyX1) dirtyX1 = nx1;
             if (ny1 > dirtyY1) dirtyY1 = ny1;
         }
+        rgbaCacheDirty = true;
     }
 
     // 全体を dirty にする
@@ -168,6 +171,27 @@ struct Canvas2DData {
         dirtyX0 = 0; dirtyY0 = 0;
         dirtyX1 = (int)width; dirtyY1 = (int)height;
         hasDirty = true;
+        rgbaCacheDirty = true;
+    }
+
+    // RGBA キャッシュを更新して返す（dirty 時のみ全変換）
+    const uint8_t* getRGBACache() {
+        flushPaints();
+        size_t n = width * height;
+        if (rgbaCache.size() != n * 4) {
+            rgbaCache.resize(n * 4);
+            rgbaCacheDirty = true;
+        }
+        if (!rgbaCacheDirty) return rgbaCache.data();
+        for (size_t i = 0; i < n; i++) {
+            uint32_t argb = pixels[i];
+            rgbaCache[i*4]   = (argb >> 16) & 0xFF; // R
+            rgbaCache[i*4+1] = (argb >> 8) & 0xFF;  // G
+            rgbaCache[i*4+2] = argb & 0xFF;          // B
+            rgbaCache[i*4+3] = (argb >> 24) & 0xFF;  // A
+        }
+        rgbaCacheDirty = false;
+        return rgbaCache.data();
     }
 
     // dirty 領域のみ GL テクスチャにアップロード
@@ -717,6 +741,17 @@ static duk_ret_t ctx_setTransform(duk_context *ctx) {
 // flush: バッファ → GL テクスチャアップロード
 // ============================================================
 
+// _getRGBA: RGBA キャッシュを plain buffer として返す（data getter / texImage2D 用）
+static duk_ret_t ctx_getRGBA(duk_context *ctx) {
+    auto *d = get_data(ctx);
+    const uint8_t *rgba = d->getRGBACache();
+    size_t sz = d->width * d->height * 4;
+    // 外部バッファとして直接参照（コピーなし）
+    duk_push_external_buffer(ctx);
+    duk_config_buffer(ctx, -1, (void*)rgba, sz);
+    return 1;
+}
+
 static duk_ret_t ctx_flush(duk_context *ctx) {
     auto *d = get_data(ctx);
     d->flushPaints();  // 蓄積描画をバッファに反映
@@ -883,6 +918,7 @@ static duk_ret_t canvas2d_constructor(duk_context *ctx) {
     M("translate", ctx_translate, 2); M("rotate", ctx_rotate, 1); M("scale", ctx_scale, 2);
     M("setTransform", ctx_setTransform, DUK_VARARGS);
     M("flush", ctx_flush, 0);
+    M("_getRGBA", ctx_getRGBA, 0);
     #undef M
 
     #define P(name, g, s) duk_push_string(ctx, name); duk_push_c_function(ctx, g, 0); duk_push_c_function(ctx, s, 1); \

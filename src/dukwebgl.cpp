@@ -549,16 +549,41 @@ static duk_ret_t dukwebgl_texImage2D(duk_context *ctx) {
 }
 
 static duk_ret_t dukwebgl_texSubImage2D(duk_context *ctx) {
+    int argc = duk_get_top(ctx);
     GLenum target = (GLenum)duk_get_uint(ctx, 0);
     GLint level = (GLint)duk_get_int(ctx, 1);
     GLint xoffset = (GLint)duk_get_int(ctx, 2);
     GLint yoffset = (GLint)duk_get_int(ctx, 3);
-    GLsizei width = (GLsizei)duk_get_int(ctx, 4);
-    GLsizei height = (GLsizei)duk_get_int(ctx, 5);
-    GLenum format = (GLenum)duk_get_uint(ctx, 6);
-    GLenum type = (GLenum)duk_get_uint(ctx, 7);
-    void *pixels = dukwebgl_get_pixels(ctx, 8);
-    glTexSubImage2D(target, level, xoffset, yoffset, width, height, format, type, pixels);
+
+    if (argc >= 9) {
+        // texSubImage2D(target, level, xoffset, yoffset, width, height, format, type, pixels)
+        GLsizei width = (GLsizei)duk_get_int(ctx, 4);
+        GLsizei height = (GLsizei)duk_get_int(ctx, 5);
+        GLenum format = (GLenum)duk_get_uint(ctx, 6);
+        GLenum type = (GLenum)duk_get_uint(ctx, 7);
+        void *pixels = dukwebgl_get_pixels(ctx, 8);
+        glTexSubImage2D(target, level, xoffset, yoffset, width, height, format, type, pixels);
+    } else if (argc >= 7) {
+        // texSubImage2D(target, level, xoffset, yoffset, format, type, source)
+        GLenum format = (GLenum)duk_get_uint(ctx, 4);
+        GLenum type = (GLenum)duk_get_uint(ctx, 5);
+        GLsizei width = 0, height = 0;
+        void *pixels = NULL;
+        if (duk_is_object(ctx, 6)) {
+            if (duk_has_prop_string(ctx, 6, "width")) {
+                duk_get_prop_string(ctx, 6, "width");
+                width = (GLsizei)duk_get_int(ctx, -1); duk_pop(ctx);
+            }
+            if (duk_has_prop_string(ctx, 6, "height")) {
+                duk_get_prop_string(ctx, 6, "height");
+                height = (GLsizei)duk_get_int(ctx, -1); duk_pop(ctx);
+            }
+            pixels = dukwebgl_get_pixels(ctx, 6);
+        }
+        if (width > 0 && height > 0 && pixels) {
+            glTexSubImage2D(target, level, xoffset, yoffset, width, height, format, type, pixels);
+        }
+    }
     return 0;
 }
 
@@ -1982,7 +2007,7 @@ void dukwebgl_bind(duk_context *ctx) {
     BIND_FUNC(texParameterf, dukwebgl_texParameterf, 3);
     BIND_FUNC(generateMipmap, dukwebgl_generateMipmap, 1);
     BIND_FUNC(texImage2D, dukwebgl_texImage2D, DUK_VARARGS);
-    BIND_FUNC(texSubImage2D, dukwebgl_texSubImage2D, 9);
+    BIND_FUNC(texSubImage2D, dukwebgl_texSubImage2D, DUK_VARARGS);
     BIND_FUNC(texImage3D, dukwebgl_texImage3D, DUK_VARARGS);
     BIND_FUNC(copyTexImage2D, dukwebgl_copyTexImage2D, 8);
     BIND_FUNC(copyTexSubImage2D, dukwebgl_copyTexSubImage2D, 8);
