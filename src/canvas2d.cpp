@@ -770,13 +770,23 @@ static duk_ret_t ctx_setTransform(duk_context *ctx) {
 // flush: バッファ → GL テクスチャアップロード
 // ============================================================
 
-// _getRGBA: RGBA キャッシュを plain buffer として返す（data getter / texImage2D 用）
+// _getRGBA: ARGB8888 premultiplied → RGBA premultiplied に変換して返す
+// texImage2D 連携用（pixi.js の UNPACK_PREMULTIPLY_ALPHA と合わせて使う）
 static duk_ret_t ctx_getRGBA(duk_context *ctx) {
     auto *d = get_data(ctx);
-    const uint8_t *rgba = d->getRGBACache();
-    size_t sz = d->width * d->height * 4;
+    d->flushPaints();
+    size_t n = d->width * d->height;
+    size_t sz = n * 4;
     void *buf = duk_push_buffer(ctx, sz, 0);
-    memcpy(buf, rgba, sz);
+    uint8_t *out = (uint8_t*)buf;
+    // ARGB → RGBA（premultiplied のまま、バイト順のみ入れ替え）
+    for (size_t i = 0; i < n; i++) {
+        uint32_t argb = d->pixels[i];
+        out[i*4]   = (argb >> 16) & 0xFF; // R
+        out[i*4+1] = (argb >> 8) & 0xFF;  // G
+        out[i*4+2] = argb & 0xFF;          // B
+        out[i*4+3] = (argb >> 24) & 0xFF;  // A
+    }
     return 1;
 }
 

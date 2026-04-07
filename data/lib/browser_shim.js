@@ -69,9 +69,14 @@ Object.defineProperty(HTMLCanvasElement.prototype, "height", {
     }
 });
 
-// data プロパティ: 2D コンテキストの RGBA ピクセルデータを返す（texImage2D 連携用）
+// data プロパティ: texImage2D 連携用 RGBA データを返す
+// Canvas2D の内部バッファは ARGB8888 premultiplied なので、
+// RGBA premultiplied に変換して返す（pixi.js が UNPACK_PREMULTIPLY_ALPHA を期待する場合に対応）
 Object.defineProperty(HTMLCanvasElement.prototype, "data", {
     get: function() {
+        if (this._ctx2d && typeof this._ctx2d._getRGBA === "function") {
+            return this._ctx2d._getRGBA();
+        }
         if (this._ctx2d && typeof this._ctx2d.getImageData === "function") {
             var imgData = this._ctx2d.getImageData(0, 0, this.width, this.height);
             return imgData ? imgData.data : null;
