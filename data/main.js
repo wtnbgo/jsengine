@@ -442,52 +442,6 @@ function initDemo5() {
         preserveDrawingBuffer: false
     });
 
-    // 白テクスチャを手動で作成して PIXI の内部テクスチャに設定
-    // pixi.js は document.createElement("canvas") + getContext("2d") で白テクスチャを作るが
-    // 私たちの環境では 2D canvas → texImage2D の連携が不完全なため手動で作成
-    (function() {
-        var whiteTex = gl.createTexture();
-        gl.bindTexture(gl.TEXTURE_2D, whiteTex);
-        var white = new Uint8Array([255,255,255,255, 255,255,255,255, 255,255,255,255, 255,255,255,255,
-                                    255,255,255,255, 255,255,255,255, 255,255,255,255, 255,255,255,255,
-                                    255,255,255,255, 255,255,255,255, 255,255,255,255, 255,255,255,255,
-                                    255,255,255,255, 255,255,255,255, 255,255,255,255, 255,255,255,255]);
-        // 4x4 白テクスチャ
-        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 4, 4, 0, gl.RGBA, gl.UNSIGNED_BYTE, white);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-        gl.bindTexture(gl.TEXTURE_2D, null);
-
-        // pixi の内部テクスチャを差し替え
-        var renderer = pixiApp.renderer;
-        var uid = renderer.CONTEXT_UID;
-        if (PIXI.Texture.WHITE && PIXI.Texture.WHITE.baseTexture) {
-            var bt = PIXI.Texture.WHITE.baseTexture;
-            if (!bt._glTextures) bt._glTextures = {};
-            bt._glTextures[uid] = {
-                texture: whiteTex,
-                width: 4,
-                height: 4,
-                dirtyId: -1,
-                dirtyStyleId: -1,
-                mipmap: false,
-                wrapMode: 33071,
-                type: gl.UNSIGNED_BYTE,
-                internalFormat: gl.RGBA
-            };
-            bt.valid = true;
-            bt.width = 4;
-            bt.height = 4;
-            console.log("White texture replaced (CONTEXT_UID=" + uid + ")");
-        }
-    })();
-
-    // 背景色の alpha を強制的に 1.0 に設定
-    if (pixiApp.renderer._backgroundColorRgba) {
-        pixiApp.renderer._backgroundColorRgba[3] = 1;
-        console.log("bgColorRgba: " + pixiApp.renderer._backgroundColorRgba.join(","));
-    }
-
     // デバッグ: canvas サイズと GL 状態を確認
     var view = pixiApp.renderer.view || pixiApp.view;
     if (view) {
@@ -551,6 +505,8 @@ function renderDemo5() {
         pixiBox.x = 640 + Math.cos(time * 0.001) * 200;
         pixiBox.y = 360 + Math.sin(time * 0.0015) * 100;
     }
+    // 他のデモで GL ステートが変更されている可能性があるのでリセット
+    pixiApp.renderer.reset();
     pixiApp.renderer.render(pixiApp.stage);
 }
 
