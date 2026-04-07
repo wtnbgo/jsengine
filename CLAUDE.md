@@ -81,3 +81,5 @@ cmake --build build/x64-windows --config Release
 - `dukwebgl_get_buffer()` は TypedArray の byteOffset を正しく処理する。
 - `getParameter()` は配列型（VIEWPORT 等）を Int32Array/Float32Array で返す。
 - `getExtension()` は GLES3 標準拡張に対して機能オブジェクトを返す（VAO 拡張メソッド含む）。
+- duktape の regexp 呼び出しログは `#if 0` で無効化中（`src/duktape/duktape.c` 92685行付近）。有効化すると `regexp_log.txt` にログ出力される。
+- Demo 1 に Canvas2D ベースの HUD オーバーレイ（操作説明・デモ一覧・システム情報）を表示。

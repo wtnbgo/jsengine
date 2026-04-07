@@ -199,6 +199,69 @@ function initDemo1() {
     gl.bindVertexArray(null);
 }
 
+var hudCanvas = null;
+var hudDirty = true;
+
+function renderDemo1HUD() {
+    if (!hudCanvas) {
+        hudCanvas = new Canvas2D(400, 500);
+        hudDirty = true;
+    }
+    if (hudDirty) {
+        var c = hudCanvas;
+        c.clearRect(0, 0, 400, 500);
+
+        // 半透明背景
+        c.fillStyle = "rgba(0,0,0,0.7)";
+        c.fillRect(5, 5, 390, 490);
+
+        c.font = "20px OpenSans-Bold";
+        c.fillStyle = "#ffcc00";
+        c.fillText("jsengine Demo", 15, 30);
+
+        c.font = "14px OpenSans-Regular";
+        c.fillStyle = "#ffffff";
+        var y = 55;
+        var lines = [
+            "--- Demo 1: Triangle ---",
+            "WASD / Arrow Keys : Move triangle",
+            "Mouse Drag        : Drag triangle",
+            "Wheel             : Change alpha",
+            "R                 : Reset position",
+            "Space             : Play beep",
+            "",
+            "--- Switch Demo ---",
+            "1 : Triangle (this)",
+            "2 : Canvas2D Shapes",
+            "3 : Canvas2D Text",
+            "4 : Canvas2D Animation",
+            "5 : pixi.js v5",
+            "6 : drawImage / ImageData",
+            "7 : Dirty Rect Update",
+            "8 : three.js r128",
+            "",
+            "--- System Info ---",
+            "GL: " + (gl.getParameter(gl.RENDERER) || "?"),
+            "GLES: " + (gl.getParameter(gl.VERSION) || "?"),
+        ];
+        for (var i = 0; i < lines.length; i++) {
+            if (lines[i].indexOf("---") === 0) {
+                c.fillStyle = "#88ccff";
+                c.font = "14px OpenSans-Bold";
+            } else {
+                c.fillStyle = "#cccccc";
+                c.font = "13px RobotoMono-VariableFont_wght";
+            }
+            c.fillText(lines[i], 20, y);
+            y += 18;
+        }
+
+        c.flush();
+        hudDirty = false;
+    }
+    drawCanvas2DAt(hudCanvas);
+}
+
 function renderDemo1() {
     gl.useProgram(program);
     gl.uniform2f(uOffsetLoc, offsetX, offsetY);
@@ -206,6 +269,7 @@ function renderDemo1() {
     gl.bindVertexArray(vao);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     gl.bindVertexArray(null);
+    renderDemo1HUD();
 }
 
 // ============================================================

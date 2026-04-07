@@ -92682,8 +92682,10 @@ internal_error:
  *  Output stack: [ ... result ]
  */
 
+#if 0 /* regexp logging disabled */
 static int duk__re_log_count = 0;
 static FILE *duk__re_log_fp = NULL;
+#endif
 
 DUK_LOCAL void duk__regexp_match_helper(duk_hthread *thr, duk_small_int_t force_global) {
 	duk_re_matcher_ctx re_ctx;
@@ -92701,7 +92703,8 @@ DUK_LOCAL void duk__regexp_match_helper(duk_hthread *thr, duk_small_int_t force_
 
 	DUK_ASSERT(thr != NULL);
 
-	/* regexp 呼び出しログ */
+	/* regexp 呼び出しログ（無効化中、コードは残す） */
+#if 0
 	duk__re_log_count++;
 	if (duk__re_log_count <= 500) {
 		duk_get_prop_string(thr, -2, "source");
@@ -92725,6 +92728,7 @@ DUK_LOCAL void duk__regexp_match_helper(duk_hthread *thr, duk_small_int_t force_
 		}
 		duk_pop_2(thr);
 	}
+#endif
 
 	DUK_DD(DUK_DDPRINT("regexp match: regexp=%!T, input=%!T",
 	                   (duk_tval *) duk_get_tval(thr, -2),
