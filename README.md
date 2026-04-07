@@ -1,163 +1,163 @@
 # jsengine
 
-SDL3 + OpenGL ES 3.0 をベースに、duktape JavaScript エンジンと WebGL 2.0 互換バインディングを統合したクロスプラットフォームアプリケーションです。JavaScript から WebGL API を使って描画処理を記述できます。
+A cross-platform application built on SDL3 + OpenGL ES 3.0, integrating the duktape JavaScript engine with WebGL 2.0 compatible bindings. Write rendering logic in JavaScript using browser-compatible WebGL APIs.
 
-## 必要環境
+## Prerequisites
 
-- CMake 3.22 以上
+- CMake 3.22+
 - Ninja
-- vcpkg（`VCPKG_ROOT` 環境変数を設定）
-- C++17 対応コンパイラ（MSVC, GCC, Clang）
+- vcpkg (with `VCPKG_ROOT` environment variable set)
+- C++17 compiler (MSVC, GCC, or Clang)
 
-## ビルド
+## Build
 
 ```bash
-# 構成（初回または CMakeLists.txt 変更後）
+# Configure (first time or after CMakeLists.txt changes)
 make prebuild
 
-# ビルド
+# Build
 make build                       # Release
 make build BUILD_TYPE=Debug      # Debug
 
-# 実行（Windows）
+# Run (Windows)
 make run
 ```
 
-プリセットは OS に応じて自動選択されます（`x64-windows` / `x64-linux` / `x64-macos`）。
+The preset is auto-selected based on the OS (`x64-windows` / `x64-linux` / `x64-macos`).
 
-### 起動オプション
+### Launch Options
 
 ```bash
-jsengine                    # data/ フォルダから main.js を読み込み
-jsengine -data path/to/dir  # 指定フォルダから main.js を読み込み
-jsengine -debug             # デバッグログ有効
-jsengine -quiet             # 警告以上のログのみ
+jsengine                    # Load main.js from data/ folder
+jsengine -data path/to/dir  # Load main.js from specified folder
+jsengine -debug             # Enable debug logging
+jsengine -quiet             # Warnings and errors only
 ```
 
-## 依存ライブラリ
+## Dependencies
 
-| ライブラリ | 管理方法 | 用途 |
-|-----------|---------|------|
-| SDL3 | FetchContent | ウィンドウ管理、入力、ファイルI/O |
-| SDL3_image | FetchContent | 画像読み込み（BMP, JPG, PNG） |
-| GLAD | ローカル (glad/) | OpenGL ES 3.0 ローダー |
-| duktape 2.7.0 | ローカル (src/duktape/) | JavaScript エンジン |
-| glm | vcpkg | 数学ライブラリ |
-| miniaudio 0.11.25 | ローカル (src/audio/) | オーディオエンジン（WAV, MP3, FLAC, OGG） |
-| ThorVG | FetchContent | 2D ベクターグラフィックス（Canvas 2D API） |
-| FreeType | vcpkg | フォントラスタライズ |
-| HarfBuzz | FetchContent | テキストシェーピング |
-| libvorbis / libopus | vcpkg (オプション) | OGG Vorbis / Opus オーディオデコード |
+| Library | Source | Purpose |
+|---------|--------|---------|
+| SDL3 | FetchContent | Window management, input, file I/O |
+| SDL3_image | FetchContent | Image loading (BMP, JPG, PNG) |
+| GLAD | Local (glad/) | OpenGL ES 3.0 loader |
+| duktape 2.7.0 | Local (src/duktape/) | JavaScript engine |
+| glm | vcpkg | Math library |
+| miniaudio 0.11.25 | Local (src/audio/) | Audio engine (WAV, MP3, FLAC, OGG) |
+| ThorVG | FetchContent | 2D vector graphics (Canvas 2D API) |
+| FreeType | vcpkg | Font rasterization |
+| HarfBuzz | FetchContent | Text shaping |
+| libvorbis / libopus | vcpkg (optional) | OGG Vorbis / Opus audio decoding |
 
-## アーキテクチャ
+## Architecture
 
-### C++ 側
+### C++ Side
 
-- `src/main.cpp` - SDL3 コールバックエントリポイント（SDL_AppInit / SDL_AppIterate / SDL_AppEvent / SDL_AppQuit）。入力イベントを App 経由で JsEngine に配信。
-- `src/app.hpp / app.cpp` - `App` シングルトン。SDL ウィンドウと GL コンテキストの管理、JsEngine の所有。
-- `src/jsengine.hpp / jsengine.cpp` - `JsEngine` クラス。duktape ヒープの管理、JS ファイルの読み込み・実行、イベントディスパッチ。
-- `src/dukwebgl.h / dukwebgl.cpp` - WebGL 2.0 互換バインディング（GLES 3.0 ベース）
-- `src/webaudio.h / webaudio.cpp` - Web Audio API バインディング
-- `src/canvas2d.h / canvas2d.cpp` - Canvas 2D API バインディング（ThorVG ベース）
-- `src/audio/` - AudioEngine / AudioStream（miniaudio + SDL3 オーディオ）
+- `src/main.cpp` — SDL3 callback entry point (SDL_AppInit / SDL_AppIterate / SDL_AppEvent / SDL_AppQuit). Routes input events to JsEngine via App.
+- `src/app.hpp / app.cpp` — `App` singleton. Manages the SDL window, GL context, and owns JsEngine.
+- `src/jsengine.hpp / jsengine.cpp` — `JsEngine` class. Manages the duktape heap, JS file loading/execution, and event dispatch.
+- `src/dukwebgl.h / dukwebgl.cpp` — WebGL 2.0 compatible bindings (based on GLES 3.0).
+- `src/webaudio.h / webaudio.cpp` — Web Audio API bindings.
+- `src/canvas2d.h / canvas2d.cpp` — Canvas 2D API bindings (ThorVG-based).
+- `src/audio/` — AudioEngine / AudioStream (miniaudio + SDL3 audio).
 
-### JavaScript ライフサイクル
+### JavaScript Lifecycle
 
-起動時にベースパス（デフォルト: `data/`）から `main.js` が読み込まれ実行されます。`-data` オプションでベースパスを変更できます。`loadScript()` や `fs.*` API の相対パスはすべてこのベースパスから解決されます。
+At startup, `main.js` is loaded and executed from the base path (default: `data/`). The base path can be changed with the `-data` option. All relative paths in `loadScript()` and `fs.*` APIs are resolved from this base path.
 
-以下のグローバル関数を定義すると C++ 側から呼び出されます:
+Define the following global functions to receive callbacks from the C++ side:
 
-| 関数 | タイミング | 引数 |
-|------|-----------|------|
-| `update(dt)` | 毎フレーム | 前フレームからの経過ミリ秒 |
-| `render()` | 毎フレーム（update の後） | なし |
-| `done()` | アプリ終了時 | なし |
+| Function | Timing | Arguments |
+|----------|--------|-----------|
+| `update(dt)` | Every frame | Elapsed milliseconds since last frame |
+| `render()` | Every frame (after update) | None |
+| `done()` | On app quit | None |
 
-### JS から利用可能な API
+### Available JS APIs
 
-- **`gl`** - WebGL2RenderingContext 互換オブジェクト（グローバル）
-- **`console.log()` / `console.error()`** - SDL ログへの出力
-- **`loadScript(path)`** - 追加の JS ファイルを読み込み実行
-- **`addEventListener(type, callback)`** - ブラウザ互換イベントリスナー登録
-- **`removeEventListener(type, callback)`** - イベントリスナー解除
-- **`fs`** - File System Access API（`readText`, `writeText`, `getFileHandle`, `getDirectoryHandle`, `exists`, `stat`, `mkdir`, `remove`, `rename`）
-- **`new AudioContext()`** - Web Audio API（`createBufferSource`, マスターボリューム）
-- **`new Canvas2D(w, h)`** - Canvas 2D API（ビットマップ保持型。矩形、パス、テキスト、drawImage、getImageData/putImageData、変換、GL テクスチャ出力）
-- **`Canvas2D.loadFont(path)`** - ThorVG 用フォントファイル読み込み
-- **`createImageBitmap(path)`** - 画像を RGBA ピクセルデータとして読み込み
+- **`gl`** — WebGL2RenderingContext compatible object (global)
+- **`console.log()` / `console.error()`** — Output to SDL log
+- **`loadScript(path)`** — Load and execute additional JS files
+- **`addEventListener(type, callback)`** — Register browser-compatible event listeners
+- **`removeEventListener(type, callback)`** — Remove event listeners
+- **`fs`** — File System Access API (`readText`, `writeText`, `getFileHandle`, `getDirectoryHandle`, `exists`, `stat`, `mkdir`, `remove`, `rename`)
+- **`new AudioContext()`** — Web Audio API (`createBufferSource`, master volume)
+- **`new Canvas2D(w, h)`** — Canvas 2D API (bitmap-retained; rectangles, paths, text, drawImage, getImageData/putImageData, transforms, GL texture output)
+- **`Canvas2D.loadFont(path)`** — Load font file for ThorVG
+- **`createImageBitmap(path)`** — Load image as RGBA pixel data
 
-### 入力イベント
+### Input Events
 
-ブラウザと同じ `addEventListener` パターンで入力を受け取れます。SDL3 イベントがブラウザ互換のイベントオブジェクトに変換されます。
+Input is received via the browser-standard `addEventListener` pattern. SDL3 events are converted to browser-compatible event objects.
 
-| イベント名 | 説明 | 主なプロパティ |
-|-----------|------|---------------|
-| `keydown` / `keyup` | キーボード | `key`, `code`, `keyCode`, `altKey`, `ctrlKey`, `shiftKey`, `metaKey`, `repeat` |
-| `mousedown` / `mouseup` / `mousemove` | マウス | `clientX`, `clientY`, `button`, `buttons`, `movementX`, `movementY`, 修飾キー |
-| `wheel` | ホイール | `deltaX`, `deltaY`, `deltaZ`, `deltaMode`, `clientX`, `clientY`, 修飾キー |
-| `touchstart` / `touchmove` / `touchend` / `touchcancel` | タッチ | `touches[]`, `changedTouches[]`（各要素: `identifier`, `clientX`, `clientY`, `force`） |
+| Event | Description | Key Properties |
+|-------|-------------|----------------|
+| `keydown` / `keyup` | Keyboard | `key`, `code`, `keyCode`, `altKey`, `ctrlKey`, `shiftKey`, `metaKey`, `repeat` |
+| `mousedown` / `mouseup` / `mousemove` | Mouse | `clientX`, `clientY`, `button`, `buttons`, `movementX`, `movementY`, modifier keys |
+| `wheel` | Mouse wheel | `deltaX`, `deltaY`, `deltaZ`, `deltaMode`, `clientX`, `clientY`, modifier keys |
+| `touchstart` / `touchmove` / `touchend` / `touchcancel` | Touch | `touches[]`, `changedTouches[]` (each: `identifier`, `clientX`, `clientY`, `force`) |
 
-### WebGL バインディング対応範囲
+### WebGL Binding Coverage
 
-シェーダ/プログラム、バッファ（VBO/UBO）、テクスチャ（2D/3D/CubeMap）、フレームバッファ/レンダーバッファ、VAO、uniform（scalar/vector/matrix）、描画（instanced 含む）、ステート管理、clearBuffer、Transform Feedback、Query、Sampler など WebGL 2.0 の主要 API をカバーしています。
+Covers the major WebGL 2.0 APIs including: shaders/programs, buffers (VBO/UBO), textures (2D/3D/CubeMap), framebuffers/renderbuffers, VAO, uniforms (scalar/vector/matrix), drawing (including instanced), state management, clearBuffer, Transform Feedback, Query, and Sampler.
 
-## API リファレンス
+## API Reference
 
-`manual.js` に全 API の一覧を JavaScript コード風にまとめています。
+See `manual.js` for a complete API listing in JavaScript-style documentation.
 
-## サンプル
+## Demos
 
-`data/main.js` にキー操作で切り替え可能な8つのデモが含まれています。
+`data/main.js` includes 8 demos switchable by key press.
 
-Demo 1 起動時に操作説明・デモ一覧・システム情報を表示する HUD オーバーレイが表示されます。
+Demo 1 displays a HUD overlay showing controls, demo list, and system information.
 
-| キー | デモ内容 |
-|------|---------|
-| **1** | 頂点カラー三角形（WASD 移動、ホイール透明度、HUD 表示） |
-| **2** | Canvas2D 図形描画（矩形、円、ベジェ曲線、半透明） |
-| **3** | Canvas2D テキスト描画（複数フォント・サイズ・色） |
-| **4** | Canvas2D アニメーション（回転図形、軌道円） |
-| **5** | pixi.js v5 テスト（Graphics 描画、アニメーション） |
-| **6** | Canvas2D drawImage / getImageData / putImageData テスト |
-| **7** | Canvas2D dirty rect 差分更新テスト |
-| **8** | three.js r128 テスト（立方体、球体、床面） |
-| **Space** | ビープ音再生 |
-| **R** | リセット |
+| Key | Demo |
+|-----|------|
+| **1** | Vertex-colored triangle (WASD movement, wheel alpha, HUD overlay) |
+| **2** | Canvas2D shapes (rectangles, circles, Bezier curves, transparency) |
+| **3** | Canvas2D text (multiple fonts, sizes, colors) |
+| **4** | Canvas2D animation (rotating shapes, orbital circles) |
+| **5** | pixi.js v5 test (Graphics drawing, animation) |
+| **6** | Canvas2D drawImage / getImageData / putImageData test |
+| **7** | Canvas2D dirty rect partial update test |
+| **8** | three.js r128 test (cube, sphere, floor plane) |
+| **Space** | Play beep sound |
+| **R** | Reset |
 
-`-demo N` オプションで起動時のデモモードを指定できます。
+Use `-demo N` to select the initial demo mode at launch.
 
-### three.js ES5 トランスパイル
+### three.js ES5 Transpilation
 
-three.js r128 は ES6 class 構文を使用しており、duktape では直接実行できません。Babel で ES5 に変換する必要があります。
+three.js r128 uses ES6 class syntax which duktape cannot parse. Babel transpilation to ES5 is required.
 
 ```bash
-make setup-npm          # Babel インストール（初回のみ）
+make setup-npm          # Install Babel (first time only)
 make transpile          # data/lib/three.min.js → data/lib/three.es5.js
 ```
 
-フォントファイルは `data/fonts/` に配置してください（OpenSans, Roboto 等）。
+Place font files in `data/fonts/` (e.g., OpenSans, Roboto).
 
-## ライセンス
+## License
 
-本プロジェクトは [MIT License](LICENSE) の下で公開されています。
+This project is licensed under the [MIT License](LICENSE).
 
-### サードパーティライブラリのライセンス
+### Third-Party Licenses
 
-| ライブラリ | ライセンス | 備考 |
-|-----------|-----------|------|
-| [SDL3](https://github.com/libsdl-org/SDL) | zlib License | ウィンドウ管理、入力、ファイル I/O |
-| [SDL3_image](https://github.com/libsdl-org/SDL_image) | zlib License | 画像読み込み |
-| [duktape](https://duktape.org/) | MIT License | JavaScript エンジン（src/duktape/ に同梱） |
-| [GLAD](https://github.com/Dav1dde/glad) | MIT License / Public Domain | OpenGL ES 3.0 ローダー（glad/ に同梱） |
-| [miniaudio](https://miniaud.io/) | MIT-0 / Public Domain | オーディオエンジン（src/audio/ に同梱） |
-| [ThorVG](https://www.thorvg.org/) | MIT License | 2D ベクターグラフィックス |
-| [glm](https://github.com/g-truc/glm) | MIT License | 数学ライブラリ |
-| [FreeType](https://freetype.org/) | FreeType License (BSD-style) | フォントラスタライズ |
-| [HarfBuzz](https://harfbuzz.github.io/) | MIT License | テキストシェーピング |
-| [libvorbis](https://xiph.org/vorbis/) | BSD License | Vorbis オーディオデコード（オプション） |
-| [libogg](https://xiph.org/ogg/) | BSD License | Ogg コンテナ形式（オプション） |
-| [opusfile](https://opus-codec.org/) | BSD License | Opus オーディオデコード（オプション） |
-| [pixi.js](https://pixijs.com/) v5.3.12 | MIT License | 2D レンダラー（data/lib/ に同梱） |
-| [three.js](https://threejs.org/) r128 | MIT License | 3D グラフィックス（data/lib/ に同梱） |
+| Library | License | Notes |
+|---------|---------|-------|
+| [SDL3](https://github.com/libsdl-org/SDL) | zlib License | Window management, input, file I/O |
+| [SDL3_image](https://github.com/libsdl-org/SDL_image) | zlib License | Image loading |
+| [duktape](https://duktape.org/) | MIT License | JavaScript engine (bundled in src/duktape/) |
+| [GLAD](https://github.com/Dav1dde/glad) | MIT License / Public Domain | OpenGL ES 3.0 loader (bundled in glad/) |
+| [miniaudio](https://miniaud.io/) | MIT-0 / Public Domain | Audio engine (bundled in src/audio/) |
+| [ThorVG](https://www.thorvg.org/) | MIT License | 2D vector graphics |
+| [glm](https://github.com/g-truc/glm) | MIT License | Math library |
+| [FreeType](https://freetype.org/) | FreeType License (BSD-style) | Font rasterization |
+| [HarfBuzz](https://harfbuzz.github.io/) | MIT License | Text shaping |
+| [libvorbis](https://xiph.org/vorbis/) | BSD License | Vorbis audio decoding (optional) |
+| [libogg](https://xiph.org/ogg/) | BSD License | Ogg container format (optional) |
+| [opusfile](https://opus-codec.org/) | BSD License | Opus audio decoding (optional) |
+| [pixi.js](https://pixijs.com/) v5.3.12 | MIT License | 2D renderer (bundled in data/lib/) |
+| [three.js](https://threejs.org/) r128 | MIT License | 3D graphics (bundled in data/lib/) |
 
-EGL/KHR ヘッダは Khronos Group により Apache-2.0 License で提供されています。
+EGL/KHR headers are provided by The Khronos Group under the Apache-2.0 License.
