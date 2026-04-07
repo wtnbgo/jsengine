@@ -1,5 +1,5 @@
 /**
- * WebGL 2.0 compatible bindings for Duktape + OpenGL ES 3.0
+ * WebGL 2.0 compatible bindings for QuickJS + OpenGL ES 3.0
  *
  * Based on https://github.com/mrautio/duktape-webgl
  * Adapted for GLES 3.0 (via glad/gles2.h)
@@ -7,7 +7,7 @@
 
 #include "dukwebgl.h"
 #include "glad/gles2.h"
-#include <duktape.h>
+#include <quickjs.h>
 #include <SDL3/SDL.h>
 #include <cstdlib>
 #include <cstring>
@@ -16,136 +16,129 @@
 // ヘルパー: WebGL オブジェクト（GLuint ID をラップ）
 // ============================================================
 
-static void dukwebgl_create_object_uint(duk_context *ctx, GLuint id) {
-    if (id == 0) {
-        duk_push_null(ctx);
-        return;
-    }
-    duk_idx_t obj = duk_push_object(ctx);
-    duk_push_uint(ctx, id);
-    duk_put_prop_string(ctx, obj, "_id");
+static JSValue create_gl_object_uint(JSContext *ctx, GLuint id) {
+    if (id == 0) return JS_NULL;
+    JSValue obj = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, obj, "_id", JS_NewUint32(ctx, id));
+    return obj;
 }
 
-static GLuint dukwebgl_get_object_id_uint(duk_context *ctx, duk_idx_t obj_idx) {
+static GLuint get_gl_object_id_uint(JSContext *ctx, JSValueConst val) {
     GLuint ret = 0;
-    if (duk_is_object(ctx, obj_idx)) {
-        duk_get_prop_string(ctx, obj_idx, "_id");
-        ret = (GLuint)duk_to_uint(ctx, -1);
-        duk_pop(ctx);
+    if (JS_IsObject(val)) {
+        JSValue id = JS_GetPropertyStr(ctx, val, "_id");
+        JS_ToUint32(ctx, &ret, id);
+        JS_FreeValue(ctx, id);
     }
     return ret;
 }
 
-static void dukwebgl_create_object_int(duk_context *ctx, GLint id) {
-    if (id < 0) {
-        duk_push_null(ctx);
-        return;
-    }
-    duk_idx_t obj = duk_push_object(ctx);
-    duk_push_int(ctx, id);
-    duk_put_prop_string(ctx, obj, "_id");
+static JSValue create_gl_object_int(JSContext *ctx, GLint id) {
+    if (id < 0) return JS_NULL;
+    JSValue obj = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, obj, "_id", JS_NewInt32(ctx, id));
+    return obj;
 }
 
-static GLint dukwebgl_get_object_id_int(duk_context *ctx, duk_idx_t obj_idx) {
+static GLint get_gl_object_id_int(JSContext *ctx, JSValueConst val) {
     GLint ret = -1;
-    if (duk_is_object(ctx, obj_idx)) {
-        duk_get_prop_string(ctx, obj_idx, "_id");
-        ret = (GLint)duk_to_int(ctx, -1);
-        duk_pop(ctx);
+    if (JS_IsObject(val)) {
+        JSValue id = JS_GetPropertyStr(ctx, val, "_id");
+        JS_ToInt32(ctx, &ret, id);
+        JS_FreeValue(ctx, id);
     }
     return ret;
 }
 
 // ============================================================
-// ヘルパー: ピクセルデータ取得
+// ヘルパー: バッファデータ取得
 // ============================================================
 
-// TypedArray / plain buffer からバッファデータを取得するヘルパー
+// TypedArray / ArrayBuffer からバッファデータを取得するヘルパー
 // TypedArray の byteOffset / byteLength を正しく考慮する
-static int g_bufferDebugCount = 0;
-static void* dukwebgl_get_buffer(duk_context *ctx, duk_idx_t idx, duk_size_t *out_size) {
-    // TypedArray チェック（byteOffset 対応）を先に行う
-    if (duk_is_object(ctx, idx) &&
-        duk_has_prop_string(ctx, idx, "buffer") &&
-        duk_has_prop_string(ctx, idx, "byteOffset") &&
-        duk_has_prop_string(ctx, idx, "byteLength")) {
-        duk_get_prop_string(ctx, idx, "byteOffset");
-        duk_size_t byteOffset = (duk_size_t)duk_to_uint(ctx, -1);
-        duk_pop(ctx);
-        duk_get_prop_string(ctx, idx, "byteLength");
-        duk_size_t byteLength = (duk_size_t)duk_to_uint(ctx, -1);
-        duk_pop(ctx);
-        duk_get_prop_string(ctx, idx, "buffer");
-        duk_size_t bufSize = 0;
-        void *bufPtr = duk_get_buffer_data(ctx, -1, &bufSize);
-        duk_pop(ctx);
-        if (bufPtr && byteOffset + byteLength <= bufSize) {
-            if (out_size) *out_size = byteLength;
-            return (char*)bufPtr + byteOffset;
+static void* qjs_get_buffer(JSContext *ctx, JSValueConst val, size_t *out_size) {
+    // Try TypedArray first
+    if (JS_IsObject(val)) {
+        size_t offset = 0, length = 0, bpe = 0;
+        JSValue ab = JS_GetTypedArrayBuffer(ctx, val, &offset, &length, &bpe);
+        if (!JS_IsException(ab)) {
+            size_t buf_size = 0;
+            uint8_t *buf = JS_GetArrayBuffer(ctx, &buf_size, ab);
+            JS_FreeValue(ctx, ab);
+            if (buf && offset + length <= buf_size) {
+                if (out_size) *out_size = length;
+                return buf + offset;
+            }
         }
-    }
-    // plain buffer
-    if (duk_is_buffer_data(ctx, idx)) {
-        return duk_get_buffer_data(ctx, idx, out_size);
+        // Try plain ArrayBuffer
+        size_t buf_size = 0;
+        uint8_t *buf = JS_GetArrayBuffer(ctx, &buf_size, val);
+        if (buf) {
+            if (out_size) *out_size = buf_size;
+            return buf;
+        }
     }
     if (out_size) *out_size = 0;
     return NULL;
 }
 
 // ピクセルデータ取得ヘルパー
-// 注意: source.data getter 経由でバッファを取得した場合、戻り値のポインタは
-// スタック上のバッファ参照に依存する。呼び出し側で GL 処理完了後にスタックを整理すること。
-// pushed: duk_get_prop_string で1つ積まれた場合 true を返す
-static void* dukwebgl_get_pixels(duk_context *ctx, duk_idx_t idx, bool *pushed = nullptr) {
-    if (pushed) *pushed = false;
-    if (duk_is_buffer_data(ctx, idx)) {
-        return duk_get_buffer_data(ctx, idx, NULL);
+static void* qjs_get_pixels(JSContext *ctx, JSValueConst val) {
+    void *ptr = qjs_get_buffer(ctx, val, NULL);
+    if (ptr) return ptr;
+    if (JS_IsObject(val)) {
+        JSValue data = JS_GetPropertyStr(ctx, val, "data");
+        ptr = qjs_get_buffer(ctx, data, NULL);
+        JS_FreeValue(ctx, data);
     }
-    if (duk_is_object(ctx, idx) && duk_has_prop_string(ctx, idx, "data")) {
-        duk_get_prop_string(ctx, idx, "data");
-        if (duk_is_buffer_data(ctx, -1)) {
-            void *p = duk_get_buffer_data(ctx, -1, NULL);
-            // duk_pop しない — ポインタが有効な間バッファをスタックに保持
-            if (pushed) *pushed = true;
-            return p;
-        }
-        duk_pop(ctx);
-    }
-    return NULL;
+    return ptr;
+}
+
+// ============================================================
+// ヘルパー: 引数取得ユーティリティ
+// ============================================================
+
+static uint32_t arg_uint(JSContext *ctx, JSValueConst val) {
+    uint32_t v = 0; JS_ToUint32(ctx, &v, val); return v;
+}
+static int32_t arg_int(JSContext *ctx, JSValueConst val) {
+    int32_t v = 0; JS_ToInt32(ctx, &v, val); return v;
+}
+static double arg_float64(JSContext *ctx, JSValueConst val) {
+    double v = 0; JS_ToFloat64(ctx, &v, val); return v;
 }
 
 // ============================================================
 // WebGL コンテキスト情報
 // ============================================================
 
-static duk_ret_t dukwebgl_getContextAttributes(duk_context *ctx) {
-    duk_idx_t obj = duk_push_object(ctx);
-    duk_push_boolean(ctx, 1); duk_put_prop_string(ctx, obj, "alpha");
-    duk_push_boolean(ctx, 1); duk_put_prop_string(ctx, obj, "depth");
-    duk_push_boolean(ctx, 1); duk_put_prop_string(ctx, obj, "stencil");
-    duk_push_boolean(ctx, 1); duk_put_prop_string(ctx, obj, "antialias");
-    duk_push_boolean(ctx, 1); duk_put_prop_string(ctx, obj, "premultipliedAlpha");
-    duk_push_boolean(ctx, 0); duk_put_prop_string(ctx, obj, "preserveDrawingBuffer");
-    duk_push_string(ctx, "default"); duk_put_prop_string(ctx, obj, "powerPreference");
-    duk_push_boolean(ctx, 0); duk_put_prop_string(ctx, obj, "failIfMajorPerformanceCaveat");
-    return 1;
+static JSValue js_getContextAttributes(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    JSValue obj = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, obj, "alpha", JS_NewBool(ctx, 1));
+    JS_SetPropertyStr(ctx, obj, "depth", JS_NewBool(ctx, 1));
+    JS_SetPropertyStr(ctx, obj, "stencil", JS_NewBool(ctx, 1));
+    JS_SetPropertyStr(ctx, obj, "antialias", JS_NewBool(ctx, 1));
+    JS_SetPropertyStr(ctx, obj, "premultipliedAlpha", JS_NewBool(ctx, 1));
+    JS_SetPropertyStr(ctx, obj, "preserveDrawingBuffer", JS_NewBool(ctx, 0));
+    JS_SetPropertyStr(ctx, obj, "powerPreference", JS_NewString(ctx, "default"));
+    JS_SetPropertyStr(ctx, obj, "failIfMajorPerformanceCaveat", JS_NewBool(ctx, 0));
+    return obj;
 }
 
-static duk_ret_t dukwebgl_isContextLost(duk_context *ctx) {
-    duk_push_false(ctx);
-    return 1;
+static JSValue js_isContextLost(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    return JS_FALSE;
 }
 
-static duk_ret_t dukwebgl_getSupportedExtensions(duk_context *ctx) {
-    duk_push_array(ctx);
-    return 1;
+static JSValue js_getSupportedExtensions(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    return JS_NewArray(ctx);
 }
 
-static duk_ret_t dukwebgl_getExtension(duk_context *ctx) {
-    const char *name = duk_get_string(ctx, 0);
+static JSValue js_getExtension(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    const char *name = JS_ToCString(ctx, argv[0]);
     if (name) {
         // GLES3 で標準サポートされている拡張は空オブジェクトを返す
-        if (strcmp(name, "OES_element_index_uint") == 0 ||
+        int supported =
+            strcmp(name, "OES_element_index_uint") == 0 ||
             strcmp(name, "OES_vertex_array_object") == 0 ||
             strcmp(name, "OES_texture_float") == 0 ||
             strcmp(name, "OES_texture_half_float") == 0 ||
@@ -157,771 +150,731 @@ static duk_ret_t dukwebgl_getExtension(duk_context *ctx) {
             strcmp(name, "EXT_color_buffer_float") == 0 ||
             strcmp(name, "WEBGL_draw_buffers") == 0 ||
             strcmp(name, "EXT_disjoint_timer_query") == 0 ||
-            strcmp(name, "OES_standard_derivatives") == 0) {
-            duk_push_object(ctx);
-            return 1;
-        }
+            strcmp(name, "OES_standard_derivatives") == 0;
+        JS_FreeCString(ctx, name);
+        if (supported) return JS_NewObject(ctx);
     }
-    duk_push_null(ctx);
-    return 1;
+    return JS_NULL;
 }
 
 // ============================================================
 // シェーダ / プログラム
 // ============================================================
 
-static duk_ret_t dukwebgl_createShader(duk_context *ctx) {
-    GLenum type = (GLenum)duk_get_uint(ctx, 0);
+static JSValue js_createShader(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    GLenum type = (GLenum)arg_uint(ctx, argv[0]);
     GLuint shader = glCreateShader(type);
-    dukwebgl_create_object_uint(ctx, shader);
-    return 1;
+    return create_gl_object_uint(ctx, shader);
 }
 
-static duk_ret_t dukwebgl_deleteShader(duk_context *ctx) {
-    GLuint shader = dukwebgl_get_object_id_uint(ctx, 0);
+static JSValue js_deleteShader(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    GLuint shader = get_gl_object_id_uint(ctx, argv[0]);
     glDeleteShader(shader);
-    return 0;
+    return JS_UNDEFINED;
 }
 
-static duk_ret_t dukwebgl_shaderSource(duk_context *ctx) {
-    GLuint shader = dukwebgl_get_object_id_uint(ctx, 0);
-    const GLchar *source = (const GLchar *)duk_get_string(ctx, 1);
+static JSValue js_shaderSource(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    GLuint shader = get_gl_object_id_uint(ctx, argv[0]);
+    const char *source = JS_ToCString(ctx, argv[1]);
     glShaderSource(shader, 1, &source, NULL);
-    return 0;
+    JS_FreeCString(ctx, source);
+    return JS_UNDEFINED;
 }
 
-static duk_ret_t dukwebgl_compileShader(duk_context *ctx) {
-    GLuint shader = dukwebgl_get_object_id_uint(ctx, 0);
+static JSValue js_compileShader(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    GLuint shader = get_gl_object_id_uint(ctx, argv[0]);
     glCompileShader(shader);
-    return 0;
+    return JS_UNDEFINED;
 }
 
-static duk_ret_t dukwebgl_getShaderParameter(duk_context *ctx) {
-    GLuint shader = dukwebgl_get_object_id_uint(ctx, 0);
-    GLenum pname = (GLenum)duk_get_uint(ctx, 1);
+static JSValue js_getShaderParameter(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    GLuint shader = get_gl_object_id_uint(ctx, argv[0]);
+    GLenum pname = (GLenum)arg_uint(ctx, argv[1]);
     GLint value = 0;
     glGetShaderiv(shader, pname, &value);
     switch (pname) {
     case GL_DELETE_STATUS:
     case GL_COMPILE_STATUS:
-        duk_push_boolean(ctx, value == GL_TRUE ? 1 : 0);
-        break;
+        return JS_NewBool(ctx, value == GL_TRUE ? 1 : 0);
     case GL_SHADER_TYPE:
-        duk_push_uint(ctx, (GLuint)value);
-        break;
+        return JS_NewUint32(ctx, (GLuint)value);
     default:
-        duk_push_undefined(ctx);
-        break;
+        return JS_UNDEFINED;
     }
-    return 1;
 }
 
-static duk_ret_t dukwebgl_getShaderInfoLog(duk_context *ctx) {
-    GLuint shader = dukwebgl_get_object_id_uint(ctx, 0);
+static JSValue js_getShaderInfoLog(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    GLuint shader = get_gl_object_id_uint(ctx, argv[0]);
     GLchar infoLog[4096];
     GLsizei length = 0;
     glGetShaderInfoLog(shader, sizeof(infoLog), &length, infoLog);
-    duk_push_string(ctx, infoLog);
-    return 1;
+    return JS_NewString(ctx, infoLog);
 }
 
-static duk_ret_t dukwebgl_getShaderSource(duk_context *ctx) {
-    GLuint shader = dukwebgl_get_object_id_uint(ctx, 0);
+static JSValue js_getShaderSource(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    GLuint shader = get_gl_object_id_uint(ctx, argv[0]);
     GLchar source[65536];
     GLsizei length = 0;
     glGetShaderSource(shader, sizeof(source), &length, source);
-    duk_push_string(ctx, source);
-    return 1;
+    return JS_NewString(ctx, source);
 }
 
-static duk_ret_t dukwebgl_isShader(duk_context *ctx) {
-    GLuint shader = dukwebgl_get_object_id_uint(ctx, 0);
-    duk_push_boolean(ctx, glIsShader(shader));
-    return 1;
+static JSValue js_isShader(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    GLuint shader = get_gl_object_id_uint(ctx, argv[0]);
+    return JS_NewBool(ctx, glIsShader(shader));
 }
 
-static duk_ret_t dukwebgl_createProgram(duk_context *ctx) {
+static JSValue js_createProgram(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     GLuint program = glCreateProgram();
-    dukwebgl_create_object_uint(ctx, program);
-    return 1;
+    return create_gl_object_uint(ctx, program);
 }
 
-static duk_ret_t dukwebgl_deleteProgram(duk_context *ctx) {
-    GLuint program = dukwebgl_get_object_id_uint(ctx, 0);
+static JSValue js_deleteProgram(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    GLuint program = get_gl_object_id_uint(ctx, argv[0]);
     glDeleteProgram(program);
-    return 0;
+    return JS_UNDEFINED;
 }
 
-static duk_ret_t dukwebgl_attachShader(duk_context *ctx) {
-    GLuint program = dukwebgl_get_object_id_uint(ctx, 0);
-    GLuint shader = dukwebgl_get_object_id_uint(ctx, 1);
+static JSValue js_attachShader(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    GLuint program = get_gl_object_id_uint(ctx, argv[0]);
+    GLuint shader = get_gl_object_id_uint(ctx, argv[1]);
     glAttachShader(program, shader);
-    return 0;
+    return JS_UNDEFINED;
 }
 
-static duk_ret_t dukwebgl_detachShader(duk_context *ctx) {
-    GLuint program = dukwebgl_get_object_id_uint(ctx, 0);
-    GLuint shader = dukwebgl_get_object_id_uint(ctx, 1);
+static JSValue js_detachShader(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    GLuint program = get_gl_object_id_uint(ctx, argv[0]);
+    GLuint shader = get_gl_object_id_uint(ctx, argv[1]);
     glDetachShader(program, shader);
-    return 0;
+    return JS_UNDEFINED;
 }
 
-static duk_ret_t dukwebgl_linkProgram(duk_context *ctx) {
-    GLuint program = dukwebgl_get_object_id_uint(ctx, 0);
+static JSValue js_linkProgram(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    GLuint program = get_gl_object_id_uint(ctx, argv[0]);
     glLinkProgram(program);
-    return 0;
+    return JS_UNDEFINED;
 }
 
-static duk_ret_t dukwebgl_useProgram(duk_context *ctx) {
-    GLuint program = dukwebgl_get_object_id_uint(ctx, 0);
+static JSValue js_useProgram(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    GLuint program = get_gl_object_id_uint(ctx, argv[0]);
     glUseProgram(program);
-    return 0;
+    return JS_UNDEFINED;
 }
 
-static duk_ret_t dukwebgl_validateProgram(duk_context *ctx) {
-    GLuint program = dukwebgl_get_object_id_uint(ctx, 0);
+static JSValue js_validateProgram(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    GLuint program = get_gl_object_id_uint(ctx, argv[0]);
     glValidateProgram(program);
-    return 0;
+    return JS_UNDEFINED;
 }
 
-static duk_ret_t dukwebgl_isProgram(duk_context *ctx) {
-    GLuint program = dukwebgl_get_object_id_uint(ctx, 0);
-    duk_push_boolean(ctx, glIsProgram(program));
-    return 1;
+static JSValue js_isProgram(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    GLuint program = get_gl_object_id_uint(ctx, argv[0]);
+    return JS_NewBool(ctx, glIsProgram(program));
 }
 
-static duk_ret_t dukwebgl_getProgramParameter(duk_context *ctx) {
-    GLuint program = dukwebgl_get_object_id_uint(ctx, 0);
-    GLenum pname = (GLenum)duk_get_uint(ctx, 1);
+static JSValue js_getProgramParameter(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    GLuint program = get_gl_object_id_uint(ctx, argv[0]);
+    GLenum pname = (GLenum)arg_uint(ctx, argv[1]);
     GLint value = 0;
     glGetProgramiv(program, pname, &value);
     switch (pname) {
     case GL_DELETE_STATUS:
     case GL_LINK_STATUS:
     case GL_VALIDATE_STATUS:
-        duk_push_boolean(ctx, value == GL_TRUE ? 1 : 0);
-        break;
+        return JS_NewBool(ctx, value == GL_TRUE ? 1 : 0);
     case GL_ATTACHED_SHADERS:
     case GL_ACTIVE_ATTRIBUTES:
     case GL_ACTIVE_UNIFORMS:
     case GL_TRANSFORM_FEEDBACK_VARYINGS:
     case GL_ACTIVE_UNIFORM_BLOCKS:
-        duk_push_int(ctx, value);
-        break;
+        return JS_NewInt32(ctx, value);
     case GL_TRANSFORM_FEEDBACK_BUFFER_MODE:
-        duk_push_uint(ctx, (GLuint)value);
-        break;
+        return JS_NewUint32(ctx, (GLuint)value);
     default:
-        duk_push_undefined(ctx);
-        break;
+        return JS_UNDEFINED;
     }
-    return 1;
 }
 
-static duk_ret_t dukwebgl_getProgramInfoLog(duk_context *ctx) {
-    GLuint program = dukwebgl_get_object_id_uint(ctx, 0);
+static JSValue js_getProgramInfoLog(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    GLuint program = get_gl_object_id_uint(ctx, argv[0]);
     GLchar infoLog[4096];
     GLsizei length = 0;
     glGetProgramInfoLog(program, sizeof(infoLog), &length, infoLog);
-    duk_push_string(ctx, infoLog);
-    return 1;
+    return JS_NewString(ctx, infoLog);
 }
 
-static duk_ret_t dukwebgl_bindAttribLocation(duk_context *ctx) {
-    GLuint program = dukwebgl_get_object_id_uint(ctx, 0);
-    GLuint index = (GLuint)duk_get_uint(ctx, 1);
-    const char *name = duk_get_string(ctx, 2);
+static JSValue js_bindAttribLocation(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    GLuint program = get_gl_object_id_uint(ctx, argv[0]);
+    GLuint index = arg_uint(ctx, argv[1]);
+    const char *name = JS_ToCString(ctx, argv[2]);
     glBindAttribLocation(program, index, name);
-    return 0;
+    JS_FreeCString(ctx, name);
+    return JS_UNDEFINED;
 }
 
-static duk_ret_t dukwebgl_getAttribLocation(duk_context *ctx) {
-    GLuint program = dukwebgl_get_object_id_uint(ctx, 0);
-    const char *name = duk_get_string(ctx, 1);
+static JSValue js_getAttribLocation(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    GLuint program = get_gl_object_id_uint(ctx, argv[0]);
+    const char *name = JS_ToCString(ctx, argv[1]);
     GLint loc = glGetAttribLocation(program, name);
-    duk_push_int(ctx, loc);
-    return 1;
+    JS_FreeCString(ctx, name);
+    return JS_NewInt32(ctx, loc);
 }
 
-static duk_ret_t dukwebgl_getUniformLocation(duk_context *ctx) {
-    GLuint program = dukwebgl_get_object_id_uint(ctx, 0);
-    const char *name = duk_get_string(ctx, 1);
+static JSValue js_getUniformLocation(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    GLuint program = get_gl_object_id_uint(ctx, argv[0]);
+    const char *name = JS_ToCString(ctx, argv[1]);
     GLint loc = glGetUniformLocation(program, name);
-    dukwebgl_create_object_int(ctx, loc);
-    return 1;
+    JS_FreeCString(ctx, name);
+    return create_gl_object_int(ctx, loc);
 }
 
-static duk_ret_t dukwebgl_getActiveAttrib(duk_context *ctx) {
-    GLuint program = dukwebgl_get_object_id_uint(ctx, 0);
-    GLuint index = (GLuint)duk_get_uint(ctx, 1);
+static JSValue js_getActiveAttrib(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    GLuint program = get_gl_object_id_uint(ctx, argv[0]);
+    GLuint index = arg_uint(ctx, argv[1]);
     GLchar name[1024];
     GLsizei length = 0;
     GLenum type;
     GLint size;
     glGetActiveAttrib(program, index, sizeof(name), &length, &size, &type, name);
-    if (length <= 0) { duk_push_undefined(ctx); return 1; }
-    duk_idx_t obj = duk_push_object(ctx);
-    duk_push_string(ctx, name); duk_put_prop_string(ctx, obj, "name");
-    duk_push_uint(ctx, type); duk_put_prop_string(ctx, obj, "type");
-    duk_push_int(ctx, size); duk_put_prop_string(ctx, obj, "size");
-    return 1;
+    if (length <= 0) return JS_UNDEFINED;
+    JSValue obj = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, obj, "name", JS_NewString(ctx, name));
+    JS_SetPropertyStr(ctx, obj, "type", JS_NewUint32(ctx, type));
+    JS_SetPropertyStr(ctx, obj, "size", JS_NewInt32(ctx, size));
+    return obj;
 }
 
-static duk_ret_t dukwebgl_getActiveUniform(duk_context *ctx) {
-    GLuint program = dukwebgl_get_object_id_uint(ctx, 0);
-    GLuint index = (GLuint)duk_get_uint(ctx, 1);
+static JSValue js_getActiveUniform(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    GLuint program = get_gl_object_id_uint(ctx, argv[0]);
+    GLuint index = arg_uint(ctx, argv[1]);
     GLchar name[1024];
     GLsizei length = 0;
     GLenum type;
     GLint size;
     glGetActiveUniform(program, index, sizeof(name), &length, &size, &type, name);
-    if (length <= 0) { duk_push_undefined(ctx); return 1; }
-    duk_idx_t obj = duk_push_object(ctx);
-    duk_push_string(ctx, name); duk_put_prop_string(ctx, obj, "name");
-    duk_push_uint(ctx, type); duk_put_prop_string(ctx, obj, "type");
-    duk_push_int(ctx, size); duk_put_prop_string(ctx, obj, "size");
-    return 1;
+    if (length <= 0) return JS_UNDEFINED;
+    JSValue obj = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, obj, "name", JS_NewString(ctx, name));
+    JS_SetPropertyStr(ctx, obj, "type", JS_NewUint32(ctx, type));
+    JS_SetPropertyStr(ctx, obj, "size", JS_NewInt32(ctx, size));
+    return obj;
 }
 
 // ============================================================
 // バッファ
 // ============================================================
 
-static duk_ret_t dukwebgl_createBuffer(duk_context *ctx) {
+static JSValue js_createBuffer(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     GLuint id;
     glGenBuffers(1, &id);
-    dukwebgl_create_object_uint(ctx, id);
-    return 1;
+    return create_gl_object_uint(ctx, id);
 }
 
-static duk_ret_t dukwebgl_deleteBuffer(duk_context *ctx) {
-    GLuint id = dukwebgl_get_object_id_uint(ctx, 0);
+static JSValue js_deleteBuffer(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    GLuint id = get_gl_object_id_uint(ctx, argv[0]);
     glDeleteBuffers(1, &id);
-    return 0;
+    return JS_UNDEFINED;
 }
 
-static duk_ret_t dukwebgl_isBuffer(duk_context *ctx) {
-    GLuint id = dukwebgl_get_object_id_uint(ctx, 0);
-    duk_push_boolean(ctx, glIsBuffer(id));
-    return 1;
+static JSValue js_isBuffer(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    GLuint id = get_gl_object_id_uint(ctx, argv[0]);
+    return JS_NewBool(ctx, glIsBuffer(id));
 }
 
-static duk_ret_t dukwebgl_bindBuffer(duk_context *ctx) {
-    GLenum target = (GLenum)duk_get_uint(ctx, 0);
-    GLuint buffer = dukwebgl_get_object_id_uint(ctx, 1);
+static JSValue js_bindBuffer(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    GLenum target = (GLenum)arg_uint(ctx, argv[0]);
+    GLuint buffer = get_gl_object_id_uint(ctx, argv[1]);
     glBindBuffer(target, buffer);
-    return 0;
+    return JS_UNDEFINED;
 }
 
-static duk_ret_t dukwebgl_bufferData(duk_context *ctx) {
-    int argc = duk_get_top(ctx);
-    GLenum target = (GLenum)duk_get_uint(ctx, 0);
+static JSValue js_bufferData(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    GLenum target = (GLenum)arg_uint(ctx, argv[0]);
 
-    duk_size_t data_size = 0;
-    GLvoid *data = (GLvoid *)dukwebgl_get_buffer(ctx, 1, &data_size);
+    size_t data_size = 0;
+    GLvoid *data = (GLvoid *)qjs_get_buffer(ctx, argv[1], &data_size);
     if (!data) {
-        if (duk_is_number(ctx, 1)) {
-            data_size = (duk_size_t)duk_get_uint(ctx, 1);
+        // argv[1] が数値の場合はサイズ指定
+        double d;
+        if (JS_ToFloat64(ctx, &d, argv[1]) == 0 && !JS_IsObject(argv[1])) {
+            data_size = (size_t)d;
         }
     }
-    GLenum usage = (GLenum)duk_get_uint(ctx, 2);
+    GLenum usage = (GLenum)arg_uint(ctx, argv[2]);
 
     if (argc > 3) {
-        GLuint src_offset = (GLuint)duk_get_uint(ctx, 3);
+        uint32_t src_offset = arg_uint(ctx, argv[3]);
         data = (GLvoid*)((char*)data + src_offset);
         data_size -= src_offset;
         if (argc > 4) {
-            GLuint length = (GLuint)duk_get_uint(ctx, 4);
+            uint32_t length = arg_uint(ctx, argv[4]);
             if (length > 0 && length <= data_size) data_size = length;
         }
     }
     glBufferData(target, (GLsizeiptr)data_size, data, usage);
-    return 0;
+    return JS_UNDEFINED;
 }
 
-static duk_ret_t dukwebgl_bufferSubData(duk_context *ctx) {
-    int argc = duk_get_top(ctx);
-    GLenum target = (GLenum)duk_get_uint(ctx, 0);
-    GLintptr offset = (GLintptr)duk_get_uint(ctx, 1);
+static JSValue js_bufferSubData(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    GLenum target = (GLenum)arg_uint(ctx, argv[0]);
+    GLintptr offset = (GLintptr)arg_uint(ctx, argv[1]);
 
-    duk_size_t data_size = 0;
-    GLvoid *data = (GLvoid *)dukwebgl_get_buffer(ctx, 2, &data_size);
+    size_t data_size = 0;
+    GLvoid *data = (GLvoid *)qjs_get_buffer(ctx, argv[2], &data_size);
     if (argc > 3) {
-        GLuint src_offset = (GLuint)duk_get_uint(ctx, 3);
+        uint32_t src_offset = arg_uint(ctx, argv[3]);
         data = (GLvoid*)((char*)data + src_offset);
         data_size -= src_offset;
         if (argc > 4) {
-            GLuint length = (GLuint)duk_get_uint(ctx, 4);
+            uint32_t length = arg_uint(ctx, argv[4]);
             if (length > 0 && length <= data_size) data_size = length;
         }
     }
     glBufferSubData(target, offset, (GLsizeiptr)data_size, data);
-    return 0;
+    return JS_UNDEFINED;
 }
 
 // ============================================================
 // テクスチャ
 // ============================================================
 
-static duk_ret_t dukwebgl_createTexture(duk_context *ctx) {
+static JSValue js_createTexture(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     GLuint id;
     glGenTextures(1, &id);
-    dukwebgl_create_object_uint(ctx, id);
-    return 1;
+    return create_gl_object_uint(ctx, id);
 }
 
-static duk_ret_t dukwebgl_deleteTexture(duk_context *ctx) {
-    GLuint id = dukwebgl_get_object_id_uint(ctx, 0);
+static JSValue js_deleteTexture(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    GLuint id = get_gl_object_id_uint(ctx, argv[0]);
     glDeleteTextures(1, &id);
-    return 0;
+    return JS_UNDEFINED;
 }
 
-static duk_ret_t dukwebgl_isTexture(duk_context *ctx) {
-    GLuint id = dukwebgl_get_object_id_uint(ctx, 0);
-    duk_push_boolean(ctx, glIsTexture(id));
-    return 1;
+static JSValue js_isTexture(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    GLuint id = get_gl_object_id_uint(ctx, argv[0]);
+    return JS_NewBool(ctx, glIsTexture(id));
 }
 
-static duk_ret_t dukwebgl_bindTexture(duk_context *ctx) {
-    GLenum target = (GLenum)duk_get_uint(ctx, 0);
-    GLuint texture = dukwebgl_get_object_id_uint(ctx, 1);
+static JSValue js_bindTexture(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    GLenum target = (GLenum)arg_uint(ctx, argv[0]);
+    GLuint texture = get_gl_object_id_uint(ctx, argv[1]);
     glBindTexture(target, texture);
-    return 0;
+    return JS_UNDEFINED;
 }
 
-static duk_ret_t dukwebgl_activeTexture(duk_context *ctx) {
-    GLenum texture = (GLenum)duk_get_uint(ctx, 0);
+static JSValue js_activeTexture(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    GLenum texture = (GLenum)arg_uint(ctx, argv[0]);
     glActiveTexture(texture);
-    return 0;
+    return JS_UNDEFINED;
 }
 
-static duk_ret_t dukwebgl_texParameteri(duk_context *ctx) {
-    GLenum target = (GLenum)duk_get_uint(ctx, 0);
-    GLenum pname = (GLenum)duk_get_uint(ctx, 1);
-    GLint param = (GLint)duk_get_int(ctx, 2);
+static JSValue js_texParameteri(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    GLenum target = (GLenum)arg_uint(ctx, argv[0]);
+    GLenum pname = (GLenum)arg_uint(ctx, argv[1]);
+    GLint param = (GLint)arg_int(ctx, argv[2]);
     glTexParameteri(target, pname, param);
-    return 0;
+    return JS_UNDEFINED;
 }
 
-static duk_ret_t dukwebgl_texParameterf(duk_context *ctx) {
-    GLenum target = (GLenum)duk_get_uint(ctx, 0);
-    GLenum pname = (GLenum)duk_get_uint(ctx, 1);
-    GLfloat param = (GLfloat)duk_get_number(ctx, 2);
+static JSValue js_texParameterf(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    GLenum target = (GLenum)arg_uint(ctx, argv[0]);
+    GLenum pname = (GLenum)arg_uint(ctx, argv[1]);
+    GLfloat param = (GLfloat)arg_float64(ctx, argv[2]);
     glTexParameterf(target, pname, param);
-    return 0;
+    return JS_UNDEFINED;
 }
 
-static duk_ret_t dukwebgl_generateMipmap(duk_context *ctx) {
-    GLenum target = (GLenum)duk_get_uint(ctx, 0);
+static JSValue js_generateMipmap(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    GLenum target = (GLenum)arg_uint(ctx, argv[0]);
     glGenerateMipmap(target);
-    return 0;
+    return JS_UNDEFINED;
 }
 
-static duk_ret_t dukwebgl_texImage2D(duk_context *ctx) {
-    int argc = duk_get_top(ctx);
-    GLenum target = (GLenum)duk_get_uint(ctx, 0);
-    GLint level = (GLint)duk_get_int(ctx, 1);
-    GLint internalformat = (GLint)duk_get_int(ctx, 2);
+static JSValue js_texImage2D(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    GLenum target = (GLenum)arg_uint(ctx, argv[0]);
+    GLint level = (GLint)arg_int(ctx, argv[1]);
+    GLint internalformat = (GLint)arg_int(ctx, argv[2]);
 
     if (argc >= 9) {
         // texImage2D(target, level, internalformat, width, height, border, format, type, pixels)
-        GLsizei width = (GLsizei)duk_get_int(ctx, 3);
-        GLsizei height = (GLsizei)duk_get_int(ctx, 4);
-        GLint border = (GLint)duk_get_int(ctx, 5);
-        GLenum format = (GLenum)duk_get_uint(ctx, 6);
-        GLenum type = (GLenum)duk_get_uint(ctx, 7);
-        bool pushed = false;
-        void *pixels = dukwebgl_get_pixels(ctx, 8, &pushed);
+        GLsizei width = (GLsizei)arg_int(ctx, argv[3]);
+        GLsizei height = (GLsizei)arg_int(ctx, argv[4]);
+        GLint border = (GLint)arg_int(ctx, argv[5]);
+        GLenum format = (GLenum)arg_uint(ctx, argv[6]);
+        GLenum type = (GLenum)arg_uint(ctx, argv[7]);
+        void *pixels = qjs_get_pixels(ctx, argv[8]);
         glTexImage2D(target, level, internalformat, width, height, border, format, type, pixels);
-        if (pushed) duk_pop(ctx);
     } else if (argc >= 6) {
         // texImage2D(target, level, internalformat, format, type, source)
-        GLenum format = (GLenum)duk_get_uint(ctx, 3);
-        GLenum type = (GLenum)duk_get_uint(ctx, 4);
+        GLenum format = (GLenum)arg_uint(ctx, argv[3]);
+        GLenum type = (GLenum)arg_uint(ctx, argv[4]);
         GLsizei width = 0, height = 0;
         void *pixels = NULL;
-        bool pushed = false;
-        if (duk_is_object(ctx, 5)) {
-            if (duk_has_prop_string(ctx, 5, "width")) {
-                duk_get_prop_string(ctx, 5, "width");
-                width = (GLsizei)duk_get_int(ctx, -1); duk_pop(ctx);
-            }
-            if (duk_has_prop_string(ctx, 5, "height")) {
-                duk_get_prop_string(ctx, 5, "height");
-                height = (GLsizei)duk_get_int(ctx, -1); duk_pop(ctx);
-            }
-            pixels = dukwebgl_get_pixels(ctx, 5, &pushed);
+        if (JS_IsObject(argv[5])) {
+            JSValue wv = JS_GetPropertyStr(ctx, argv[5], "width");
+            if (!JS_IsUndefined(wv)) { width = (GLsizei)arg_int(ctx, wv); }
+            JS_FreeValue(ctx, wv);
+            JSValue hv = JS_GetPropertyStr(ctx, argv[5], "height");
+            if (!JS_IsUndefined(hv)) { height = (GLsizei)arg_int(ctx, hv); }
+            JS_FreeValue(ctx, hv);
+            pixels = qjs_get_pixels(ctx, argv[5]);
         }
         glTexImage2D(target, level, internalformat, width, height, 0, format, type, pixels);
-        if (pushed) duk_pop(ctx);
     }
-    return 0;
+    return JS_UNDEFINED;
 }
 
-static duk_ret_t dukwebgl_texSubImage2D(duk_context *ctx) {
-    int argc = duk_get_top(ctx);
-    GLenum target = (GLenum)duk_get_uint(ctx, 0);
-    GLint level = (GLint)duk_get_int(ctx, 1);
-    GLint xoffset = (GLint)duk_get_int(ctx, 2);
-    GLint yoffset = (GLint)duk_get_int(ctx, 3);
+static JSValue js_texSubImage2D(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    GLenum target = (GLenum)arg_uint(ctx, argv[0]);
+    GLint level = (GLint)arg_int(ctx, argv[1]);
+    GLint xoffset = (GLint)arg_int(ctx, argv[2]);
+    GLint yoffset = (GLint)arg_int(ctx, argv[3]);
 
     if (argc >= 9) {
         // texSubImage2D(target, level, xoffset, yoffset, width, height, format, type, pixels)
-        GLsizei width = (GLsizei)duk_get_int(ctx, 4);
-        GLsizei height = (GLsizei)duk_get_int(ctx, 5);
-        GLenum format = (GLenum)duk_get_uint(ctx, 6);
-        GLenum type = (GLenum)duk_get_uint(ctx, 7);
-        bool pushed = false;
-        void *pixels = dukwebgl_get_pixels(ctx, 8, &pushed);
+        GLsizei width = (GLsizei)arg_int(ctx, argv[4]);
+        GLsizei height = (GLsizei)arg_int(ctx, argv[5]);
+        GLenum format = (GLenum)arg_uint(ctx, argv[6]);
+        GLenum type = (GLenum)arg_uint(ctx, argv[7]);
+        void *pixels = qjs_get_pixels(ctx, argv[8]);
         glTexSubImage2D(target, level, xoffset, yoffset, width, height, format, type, pixels);
-        if (pushed) duk_pop(ctx);
     } else if (argc >= 7) {
         // texSubImage2D(target, level, xoffset, yoffset, format, type, source)
-        GLenum format = (GLenum)duk_get_uint(ctx, 4);
-        GLenum type = (GLenum)duk_get_uint(ctx, 5);
+        GLenum format = (GLenum)arg_uint(ctx, argv[4]);
+        GLenum type = (GLenum)arg_uint(ctx, argv[5]);
         GLsizei width = 0, height = 0;
         void *pixels = NULL;
-        bool pushed = false;
-        if (duk_is_object(ctx, 6)) {
-            if (duk_has_prop_string(ctx, 6, "width")) {
-                duk_get_prop_string(ctx, 6, "width");
-                width = (GLsizei)duk_get_int(ctx, -1); duk_pop(ctx);
-            }
-            if (duk_has_prop_string(ctx, 6, "height")) {
-                duk_get_prop_string(ctx, 6, "height");
-                height = (GLsizei)duk_get_int(ctx, -1); duk_pop(ctx);
-            }
-            pixels = dukwebgl_get_pixels(ctx, 6, &pushed);
+        if (JS_IsObject(argv[6])) {
+            JSValue wv = JS_GetPropertyStr(ctx, argv[6], "width");
+            if (!JS_IsUndefined(wv)) { width = (GLsizei)arg_int(ctx, wv); }
+            JS_FreeValue(ctx, wv);
+            JSValue hv = JS_GetPropertyStr(ctx, argv[6], "height");
+            if (!JS_IsUndefined(hv)) { height = (GLsizei)arg_int(ctx, hv); }
+            JS_FreeValue(ctx, hv);
+            pixels = qjs_get_pixels(ctx, argv[6]);
         }
         if (width > 0 && height > 0 && pixels) {
             glTexSubImage2D(target, level, xoffset, yoffset, width, height, format, type, pixels);
         }
-        if (pushed) duk_pop(ctx);
     }
-    return 0;
+    return JS_UNDEFINED;
 }
 
-static duk_ret_t dukwebgl_texImage3D(duk_context *ctx) {
-    GLenum target = (GLenum)duk_get_uint(ctx, 0);
-    GLint level = (GLint)duk_get_int(ctx, 1);
-    GLint internalformat = (GLint)duk_get_int(ctx, 2);
-    GLsizei width = (GLsizei)duk_get_int(ctx, 3);
-    GLsizei height = (GLsizei)duk_get_int(ctx, 4);
-    GLsizei depth = (GLsizei)duk_get_int(ctx, 5);
-    GLint border = (GLint)duk_get_int(ctx, 6);
-    GLenum format = (GLenum)duk_get_uint(ctx, 7);
-    GLenum type = (GLenum)duk_get_uint(ctx, 8);
-    void *pixels = dukwebgl_get_pixels(ctx, 9);
+static JSValue js_texImage3D(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    GLenum target = (GLenum)arg_uint(ctx, argv[0]);
+    GLint level = (GLint)arg_int(ctx, argv[1]);
+    GLint internalformat = (GLint)arg_int(ctx, argv[2]);
+    GLsizei width = (GLsizei)arg_int(ctx, argv[3]);
+    GLsizei height = (GLsizei)arg_int(ctx, argv[4]);
+    GLsizei depth = (GLsizei)arg_int(ctx, argv[5]);
+    GLint border = (GLint)arg_int(ctx, argv[6]);
+    GLenum format = (GLenum)arg_uint(ctx, argv[7]);
+    GLenum type = (GLenum)arg_uint(ctx, argv[8]);
+    void *pixels = qjs_get_pixels(ctx, argv[9]);
     glTexImage3D(target, level, internalformat, width, height, depth, border, format, type, pixels);
-    return 0;
+    return JS_UNDEFINED;
 }
 
-static duk_ret_t dukwebgl_copyTexImage2D(duk_context *ctx) {
+static JSValue js_copyTexImage2D(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     glCopyTexImage2D(
-        (GLenum)duk_get_uint(ctx, 0), (GLint)duk_get_int(ctx, 1),
-        (GLenum)duk_get_uint(ctx, 2),
-        (GLint)duk_get_int(ctx, 3), (GLint)duk_get_int(ctx, 4),
-        (GLsizei)duk_get_int(ctx, 5), (GLsizei)duk_get_int(ctx, 6),
-        (GLint)duk_get_int(ctx, 7));
-    return 0;
+        (GLenum)arg_uint(ctx, argv[0]), (GLint)arg_int(ctx, argv[1]),
+        (GLenum)arg_uint(ctx, argv[2]),
+        (GLint)arg_int(ctx, argv[3]), (GLint)arg_int(ctx, argv[4]),
+        (GLsizei)arg_int(ctx, argv[5]), (GLsizei)arg_int(ctx, argv[6]),
+        (GLint)arg_int(ctx, argv[7]));
+    return JS_UNDEFINED;
 }
 
-static duk_ret_t dukwebgl_copyTexSubImage2D(duk_context *ctx) {
+static JSValue js_copyTexSubImage2D(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     glCopyTexSubImage2D(
-        (GLenum)duk_get_uint(ctx, 0), (GLint)duk_get_int(ctx, 1),
-        (GLint)duk_get_int(ctx, 2), (GLint)duk_get_int(ctx, 3),
-        (GLint)duk_get_int(ctx, 4), (GLint)duk_get_int(ctx, 5),
-        (GLsizei)duk_get_int(ctx, 6), (GLsizei)duk_get_int(ctx, 7));
-    return 0;
+        (GLenum)arg_uint(ctx, argv[0]), (GLint)arg_int(ctx, argv[1]),
+        (GLint)arg_int(ctx, argv[2]), (GLint)arg_int(ctx, argv[3]),
+        (GLint)arg_int(ctx, argv[4]), (GLint)arg_int(ctx, argv[5]),
+        (GLsizei)arg_int(ctx, argv[6]), (GLsizei)arg_int(ctx, argv[7]));
+    return JS_UNDEFINED;
 }
 
-static duk_ret_t dukwebgl_pixelStorei(duk_context *ctx) {
-    GLenum pname = (GLenum)duk_get_uint(ctx, 0);
-    GLint param = (GLint)duk_get_int(ctx, 1);
+static JSValue js_pixelStorei(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    GLenum pname = (GLenum)arg_uint(ctx, argv[0]);
+    GLint param = (GLint)arg_int(ctx, argv[1]);
     // WebGL 固有パラメータ（GLES3 にはない）はスキップ
     // UNPACK_FLIP_Y_WEBGL (0x9240), UNPACK_PREMULTIPLY_ALPHA_WEBGL (0x9241)
-    if (pname == 0x9240 || pname == 0x9241) return 0;
+    if (pname == 0x9240 || pname == 0x9241) return JS_UNDEFINED;
     glPixelStorei(pname, param);
-    return 0;
+    return JS_UNDEFINED;
 }
 
-static duk_ret_t dukwebgl_readPixels(duk_context *ctx) {
-    GLint x = (GLint)duk_get_int(ctx, 0);
-    GLint y = (GLint)duk_get_int(ctx, 1);
-    GLsizei width = (GLsizei)duk_get_int(ctx, 2);
-    GLsizei height = (GLsizei)duk_get_int(ctx, 3);
-    GLenum format = (GLenum)duk_get_uint(ctx, 4);
-    GLenum type = (GLenum)duk_get_uint(ctx, 5);
-    void *pixels = duk_get_buffer_data(ctx, 6, NULL);
+static JSValue js_readPixels(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    GLint x = (GLint)arg_int(ctx, argv[0]);
+    GLint y = (GLint)arg_int(ctx, argv[1]);
+    GLsizei width = (GLsizei)arg_int(ctx, argv[2]);
+    GLsizei height = (GLsizei)arg_int(ctx, argv[3]);
+    GLenum format = (GLenum)arg_uint(ctx, argv[4]);
+    GLenum type = (GLenum)arg_uint(ctx, argv[5]);
+    void *pixels = qjs_get_buffer(ctx, argv[6], NULL);
     glReadPixels(x, y, width, height, format, type, pixels);
-    return 0;
+    return JS_UNDEFINED;
 }
 
 // ============================================================
 // フレームバッファ / レンダーバッファ
 // ============================================================
 
-static duk_ret_t dukwebgl_createFramebuffer(duk_context *ctx) {
+static JSValue js_createFramebuffer(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     GLuint id;
     glGenFramebuffers(1, &id);
-    dukwebgl_create_object_uint(ctx, id);
-    return 1;
+    return create_gl_object_uint(ctx, id);
 }
 
-static duk_ret_t dukwebgl_deleteFramebuffer(duk_context *ctx) {
-    GLuint id = dukwebgl_get_object_id_uint(ctx, 0);
+static JSValue js_deleteFramebuffer(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    GLuint id = get_gl_object_id_uint(ctx, argv[0]);
     glDeleteFramebuffers(1, &id);
-    return 0;
+    return JS_UNDEFINED;
 }
 
-static duk_ret_t dukwebgl_isFramebuffer(duk_context *ctx) {
-    GLuint id = dukwebgl_get_object_id_uint(ctx, 0);
-    duk_push_boolean(ctx, glIsFramebuffer(id));
-    return 1;
+static JSValue js_isFramebuffer(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    GLuint id = get_gl_object_id_uint(ctx, argv[0]);
+    return JS_NewBool(ctx, glIsFramebuffer(id));
 }
 
-static duk_ret_t dukwebgl_bindFramebuffer(duk_context *ctx) {
-    GLenum target = (GLenum)duk_get_uint(ctx, 0);
-    GLuint fb = dukwebgl_get_object_id_uint(ctx, 1);
+static JSValue js_bindFramebuffer(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    GLenum target = (GLenum)arg_uint(ctx, argv[0]);
+    GLuint fb = get_gl_object_id_uint(ctx, argv[1]);
     glBindFramebuffer(target, fb);
-    return 0;
+    return JS_UNDEFINED;
 }
 
-static duk_ret_t dukwebgl_framebufferTexture2D(duk_context *ctx) {
+static JSValue js_framebufferTexture2D(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     glFramebufferTexture2D(
-        (GLenum)duk_get_uint(ctx, 0), (GLenum)duk_get_uint(ctx, 1),
-        (GLenum)duk_get_uint(ctx, 2), dukwebgl_get_object_id_uint(ctx, 3),
-        (GLint)duk_get_int(ctx, 4));
-    return 0;
+        (GLenum)arg_uint(ctx, argv[0]), (GLenum)arg_uint(ctx, argv[1]),
+        (GLenum)arg_uint(ctx, argv[2]), get_gl_object_id_uint(ctx, argv[3]),
+        (GLint)arg_int(ctx, argv[4]));
+    return JS_UNDEFINED;
 }
 
-static duk_ret_t dukwebgl_framebufferRenderbuffer(duk_context *ctx) {
+static JSValue js_framebufferRenderbuffer(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     glFramebufferRenderbuffer(
-        (GLenum)duk_get_uint(ctx, 0), (GLenum)duk_get_uint(ctx, 1),
-        (GLenum)duk_get_uint(ctx, 2), dukwebgl_get_object_id_uint(ctx, 3));
-    return 0;
+        (GLenum)arg_uint(ctx, argv[0]), (GLenum)arg_uint(ctx, argv[1]),
+        (GLenum)arg_uint(ctx, argv[2]), get_gl_object_id_uint(ctx, argv[3]));
+    return JS_UNDEFINED;
 }
 
-static duk_ret_t dukwebgl_checkFramebufferStatus(duk_context *ctx) {
-    GLenum target = (GLenum)duk_get_uint(ctx, 0);
-    duk_push_uint(ctx, glCheckFramebufferStatus(target));
-    return 1;
+static JSValue js_checkFramebufferStatus(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    GLenum target = (GLenum)arg_uint(ctx, argv[0]);
+    return JS_NewUint32(ctx, glCheckFramebufferStatus(target));
 }
 
-static duk_ret_t dukwebgl_createRenderbuffer(duk_context *ctx) {
+static JSValue js_createRenderbuffer(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     GLuint id;
     glGenRenderbuffers(1, &id);
-    dukwebgl_create_object_uint(ctx, id);
-    return 1;
+    return create_gl_object_uint(ctx, id);
 }
 
-static duk_ret_t dukwebgl_deleteRenderbuffer(duk_context *ctx) {
-    GLuint id = dukwebgl_get_object_id_uint(ctx, 0);
+static JSValue js_deleteRenderbuffer(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    GLuint id = get_gl_object_id_uint(ctx, argv[0]);
     glDeleteRenderbuffers(1, &id);
-    return 0;
+    return JS_UNDEFINED;
 }
 
-static duk_ret_t dukwebgl_isRenderbuffer(duk_context *ctx) {
-    GLuint id = dukwebgl_get_object_id_uint(ctx, 0);
-    duk_push_boolean(ctx, glIsRenderbuffer(id));
-    return 1;
+static JSValue js_isRenderbuffer(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    GLuint id = get_gl_object_id_uint(ctx, argv[0]);
+    return JS_NewBool(ctx, glIsRenderbuffer(id));
 }
 
-static duk_ret_t dukwebgl_bindRenderbuffer(duk_context *ctx) {
-    GLenum target = (GLenum)duk_get_uint(ctx, 0);
-    GLuint rb = dukwebgl_get_object_id_uint(ctx, 1);
+static JSValue js_bindRenderbuffer(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    GLenum target = (GLenum)arg_uint(ctx, argv[0]);
+    GLuint rb = get_gl_object_id_uint(ctx, argv[1]);
     glBindRenderbuffer(target, rb);
-    return 0;
+    return JS_UNDEFINED;
 }
 
-static duk_ret_t dukwebgl_renderbufferStorage(duk_context *ctx) {
+static JSValue js_renderbufferStorage(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     glRenderbufferStorage(
-        (GLenum)duk_get_uint(ctx, 0), (GLenum)duk_get_uint(ctx, 1),
-        (GLsizei)duk_get_int(ctx, 2), (GLsizei)duk_get_int(ctx, 3));
-    return 0;
+        (GLenum)arg_uint(ctx, argv[0]), (GLenum)arg_uint(ctx, argv[1]),
+        (GLsizei)arg_int(ctx, argv[2]), (GLsizei)arg_int(ctx, argv[3]));
+    return JS_UNDEFINED;
 }
 
-static duk_ret_t dukwebgl_drawBuffers(duk_context *ctx) {
-    if (!duk_is_array(ctx, 0)) return DUK_RET_TYPE_ERROR;
-    duk_get_prop_string(ctx, 0, "length");
-    unsigned int length = duk_to_uint(ctx, -1);
-    duk_pop(ctx);
+static JSValue js_drawBuffers(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    if (!JS_IsArray(argv[0])) return JS_ThrowTypeError(ctx, "drawBuffers: expected array");
+    JSValue lenVal = JS_GetPropertyStr(ctx, argv[0], "length");
+    uint32_t length = 0;
+    JS_ToUint32(ctx, &length, lenVal);
+    JS_FreeValue(ctx, lenVal);
     GLenum *bufs = (GLenum*)malloc(sizeof(GLenum) * length);
-    if (!bufs) return DUK_RET_ERROR;
-    for (unsigned int i = 0; i < length; i++) {
-        duk_get_prop_index(ctx, 0, i);
-        bufs[i] = (GLenum)duk_to_uint(ctx, -1);
-        duk_pop(ctx);
+    if (!bufs) return JS_ThrowInternalError(ctx, "drawBuffers: alloc failed");
+    for (uint32_t i = 0; i < length; i++) {
+        JSValue el = JS_GetPropertyUint32(ctx, argv[0], i);
+        bufs[i] = (GLenum)arg_uint(ctx, el);
+        JS_FreeValue(ctx, el);
     }
     glDrawBuffers((GLsizei)length, bufs);
     free(bufs);
-    return 0;
+    return JS_UNDEFINED;
 }
 
-static duk_ret_t dukwebgl_blitFramebuffer(duk_context *ctx) {
+static JSValue js_blitFramebuffer(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     glBlitFramebuffer(
-        (GLint)duk_get_int(ctx, 0), (GLint)duk_get_int(ctx, 1),
-        (GLint)duk_get_int(ctx, 2), (GLint)duk_get_int(ctx, 3),
-        (GLint)duk_get_int(ctx, 4), (GLint)duk_get_int(ctx, 5),
-        (GLint)duk_get_int(ctx, 6), (GLint)duk_get_int(ctx, 7),
-        (GLbitfield)duk_get_uint(ctx, 8), (GLenum)duk_get_uint(ctx, 9));
-    return 0;
+        (GLint)arg_int(ctx, argv[0]), (GLint)arg_int(ctx, argv[1]),
+        (GLint)arg_int(ctx, argv[2]), (GLint)arg_int(ctx, argv[3]),
+        (GLint)arg_int(ctx, argv[4]), (GLint)arg_int(ctx, argv[5]),
+        (GLint)arg_int(ctx, argv[6]), (GLint)arg_int(ctx, argv[7]),
+        (GLbitfield)arg_uint(ctx, argv[8]), (GLenum)arg_uint(ctx, argv[9]));
+    return JS_UNDEFINED;
 }
 
 // ============================================================
 // VAO (WebGL 2.0 / GLES 3.0)
 // ============================================================
 
-static duk_ret_t dukwebgl_createVertexArray(duk_context *ctx) {
+static JSValue js_createVertexArray(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     GLuint id;
     glGenVertexArrays(1, &id);
-    dukwebgl_create_object_uint(ctx, id);
-    return 1;
+    return create_gl_object_uint(ctx, id);
 }
 
-static duk_ret_t dukwebgl_deleteVertexArray(duk_context *ctx) {
-    GLuint id = dukwebgl_get_object_id_uint(ctx, 0);
+static JSValue js_deleteVertexArray(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    GLuint id = get_gl_object_id_uint(ctx, argv[0]);
     glDeleteVertexArrays(1, &id);
-    return 0;
+    return JS_UNDEFINED;
 }
 
-static duk_ret_t dukwebgl_isVertexArray(duk_context *ctx) {
-    GLuint id = dukwebgl_get_object_id_uint(ctx, 0);
-    duk_push_boolean(ctx, glIsVertexArray(id));
-    return 1;
+static JSValue js_isVertexArray(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    GLuint id = get_gl_object_id_uint(ctx, argv[0]);
+    return JS_NewBool(ctx, glIsVertexArray(id));
 }
 
-static duk_ret_t dukwebgl_bindVertexArray(duk_context *ctx) {
-    GLuint vao = dukwebgl_get_object_id_uint(ctx, 0);
+static JSValue js_bindVertexArray(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    GLuint vao = get_gl_object_id_uint(ctx, argv[0]);
     glBindVertexArray(vao);
-    return 0;
+    return JS_UNDEFINED;
 }
 
 // ============================================================
 // 頂点属性
 // ============================================================
 
-static duk_ret_t dukwebgl_enableVertexAttribArray(duk_context *ctx) {
-    GLuint index = (GLuint)duk_get_uint(ctx, 0);
+static JSValue js_enableVertexAttribArray(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    GLuint index = arg_uint(ctx, argv[0]);
     glEnableVertexAttribArray(index);
-    return 0;
+    return JS_UNDEFINED;
 }
 
-static duk_ret_t dukwebgl_disableVertexAttribArray(duk_context *ctx) {
-    GLuint index = (GLuint)duk_get_uint(ctx, 0);
+static JSValue js_disableVertexAttribArray(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    GLuint index = arg_uint(ctx, argv[0]);
     glDisableVertexAttribArray(index);
-    return 0;
+    return JS_UNDEFINED;
 }
 
-static duk_ret_t dukwebgl_vertexAttribPointer(duk_context *ctx) {
-    GLuint index = (GLuint)duk_get_uint(ctx, 0);
-    GLint size = (GLint)duk_get_int(ctx, 1);
-    GLenum type = (GLenum)duk_get_uint(ctx, 2);
-    GLboolean normalized = duk_get_boolean(ctx, 3) ? GL_TRUE : GL_FALSE;
-    GLsizei stride = (GLsizei)duk_get_int(ctx, 4);
-    GLintptr offset = (GLintptr)duk_get_int(ctx, 5);
+static JSValue js_vertexAttribPointer(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    GLuint index = arg_uint(ctx, argv[0]);
+    GLint size = (GLint)arg_int(ctx, argv[1]);
+    GLenum type = (GLenum)arg_uint(ctx, argv[2]);
+    GLboolean normalized = JS_ToBool(ctx, argv[3]) ? GL_TRUE : GL_FALSE;
+    GLsizei stride = (GLsizei)arg_int(ctx, argv[4]);
+    GLintptr offset = (GLintptr)arg_int(ctx, argv[5]);
     glVertexAttribPointer(index, size, type, normalized, stride, (const void*)offset);
-    return 0;
+    return JS_UNDEFINED;
 }
 
-static duk_ret_t dukwebgl_vertexAttribIPointer(duk_context *ctx) {
-    GLuint index = (GLuint)duk_get_uint(ctx, 0);
-    GLint size = (GLint)duk_get_int(ctx, 1);
-    GLenum type = (GLenum)duk_get_uint(ctx, 2);
-    GLsizei stride = (GLsizei)duk_get_int(ctx, 3);
-    GLintptr offset = (GLintptr)duk_get_int(ctx, 4);
+static JSValue js_vertexAttribIPointer(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    GLuint index = arg_uint(ctx, argv[0]);
+    GLint size = (GLint)arg_int(ctx, argv[1]);
+    GLenum type = (GLenum)arg_uint(ctx, argv[2]);
+    GLsizei stride = (GLsizei)arg_int(ctx, argv[3]);
+    GLintptr offset = (GLintptr)arg_int(ctx, argv[4]);
     glVertexAttribIPointer(index, size, type, stride, (const void*)offset);
-    return 0;
+    return JS_UNDEFINED;
 }
 
-static duk_ret_t dukwebgl_vertexAttribDivisor(duk_context *ctx) {
-    GLuint index = (GLuint)duk_get_uint(ctx, 0);
-    GLuint divisor = (GLuint)duk_get_uint(ctx, 1);
+static JSValue js_vertexAttribDivisor(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    GLuint index = arg_uint(ctx, argv[0]);
+    GLuint divisor = arg_uint(ctx, argv[1]);
     glVertexAttribDivisor(index, divisor);
-    return 0;
+    return JS_UNDEFINED;
 }
 
-static duk_ret_t dukwebgl_vertexAttrib1f(duk_context *ctx) {
-    glVertexAttrib1f((GLuint)duk_get_uint(ctx, 0), (GLfloat)duk_get_number(ctx, 1));
-    return 0;
+static JSValue js_vertexAttrib1f(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    glVertexAttrib1f(arg_uint(ctx, argv[0]), (GLfloat)arg_float64(ctx, argv[1]));
+    return JS_UNDEFINED;
 }
-static duk_ret_t dukwebgl_vertexAttrib2f(duk_context *ctx) {
-    glVertexAttrib2f((GLuint)duk_get_uint(ctx, 0),
-        (GLfloat)duk_get_number(ctx, 1), (GLfloat)duk_get_number(ctx, 2));
-    return 0;
+static JSValue js_vertexAttrib2f(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    glVertexAttrib2f(arg_uint(ctx, argv[0]),
+        (GLfloat)arg_float64(ctx, argv[1]), (GLfloat)arg_float64(ctx, argv[2]));
+    return JS_UNDEFINED;
 }
-static duk_ret_t dukwebgl_vertexAttrib3f(duk_context *ctx) {
-    glVertexAttrib3f((GLuint)duk_get_uint(ctx, 0),
-        (GLfloat)duk_get_number(ctx, 1), (GLfloat)duk_get_number(ctx, 2),
-        (GLfloat)duk_get_number(ctx, 3));
-    return 0;
+static JSValue js_vertexAttrib3f(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    glVertexAttrib3f(arg_uint(ctx, argv[0]),
+        (GLfloat)arg_float64(ctx, argv[1]), (GLfloat)arg_float64(ctx, argv[2]),
+        (GLfloat)arg_float64(ctx, argv[3]));
+    return JS_UNDEFINED;
 }
-static duk_ret_t dukwebgl_vertexAttrib4f(duk_context *ctx) {
-    glVertexAttrib4f((GLuint)duk_get_uint(ctx, 0),
-        (GLfloat)duk_get_number(ctx, 1), (GLfloat)duk_get_number(ctx, 2),
-        (GLfloat)duk_get_number(ctx, 3), (GLfloat)duk_get_number(ctx, 4));
-    return 0;
+static JSValue js_vertexAttrib4f(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    glVertexAttrib4f(arg_uint(ctx, argv[0]),
+        (GLfloat)arg_float64(ctx, argv[1]), (GLfloat)arg_float64(ctx, argv[2]),
+        (GLfloat)arg_float64(ctx, argv[3]), (GLfloat)arg_float64(ctx, argv[4]));
+    return JS_UNDEFINED;
 }
 
 // ============================================================
 // Uniform
 // ============================================================
 
-static duk_ret_t dukwebgl_uniform1i(duk_context *ctx) {
-    GLint loc = dukwebgl_get_object_id_int(ctx, 0);
-    glUniform1i(loc, (GLint)duk_get_int(ctx, 1));
-    return 0;
+static JSValue js_uniform1i(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    GLint loc = get_gl_object_id_int(ctx, argv[0]);
+    glUniform1i(loc, (GLint)arg_int(ctx, argv[1]));
+    return JS_UNDEFINED;
 }
-static duk_ret_t dukwebgl_uniform2i(duk_context *ctx) {
-    GLint loc = dukwebgl_get_object_id_int(ctx, 0);
-    glUniform2i(loc, (GLint)duk_get_int(ctx, 1), (GLint)duk_get_int(ctx, 2));
-    return 0;
+static JSValue js_uniform2i(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    GLint loc = get_gl_object_id_int(ctx, argv[0]);
+    glUniform2i(loc, (GLint)arg_int(ctx, argv[1]), (GLint)arg_int(ctx, argv[2]));
+    return JS_UNDEFINED;
 }
-static duk_ret_t dukwebgl_uniform3i(duk_context *ctx) {
-    GLint loc = dukwebgl_get_object_id_int(ctx, 0);
-    glUniform3i(loc, (GLint)duk_get_int(ctx, 1), (GLint)duk_get_int(ctx, 2), (GLint)duk_get_int(ctx, 3));
-    return 0;
+static JSValue js_uniform3i(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    GLint loc = get_gl_object_id_int(ctx, argv[0]);
+    glUniform3i(loc, (GLint)arg_int(ctx, argv[1]), (GLint)arg_int(ctx, argv[2]), (GLint)arg_int(ctx, argv[3]));
+    return JS_UNDEFINED;
 }
-static duk_ret_t dukwebgl_uniform4i(duk_context *ctx) {
-    GLint loc = dukwebgl_get_object_id_int(ctx, 0);
-    glUniform4i(loc, (GLint)duk_get_int(ctx, 1), (GLint)duk_get_int(ctx, 2),
-        (GLint)duk_get_int(ctx, 3), (GLint)duk_get_int(ctx, 4));
-    return 0;
+static JSValue js_uniform4i(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    GLint loc = get_gl_object_id_int(ctx, argv[0]);
+    glUniform4i(loc, (GLint)arg_int(ctx, argv[1]), (GLint)arg_int(ctx, argv[2]),
+        (GLint)arg_int(ctx, argv[3]), (GLint)arg_int(ctx, argv[4]));
+    return JS_UNDEFINED;
 }
 
-static duk_ret_t dukwebgl_uniform1f(duk_context *ctx) {
-    GLint loc = dukwebgl_get_object_id_int(ctx, 0);
-    glUniform1f(loc, (GLfloat)duk_get_number(ctx, 1));
-    return 0;
+static JSValue js_uniform1f(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    GLint loc = get_gl_object_id_int(ctx, argv[0]);
+    glUniform1f(loc, (GLfloat)arg_float64(ctx, argv[1]));
+    return JS_UNDEFINED;
 }
-static duk_ret_t dukwebgl_uniform2f(duk_context *ctx) {
-    GLint loc = dukwebgl_get_object_id_int(ctx, 0);
-    glUniform2f(loc, (GLfloat)duk_get_number(ctx, 1), (GLfloat)duk_get_number(ctx, 2));
-    return 0;
+static JSValue js_uniform2f(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    GLint loc = get_gl_object_id_int(ctx, argv[0]);
+    glUniform2f(loc, (GLfloat)arg_float64(ctx, argv[1]), (GLfloat)arg_float64(ctx, argv[2]));
+    return JS_UNDEFINED;
 }
-static duk_ret_t dukwebgl_uniform3f(duk_context *ctx) {
-    GLint loc = dukwebgl_get_object_id_int(ctx, 0);
-    glUniform3f(loc, (GLfloat)duk_get_number(ctx, 1), (GLfloat)duk_get_number(ctx, 2),
-        (GLfloat)duk_get_number(ctx, 3));
-    return 0;
+static JSValue js_uniform3f(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    GLint loc = get_gl_object_id_int(ctx, argv[0]);
+    glUniform3f(loc, (GLfloat)arg_float64(ctx, argv[1]), (GLfloat)arg_float64(ctx, argv[2]),
+        (GLfloat)arg_float64(ctx, argv[3]));
+    return JS_UNDEFINED;
 }
-static duk_ret_t dukwebgl_uniform4f(duk_context *ctx) {
-    GLint loc = dukwebgl_get_object_id_int(ctx, 0);
-    glUniform4f(loc, (GLfloat)duk_get_number(ctx, 1), (GLfloat)duk_get_number(ctx, 2),
-        (GLfloat)duk_get_number(ctx, 3), (GLfloat)duk_get_number(ctx, 4));
-    return 0;
+static JSValue js_uniform4f(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    GLint loc = get_gl_object_id_int(ctx, argv[0]);
+    glUniform4f(loc, (GLfloat)arg_float64(ctx, argv[1]), (GLfloat)arg_float64(ctx, argv[2]),
+        (GLfloat)arg_float64(ctx, argv[3]), (GLfloat)arg_float64(ctx, argv[4]));
+    return JS_UNDEFINED;
 }
 
 // uniform*fv / uniform*iv
 #define DEFINE_UNIFORM_FV(name, cType, glFunc) \
-    static duk_ret_t dukwebgl_##name(duk_context *ctx) { \
-        GLint loc = dukwebgl_get_object_id_int(ctx, 0); \
-        duk_size_t count = 0; \
-        const cType *value = (const cType *)dukwebgl_get_buffer(ctx, 1, &count); \
+    static JSValue js_##name(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) { \
+        GLint loc = get_gl_object_id_int(ctx, argv[0]); \
+        size_t count = 0; \
+        const cType *value = (const cType *)qjs_get_buffer(ctx, argv[1], &count); \
         if (value && loc >= 0) { \
             glFunc(loc, (GLsizei)count, value); \
         } \
-        return 0; \
+        return JS_UNDEFINED; \
     }
 
 DEFINE_UNIFORM_FV(uniform1fv, GLfloat, glUniform1fv)
@@ -939,15 +892,15 @@ DEFINE_UNIFORM_FV(uniform4uiv, GLuint, glUniform4uiv)
 
 // uniformMatrix*fv
 #define DEFINE_UNIFORM_MATRIX(name, glFunc) \
-    static duk_ret_t dukwebgl_##name(duk_context *ctx) { \
-        GLint loc = dukwebgl_get_object_id_int(ctx, 0); \
-        GLboolean transpose = duk_get_boolean(ctx, 1) ? GL_TRUE : GL_FALSE; \
-        duk_size_t count = 0; \
-        const GLfloat *value = (const GLfloat *)dukwebgl_get_buffer(ctx, 2, &count); \
+    static JSValue js_##name(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) { \
+        GLint loc = get_gl_object_id_int(ctx, argv[0]); \
+        GLboolean transpose = JS_ToBool(ctx, argv[1]) ? GL_TRUE : GL_FALSE; \
+        size_t count = 0; \
+        const GLfloat *value = (const GLfloat *)qjs_get_buffer(ctx, argv[2], &count); \
         if (value && loc >= 0) { \
             glFunc(loc, 1, transpose, value); \
         } \
-        return 0; \
+        return JS_UNDEFINED; \
     }
 
 DEFINE_UNIFORM_MATRIX(uniformMatrix2fv, glUniformMatrix2fv)
@@ -964,202 +917,200 @@ DEFINE_UNIFORM_MATRIX(uniformMatrix4x3fv, glUniformMatrix4x3fv)
 // 描画
 // ============================================================
 
-static duk_ret_t dukwebgl_drawArrays(duk_context *ctx) {
-    GLenum mode = (GLenum)duk_get_uint(ctx, 0);
-    GLint first = (GLint)duk_get_int(ctx, 1);
-    GLsizei count = (GLsizei)duk_get_int(ctx, 2);
+static JSValue js_drawArrays(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    GLenum mode = (GLenum)arg_uint(ctx, argv[0]);
+    GLint first = (GLint)arg_int(ctx, argv[1]);
+    GLsizei count = (GLsizei)arg_int(ctx, argv[2]);
     glDrawArrays(mode, first, count);
-    return 0;
+    return JS_UNDEFINED;
 }
 
-static duk_ret_t dukwebgl_drawElements(duk_context *ctx) {
-    GLenum mode = (GLenum)duk_get_uint(ctx, 0);
-    GLsizei count = (GLsizei)duk_get_int(ctx, 1);
-    GLenum type = (GLenum)duk_get_uint(ctx, 2);
-    GLintptr offset = (GLintptr)duk_get_int(ctx, 3);
+static JSValue js_drawElements(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    GLenum mode = (GLenum)arg_uint(ctx, argv[0]);
+    GLsizei count = (GLsizei)arg_int(ctx, argv[1]);
+    GLenum type = (GLenum)arg_uint(ctx, argv[2]);
+    GLintptr offset = (GLintptr)arg_int(ctx, argv[3]);
     glDrawElements(mode, count, type, (const void*)offset);
-    return 0;
+    return JS_UNDEFINED;
 }
 
-static duk_ret_t dukwebgl_drawArraysInstanced(duk_context *ctx) {
-    GLenum mode = (GLenum)duk_get_uint(ctx, 0);
-    GLint first = (GLint)duk_get_int(ctx, 1);
-    GLsizei count = (GLsizei)duk_get_int(ctx, 2);
-    GLsizei instanceCount = (GLsizei)duk_get_int(ctx, 3);
+static JSValue js_drawArraysInstanced(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    GLenum mode = (GLenum)arg_uint(ctx, argv[0]);
+    GLint first = (GLint)arg_int(ctx, argv[1]);
+    GLsizei count = (GLsizei)arg_int(ctx, argv[2]);
+    GLsizei instanceCount = (GLsizei)arg_int(ctx, argv[3]);
     glDrawArraysInstanced(mode, first, count, instanceCount);
-    return 0;
+    return JS_UNDEFINED;
 }
 
-static duk_ret_t dukwebgl_drawElementsInstanced(duk_context *ctx) {
-    GLenum mode = (GLenum)duk_get_uint(ctx, 0);
-    GLsizei count = (GLsizei)duk_get_int(ctx, 1);
-    GLenum type = (GLenum)duk_get_uint(ctx, 2);
-    GLintptr offset = (GLintptr)duk_get_int(ctx, 3);
-    GLsizei instanceCount = (GLsizei)duk_get_int(ctx, 4);
+static JSValue js_drawElementsInstanced(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    GLenum mode = (GLenum)arg_uint(ctx, argv[0]);
+    GLsizei count = (GLsizei)arg_int(ctx, argv[1]);
+    GLenum type = (GLenum)arg_uint(ctx, argv[2]);
+    GLintptr offset = (GLintptr)arg_int(ctx, argv[3]);
+    GLsizei instanceCount = (GLsizei)arg_int(ctx, argv[4]);
     glDrawElementsInstanced(mode, count, type, (const void*)offset, instanceCount);
-    return 0;
+    return JS_UNDEFINED;
 }
 
 // ============================================================
 // ステート管理
 // ============================================================
 
-static duk_ret_t dukwebgl_enable(duk_context *ctx) {
-    glEnable((GLenum)duk_get_uint(ctx, 0));
-    return 0;
+static JSValue js_enable(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    glEnable((GLenum)arg_uint(ctx, argv[0]));
+    return JS_UNDEFINED;
 }
-static duk_ret_t dukwebgl_disable(duk_context *ctx) {
-    glDisable((GLenum)duk_get_uint(ctx, 0));
-    return 0;
+static JSValue js_disable(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    glDisable((GLenum)arg_uint(ctx, argv[0]));
+    return JS_UNDEFINED;
 }
-static duk_ret_t dukwebgl_isEnabled(duk_context *ctx) {
-    duk_push_boolean(ctx, glIsEnabled((GLenum)duk_get_uint(ctx, 0)));
-    return 1;
-}
-
-static duk_ret_t dukwebgl_viewport(duk_context *ctx) {
-    glViewport((GLint)duk_get_int(ctx, 0), (GLint)duk_get_int(ctx, 1),
-               (GLsizei)duk_get_int(ctx, 2), (GLsizei)duk_get_int(ctx, 3));
-    return 0;
-}
-static duk_ret_t dukwebgl_scissor(duk_context *ctx) {
-    glScissor((GLint)duk_get_int(ctx, 0), (GLint)duk_get_int(ctx, 1),
-              (GLsizei)duk_get_int(ctx, 2), (GLsizei)duk_get_int(ctx, 3));
-    return 0;
+static JSValue js_isEnabled(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    return JS_NewBool(ctx, glIsEnabled((GLenum)arg_uint(ctx, argv[0])));
 }
 
-static duk_ret_t dukwebgl_clearColor(duk_context *ctx) {
-    glClearColor((GLfloat)duk_get_number(ctx, 0), (GLfloat)duk_get_number(ctx, 1),
-                 (GLfloat)duk_get_number(ctx, 2), (GLfloat)duk_get_number(ctx, 3));
-    return 0;
+static JSValue js_viewport(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    glViewport((GLint)arg_int(ctx, argv[0]), (GLint)arg_int(ctx, argv[1]),
+               (GLsizei)arg_int(ctx, argv[2]), (GLsizei)arg_int(ctx, argv[3]));
+    return JS_UNDEFINED;
 }
-static duk_ret_t dukwebgl_clearDepth(duk_context *ctx) {
-    glClearDepthf((GLfloat)duk_get_number(ctx, 0));
-    return 0;
-}
-static duk_ret_t dukwebgl_clearStencil(duk_context *ctx) {
-    glClearStencil((GLint)duk_get_int(ctx, 0));
-    return 0;
-}
-static duk_ret_t dukwebgl_clear(duk_context *ctx) {
-    glClear((GLbitfield)duk_get_uint(ctx, 0));
-    return 0;
+static JSValue js_scissor(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    glScissor((GLint)arg_int(ctx, argv[0]), (GLint)arg_int(ctx, argv[1]),
+              (GLsizei)arg_int(ctx, argv[2]), (GLsizei)arg_int(ctx, argv[3]));
+    return JS_UNDEFINED;
 }
 
-static duk_ret_t dukwebgl_colorMask(duk_context *ctx) {
-    glColorMask(duk_get_boolean(ctx, 0), duk_get_boolean(ctx, 1),
-                duk_get_boolean(ctx, 2), duk_get_boolean(ctx, 3));
-    return 0;
+static JSValue js_clearColor(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    glClearColor((GLfloat)arg_float64(ctx, argv[0]), (GLfloat)arg_float64(ctx, argv[1]),
+                 (GLfloat)arg_float64(ctx, argv[2]), (GLfloat)arg_float64(ctx, argv[3]));
+    return JS_UNDEFINED;
 }
-static duk_ret_t dukwebgl_depthMask(duk_context *ctx) {
-    glDepthMask(duk_get_boolean(ctx, 0) ? GL_TRUE : GL_FALSE);
-    return 0;
+static JSValue js_clearDepth(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    glClearDepthf((GLfloat)arg_float64(ctx, argv[0]));
+    return JS_UNDEFINED;
 }
-static duk_ret_t dukwebgl_depthFunc(duk_context *ctx) {
-    glDepthFunc((GLenum)duk_get_uint(ctx, 0));
-    return 0;
+static JSValue js_clearStencil(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    glClearStencil((GLint)arg_int(ctx, argv[0]));
+    return JS_UNDEFINED;
 }
-static duk_ret_t dukwebgl_depthRange(duk_context *ctx) {
-    glDepthRangef((GLfloat)duk_get_number(ctx, 0), (GLfloat)duk_get_number(ctx, 1));
-    return 0;
-}
-
-static duk_ret_t dukwebgl_blendFunc(duk_context *ctx) {
-    glBlendFunc((GLenum)duk_get_uint(ctx, 0), (GLenum)duk_get_uint(ctx, 1));
-    return 0;
-}
-static duk_ret_t dukwebgl_blendFuncSeparate(duk_context *ctx) {
-    glBlendFuncSeparate((GLenum)duk_get_uint(ctx, 0), (GLenum)duk_get_uint(ctx, 1),
-                        (GLenum)duk_get_uint(ctx, 2), (GLenum)duk_get_uint(ctx, 3));
-    return 0;
-}
-static duk_ret_t dukwebgl_blendEquation(duk_context *ctx) {
-    glBlendEquation((GLenum)duk_get_uint(ctx, 0));
-    return 0;
-}
-static duk_ret_t dukwebgl_blendEquationSeparate(duk_context *ctx) {
-    glBlendEquationSeparate((GLenum)duk_get_uint(ctx, 0), (GLenum)duk_get_uint(ctx, 1));
-    return 0;
-}
-static duk_ret_t dukwebgl_blendColor(duk_context *ctx) {
-    glBlendColor((GLfloat)duk_get_number(ctx, 0), (GLfloat)duk_get_number(ctx, 1),
-                 (GLfloat)duk_get_number(ctx, 2), (GLfloat)duk_get_number(ctx, 3));
-    return 0;
+static JSValue js_clear(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    glClear((GLbitfield)arg_uint(ctx, argv[0]));
+    return JS_UNDEFINED;
 }
 
-static duk_ret_t dukwebgl_stencilFunc(duk_context *ctx) {
-    glStencilFunc((GLenum)duk_get_uint(ctx, 0), (GLint)duk_get_int(ctx, 1), (GLuint)duk_get_uint(ctx, 2));
-    return 0;
+static JSValue js_colorMask(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    glColorMask(JS_ToBool(ctx, argv[0]), JS_ToBool(ctx, argv[1]),
+                JS_ToBool(ctx, argv[2]), JS_ToBool(ctx, argv[3]));
+    return JS_UNDEFINED;
 }
-static duk_ret_t dukwebgl_stencilFuncSeparate(duk_context *ctx) {
-    glStencilFuncSeparate((GLenum)duk_get_uint(ctx, 0), (GLenum)duk_get_uint(ctx, 1),
-                          (GLint)duk_get_int(ctx, 2), (GLuint)duk_get_uint(ctx, 3));
-    return 0;
+static JSValue js_depthMask(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    glDepthMask(JS_ToBool(ctx, argv[0]) ? GL_TRUE : GL_FALSE);
+    return JS_UNDEFINED;
 }
-static duk_ret_t dukwebgl_stencilMask(duk_context *ctx) {
-    glStencilMask((GLuint)duk_get_uint(ctx, 0));
-    return 0;
+static JSValue js_depthFunc(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    glDepthFunc((GLenum)arg_uint(ctx, argv[0]));
+    return JS_UNDEFINED;
 }
-static duk_ret_t dukwebgl_stencilMaskSeparate(duk_context *ctx) {
-    glStencilMaskSeparate((GLenum)duk_get_uint(ctx, 0), (GLuint)duk_get_uint(ctx, 1));
-    return 0;
-}
-static duk_ret_t dukwebgl_stencilOp(duk_context *ctx) {
-    glStencilOp((GLenum)duk_get_uint(ctx, 0), (GLenum)duk_get_uint(ctx, 1), (GLenum)duk_get_uint(ctx, 2));
-    return 0;
-}
-static duk_ret_t dukwebgl_stencilOpSeparate(duk_context *ctx) {
-    glStencilOpSeparate((GLenum)duk_get_uint(ctx, 0), (GLenum)duk_get_uint(ctx, 1),
-                        (GLenum)duk_get_uint(ctx, 2), (GLenum)duk_get_uint(ctx, 3));
-    return 0;
+static JSValue js_depthRange(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    glDepthRangef((GLfloat)arg_float64(ctx, argv[0]), (GLfloat)arg_float64(ctx, argv[1]));
+    return JS_UNDEFINED;
 }
 
-static duk_ret_t dukwebgl_cullFace(duk_context *ctx) {
-    glCullFace((GLenum)duk_get_uint(ctx, 0));
-    return 0;
+static JSValue js_blendFunc(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    glBlendFunc((GLenum)arg_uint(ctx, argv[0]), (GLenum)arg_uint(ctx, argv[1]));
+    return JS_UNDEFINED;
 }
-static duk_ret_t dukwebgl_frontFace(duk_context *ctx) {
-    glFrontFace((GLenum)duk_get_uint(ctx, 0));
-    return 0;
+static JSValue js_blendFuncSeparate(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    glBlendFuncSeparate((GLenum)arg_uint(ctx, argv[0]), (GLenum)arg_uint(ctx, argv[1]),
+                        (GLenum)arg_uint(ctx, argv[2]), (GLenum)arg_uint(ctx, argv[3]));
+    return JS_UNDEFINED;
 }
-static duk_ret_t dukwebgl_lineWidth(duk_context *ctx) {
-    glLineWidth((GLfloat)duk_get_number(ctx, 0));
-    return 0;
+static JSValue js_blendEquation(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    glBlendEquation((GLenum)arg_uint(ctx, argv[0]));
+    return JS_UNDEFINED;
 }
-static duk_ret_t dukwebgl_polygonOffset(duk_context *ctx) {
-    glPolygonOffset((GLfloat)duk_get_number(ctx, 0), (GLfloat)duk_get_number(ctx, 1));
-    return 0;
+static JSValue js_blendEquationSeparate(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    glBlendEquationSeparate((GLenum)arg_uint(ctx, argv[0]), (GLenum)arg_uint(ctx, argv[1]));
+    return JS_UNDEFINED;
 }
-static duk_ret_t dukwebgl_sampleCoverage(duk_context *ctx) {
-    glSampleCoverage((GLfloat)duk_get_number(ctx, 0), duk_get_boolean(ctx, 1) ? GL_TRUE : GL_FALSE);
-    return 0;
-}
-
-static duk_ret_t dukwebgl_hint(duk_context *ctx) {
-    glHint((GLenum)duk_get_uint(ctx, 0), (GLenum)duk_get_uint(ctx, 1));
-    return 0;
+static JSValue js_blendColor(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    glBlendColor((GLfloat)arg_float64(ctx, argv[0]), (GLfloat)arg_float64(ctx, argv[1]),
+                 (GLfloat)arg_float64(ctx, argv[2]), (GLfloat)arg_float64(ctx, argv[3]));
+    return JS_UNDEFINED;
 }
 
-static duk_ret_t dukwebgl_flush(duk_context *ctx) {
+static JSValue js_stencilFunc(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    glStencilFunc((GLenum)arg_uint(ctx, argv[0]), (GLint)arg_int(ctx, argv[1]), arg_uint(ctx, argv[2]));
+    return JS_UNDEFINED;
+}
+static JSValue js_stencilFuncSeparate(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    glStencilFuncSeparate((GLenum)arg_uint(ctx, argv[0]), (GLenum)arg_uint(ctx, argv[1]),
+                          (GLint)arg_int(ctx, argv[2]), arg_uint(ctx, argv[3]));
+    return JS_UNDEFINED;
+}
+static JSValue js_stencilMask(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    glStencilMask(arg_uint(ctx, argv[0]));
+    return JS_UNDEFINED;
+}
+static JSValue js_stencilMaskSeparate(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    glStencilMaskSeparate((GLenum)arg_uint(ctx, argv[0]), arg_uint(ctx, argv[1]));
+    return JS_UNDEFINED;
+}
+static JSValue js_stencilOp(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    glStencilOp((GLenum)arg_uint(ctx, argv[0]), (GLenum)arg_uint(ctx, argv[1]), (GLenum)arg_uint(ctx, argv[2]));
+    return JS_UNDEFINED;
+}
+static JSValue js_stencilOpSeparate(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    glStencilOpSeparate((GLenum)arg_uint(ctx, argv[0]), (GLenum)arg_uint(ctx, argv[1]),
+                        (GLenum)arg_uint(ctx, argv[2]), (GLenum)arg_uint(ctx, argv[3]));
+    return JS_UNDEFINED;
+}
+
+static JSValue js_cullFace(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    glCullFace((GLenum)arg_uint(ctx, argv[0]));
+    return JS_UNDEFINED;
+}
+static JSValue js_frontFace(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    glFrontFace((GLenum)arg_uint(ctx, argv[0]));
+    return JS_UNDEFINED;
+}
+static JSValue js_lineWidth(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    glLineWidth((GLfloat)arg_float64(ctx, argv[0]));
+    return JS_UNDEFINED;
+}
+static JSValue js_polygonOffset(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    glPolygonOffset((GLfloat)arg_float64(ctx, argv[0]), (GLfloat)arg_float64(ctx, argv[1]));
+    return JS_UNDEFINED;
+}
+static JSValue js_sampleCoverage(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    glSampleCoverage((GLfloat)arg_float64(ctx, argv[0]), JS_ToBool(ctx, argv[1]) ? GL_TRUE : GL_FALSE);
+    return JS_UNDEFINED;
+}
+
+static JSValue js_hint(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    glHint((GLenum)arg_uint(ctx, argv[0]), (GLenum)arg_uint(ctx, argv[1]));
+    return JS_UNDEFINED;
+}
+
+static JSValue js_flush(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     glFlush();
-    return 0;
+    return JS_UNDEFINED;
 }
-static duk_ret_t dukwebgl_finish(duk_context *ctx) {
+static JSValue js_finish(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     glFinish();
-    return 0;
+    return JS_UNDEFINED;
 }
 
-static duk_ret_t dukwebgl_getError(duk_context *ctx) {
-    duk_push_uint(ctx, glGetError());
-    return 1;
+static JSValue js_getError(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    return JS_NewUint32(ctx, glGetError());
 }
 
 // ============================================================
 // getParameter
 // ============================================================
 
-static duk_ret_t dukwebgl_getParameter(duk_context *ctx) {
-    GLenum pname = (GLenum)duk_get_uint(ctx, 0);
+static JSValue js_getParameter(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    GLenum pname = (GLenum)arg_uint(ctx, argv[0]);
     switch (pname) {
     // GLenum returns
     case GL_ACTIVE_TEXTURE:
@@ -1183,8 +1134,7 @@ static duk_ret_t dukwebgl_getParameter(duk_context *ctx) {
     case GL_STENCIL_PASS_DEPTH_PASS:
     {
         GLint v = 0; glGetIntegerv(pname, &v);
-        duk_push_uint(ctx, (GLenum)v);
-        break;
+        return JS_NewUint32(ctx, (GLenum)v);
     }
     // GLint returns
     case GL_ALPHA_BITS:
@@ -1213,8 +1163,7 @@ static duk_ret_t dukwebgl_getParameter(duk_context *ctx) {
     case GL_UNPACK_ALIGNMENT:
     {
         GLint v = 0; glGetIntegerv(pname, &v);
-        duk_push_int(ctx, v);
-        break;
+        return JS_NewInt32(ctx, v);
     }
     // GLfloat returns
     case GL_DEPTH_CLEAR_VALUE:
@@ -1224,8 +1173,7 @@ static duk_ret_t dukwebgl_getParameter(duk_context *ctx) {
     case GL_SAMPLE_COVERAGE_VALUE:
     {
         GLfloat v = 0; glGetFloatv(pname, &v);
-        duk_push_number(ctx, v);
-        break;
+        return JS_NewFloat64(ctx, v);
     }
     // GLboolean returns
     case GL_BLEND:
@@ -1241,51 +1189,46 @@ static duk_ret_t dukwebgl_getParameter(duk_context *ctx) {
     case GL_STENCIL_TEST:
     {
         GLint v = 0; glGetIntegerv(pname, &v);
-        duk_push_boolean(ctx, v == GL_TRUE ? 1 : 0);
-        break;
+        return JS_NewBool(ctx, v == GL_TRUE ? 1 : 0);
     }
     // string returns
     case GL_VENDOR:
     case GL_RENDERER:
     case GL_VERSION:
     case GL_SHADING_LANGUAGE_VERSION:
-        duk_push_string(ctx, (const char*)glGetString(pname));
-        break;
-    // Int32Array (4要素) returns
+        return JS_NewString(ctx, (const char*)glGetString(pname));
+    // Int32Array (4要素) returns — plain JS array で返す
     case GL_VIEWPORT:
     case GL_SCISSOR_BOX:
     {
         GLint v[4] = {0};
         glGetIntegerv(pname, v);
-        void *buf = duk_push_buffer(ctx, sizeof(v), 0);
-        memcpy(buf, v, sizeof(v));
-        duk_push_buffer_object(ctx, -1, 0, sizeof(v), DUK_BUFOBJ_INT32ARRAY);
-        duk_remove(ctx, -2);
-        break;
+        JSValue arr = JS_NewArray(ctx);
+        for (int i = 0; i < 4; i++)
+            JS_SetPropertyUint32(ctx, arr, i, JS_NewInt32(ctx, v[i]));
+        return arr;
     }
-    // Float32Array (4要素) returns
+    // Float32Array (4要素) returns — plain JS array で返す
     case GL_COLOR_CLEAR_VALUE:
     case GL_BLEND_COLOR:
     case GL_DEPTH_RANGE:
     {
         GLfloat v[4] = {0};
         glGetFloatv(pname, v);
-        void *buf = duk_push_buffer(ctx, sizeof(v), 0);
-        memcpy(buf, v, sizeof(v));
-        duk_push_buffer_object(ctx, -1, 0, sizeof(v), DUK_BUFOBJ_FLOAT32ARRAY);
-        duk_remove(ctx, -2);
-        break;
+        JSValue arr = JS_NewArray(ctx);
+        for (int i = 0; i < 4; i++)
+            JS_SetPropertyUint32(ctx, arr, i, JS_NewFloat64(ctx, v[i]));
+        return arr;
     }
-    // Uint8Array (4要素) returns
+    // Uint8Array (4要素) returns — plain JS array で返す
     case GL_COLOR_WRITEMASK:
     {
         GLboolean v[4] = {0};
         glGetBooleanv(pname, v);
-        void *buf = duk_push_buffer(ctx, 4, 0);
-        for (int i = 0; i < 4; i++) ((uint8_t*)buf)[i] = v[i] ? 1 : 0;
-        duk_push_buffer_object(ctx, -1, 0, 4, DUK_BUFOBJ_UINT8ARRAY);
-        duk_remove(ctx, -2);
-        break;
+        JSValue arr = JS_NewArray(ctx);
+        for (int i = 0; i < 4; i++)
+            JS_SetPropertyUint32(ctx, arr, i, JS_NewBool(ctx, v[i] ? 1 : 0));
+        return arr;
     }
     // WebGL2 追加 GLint returns
     case GL_MAX_3D_TEXTURE_SIZE:
@@ -1302,8 +1245,7 @@ static duk_ret_t dukwebgl_getParameter(duk_context *ctx) {
     case GL_MAX_VARYING_COMPONENTS:
     {
         GLint v = 0; glGetIntegerv(pname, &v);
-        duk_push_int(ctx, v);
-        break;
+        return JS_NewInt32(ctx, v);
     }
     // バインディング参照 (object として返す)
     case GL_CURRENT_PROGRAM:
@@ -1315,9 +1257,8 @@ static duk_ret_t dukwebgl_getParameter(duk_context *ctx) {
     case GL_TEXTURE_BINDING_CUBE_MAP:
     {
         GLint v = 0; glGetIntegerv(pname, &v);
-        if (v == 0) { duk_push_null(ctx); }
-        else { dukwebgl_create_object_uint(ctx, (GLuint)v); }
-        break;
+        if (v == 0) return JS_NULL;
+        return create_gl_object_uint(ctx, (GLuint)v);
     }
     default:
     {
@@ -1325,225 +1266,220 @@ static duk_ret_t dukwebgl_getParameter(duk_context *ctx) {
         GLint v = 0;
         glGetIntegerv(pname, &v);
         if (glGetError() == GL_NO_ERROR) {
-            duk_push_int(ctx, v);
-        } else {
-            duk_push_undefined(ctx);
+            return JS_NewInt32(ctx, v);
         }
-        break;
+        return JS_UNDEFINED;
     }
     }
-    return 1;
 }
 
 // ============================================================
 // Uniform Block (WebGL2 / GLES3)
 // ============================================================
 
-static duk_ret_t dukwebgl_getUniformBlockIndex(duk_context *ctx) {
-    GLuint program = dukwebgl_get_object_id_uint(ctx, 0);
-    const char *name = duk_get_string(ctx, 1);
+static JSValue js_getUniformBlockIndex(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    GLuint program = get_gl_object_id_uint(ctx, argv[0]);
+    const char *name = JS_ToCString(ctx, argv[1]);
     GLuint idx = glGetUniformBlockIndex(program, name);
-    duk_push_uint(ctx, idx);
-    return 1;
+    JS_FreeCString(ctx, name);
+    return JS_NewUint32(ctx, idx);
 }
 
-static duk_ret_t dukwebgl_uniformBlockBinding(duk_context *ctx) {
-    GLuint program = dukwebgl_get_object_id_uint(ctx, 0);
-    GLuint blockIndex = (GLuint)duk_get_uint(ctx, 1);
-    GLuint blockBinding = (GLuint)duk_get_uint(ctx, 2);
+static JSValue js_uniformBlockBinding(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    GLuint program = get_gl_object_id_uint(ctx, argv[0]);
+    GLuint blockIndex = arg_uint(ctx, argv[1]);
+    GLuint blockBinding = arg_uint(ctx, argv[2]);
     glUniformBlockBinding(program, blockIndex, blockBinding);
-    return 0;
+    return JS_UNDEFINED;
 }
 
-static duk_ret_t dukwebgl_bindBufferBase(duk_context *ctx) {
-    GLenum target = (GLenum)duk_get_uint(ctx, 0);
-    GLuint index = (GLuint)duk_get_uint(ctx, 1);
-    GLuint buffer = dukwebgl_get_object_id_uint(ctx, 2);
+static JSValue js_bindBufferBase(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    GLenum target = (GLenum)arg_uint(ctx, argv[0]);
+    GLuint index = arg_uint(ctx, argv[1]);
+    GLuint buffer = get_gl_object_id_uint(ctx, argv[2]);
     glBindBufferBase(target, index, buffer);
-    return 0;
+    return JS_UNDEFINED;
 }
 
-static duk_ret_t dukwebgl_bindBufferRange(duk_context *ctx) {
-    GLenum target = (GLenum)duk_get_uint(ctx, 0);
-    GLuint index = (GLuint)duk_get_uint(ctx, 1);
-    GLuint buffer = dukwebgl_get_object_id_uint(ctx, 2);
-    GLintptr offset = (GLintptr)duk_get_int(ctx, 3);
-    GLsizeiptr size = (GLsizeiptr)duk_get_int(ctx, 4);
+static JSValue js_bindBufferRange(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    GLenum target = (GLenum)arg_uint(ctx, argv[0]);
+    GLuint index = arg_uint(ctx, argv[1]);
+    GLuint buffer = get_gl_object_id_uint(ctx, argv[2]);
+    GLintptr offset = (GLintptr)arg_int(ctx, argv[3]);
+    GLsizeiptr size = (GLsizeiptr)arg_int(ctx, argv[4]);
     glBindBufferRange(target, index, buffer, offset, size);
-    return 0;
+    return JS_UNDEFINED;
 }
 
 // ============================================================
 // Transform Feedback (WebGL2 / GLES3)
 // ============================================================
 
-static duk_ret_t dukwebgl_createTransformFeedback(duk_context *ctx) {
+static JSValue js_createTransformFeedback(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     GLuint id;
     glGenTransformFeedbacks(1, &id);
-    dukwebgl_create_object_uint(ctx, id);
-    return 1;
+    return create_gl_object_uint(ctx, id);
 }
 
-static duk_ret_t dukwebgl_deleteTransformFeedback(duk_context *ctx) {
-    GLuint id = dukwebgl_get_object_id_uint(ctx, 0);
+static JSValue js_deleteTransformFeedback(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    GLuint id = get_gl_object_id_uint(ctx, argv[0]);
     glDeleteTransformFeedbacks(1, &id);
-    return 0;
+    return JS_UNDEFINED;
 }
 
-static duk_ret_t dukwebgl_bindTransformFeedback(duk_context *ctx) {
-    GLenum target = (GLenum)duk_get_uint(ctx, 0);
-    GLuint id = dukwebgl_get_object_id_uint(ctx, 1);
+static JSValue js_bindTransformFeedback(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    GLenum target = (GLenum)arg_uint(ctx, argv[0]);
+    GLuint id = get_gl_object_id_uint(ctx, argv[1]);
     glBindTransformFeedback(target, id);
-    return 0;
+    return JS_UNDEFINED;
 }
 
-static duk_ret_t dukwebgl_beginTransformFeedback(duk_context *ctx) {
-    glBeginTransformFeedback((GLenum)duk_get_uint(ctx, 0));
-    return 0;
+static JSValue js_beginTransformFeedback(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    glBeginTransformFeedback((GLenum)arg_uint(ctx, argv[0]));
+    return JS_UNDEFINED;
 }
 
-static duk_ret_t dukwebgl_endTransformFeedback(duk_context *ctx) {
-    (void)ctx;
+static JSValue js_endTransformFeedback(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    (void)this_val; (void)argc; (void)argv;
     glEndTransformFeedback();
-    return 0;
+    return JS_UNDEFINED;
 }
 
-static duk_ret_t dukwebgl_transformFeedbackVaryings(duk_context *ctx) {
-    GLuint program = dukwebgl_get_object_id_uint(ctx, 0);
+static JSValue js_transformFeedbackVaryings(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    GLuint program = get_gl_object_id_uint(ctx, argv[0]);
     // arg1 is array of strings
-    if (!duk_is_array(ctx, 1)) return DUK_RET_TYPE_ERROR;
-    duk_get_prop_string(ctx, 1, "length");
-    GLsizei count = (GLsizei)duk_to_int(ctx, -1);
-    duk_pop(ctx);
+    if (!JS_IsArray(argv[1])) return JS_ThrowTypeError(ctx, "transformFeedbackVaryings: expected array");
+    JSValue lenVal = JS_GetPropertyStr(ctx, argv[1], "length");
+    int32_t count = 0;
+    JS_ToInt32(ctx, &count, lenVal);
+    JS_FreeValue(ctx, lenVal);
     const char **varyings = (const char**)malloc(sizeof(char*) * count);
-    if (!varyings) return DUK_RET_ERROR;
-    for (GLsizei i = 0; i < count; i++) {
-        duk_get_prop_index(ctx, 1, i);
-        varyings[i] = duk_to_string(ctx, -1);
+    if (!varyings) return JS_ThrowInternalError(ctx, "transformFeedbackVaryings: alloc failed");
+    for (int32_t i = 0; i < count; i++) {
+        JSValue el = JS_GetPropertyUint32(ctx, argv[1], i);
+        varyings[i] = JS_ToCString(ctx, el);
+        JS_FreeValue(ctx, el);
     }
-    GLenum bufferMode = (GLenum)duk_get_uint(ctx, 2);
+    GLenum bufferMode = (GLenum)arg_uint(ctx, argv[2]);
     glTransformFeedbackVaryings(program, count, varyings, bufferMode);
-    // pop all strings
-    for (GLsizei i = 0; i < count; i++) duk_pop(ctx);
+    // free all strings
+    for (int32_t i = 0; i < count; i++) JS_FreeCString(ctx, varyings[i]);
     free(varyings);
-    return 0;
+    return JS_UNDEFINED;
 }
 
 // ============================================================
 // Query (WebGL2 / GLES3)
 // ============================================================
 
-static duk_ret_t dukwebgl_createQuery(duk_context *ctx) {
+static JSValue js_createQuery(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     GLuint id;
     glGenQueries(1, &id);
-    dukwebgl_create_object_uint(ctx, id);
-    return 1;
+    return create_gl_object_uint(ctx, id);
 }
 
-static duk_ret_t dukwebgl_deleteQuery(duk_context *ctx) {
-    GLuint id = dukwebgl_get_object_id_uint(ctx, 0);
+static JSValue js_deleteQuery(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    GLuint id = get_gl_object_id_uint(ctx, argv[0]);
     glDeleteQueries(1, &id);
-    return 0;
+    return JS_UNDEFINED;
 }
 
-static duk_ret_t dukwebgl_beginQuery(duk_context *ctx) {
-    GLenum target = (GLenum)duk_get_uint(ctx, 0);
-    GLuint id = dukwebgl_get_object_id_uint(ctx, 1);
+static JSValue js_beginQuery(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    GLenum target = (GLenum)arg_uint(ctx, argv[0]);
+    GLuint id = get_gl_object_id_uint(ctx, argv[1]);
     glBeginQuery(target, id);
-    return 0;
+    return JS_UNDEFINED;
 }
 
-static duk_ret_t dukwebgl_endQuery(duk_context *ctx) {
-    glEndQuery((GLenum)duk_get_uint(ctx, 0));
-    return 0;
+static JSValue js_endQuery(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    glEndQuery((GLenum)arg_uint(ctx, argv[0]));
+    return JS_UNDEFINED;
 }
 
 // ============================================================
 // Sampler (WebGL2 / GLES3)
 // ============================================================
 
-static duk_ret_t dukwebgl_createSampler(duk_context *ctx) {
+static JSValue js_createSampler(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     GLuint id;
     glGenSamplers(1, &id);
-    dukwebgl_create_object_uint(ctx, id);
-    return 1;
+    return create_gl_object_uint(ctx, id);
 }
 
-static duk_ret_t dukwebgl_deleteSampler(duk_context *ctx) {
-    GLuint id = dukwebgl_get_object_id_uint(ctx, 0);
+static JSValue js_deleteSampler(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    GLuint id = get_gl_object_id_uint(ctx, argv[0]);
     glDeleteSamplers(1, &id);
-    return 0;
+    return JS_UNDEFINED;
 }
 
-static duk_ret_t dukwebgl_bindSampler(duk_context *ctx) {
-    GLuint unit = (GLuint)duk_get_uint(ctx, 0);
-    GLuint sampler = dukwebgl_get_object_id_uint(ctx, 1);
+static JSValue js_bindSampler(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    GLuint unit = arg_uint(ctx, argv[0]);
+    GLuint sampler = get_gl_object_id_uint(ctx, argv[1]);
     glBindSampler(unit, sampler);
-    return 0;
+    return JS_UNDEFINED;
 }
 
-static duk_ret_t dukwebgl_samplerParameteri(duk_context *ctx) {
-    GLuint sampler = dukwebgl_get_object_id_uint(ctx, 0);
-    GLenum pname = (GLenum)duk_get_uint(ctx, 1);
-    GLint param = (GLint)duk_get_int(ctx, 2);
+static JSValue js_samplerParameteri(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    GLuint sampler = get_gl_object_id_uint(ctx, argv[0]);
+    GLenum pname = (GLenum)arg_uint(ctx, argv[1]);
+    GLint param = (GLint)arg_int(ctx, argv[2]);
     glSamplerParameteri(sampler, pname, param);
-    return 0;
+    return JS_UNDEFINED;
 }
 
-static duk_ret_t dukwebgl_samplerParameterf(duk_context *ctx) {
-    GLuint sampler = dukwebgl_get_object_id_uint(ctx, 0);
-    GLenum pname = (GLenum)duk_get_uint(ctx, 1);
-    GLfloat param = (GLfloat)duk_get_number(ctx, 2);
+static JSValue js_samplerParameterf(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    GLuint sampler = get_gl_object_id_uint(ctx, argv[0]);
+    GLenum pname = (GLenum)arg_uint(ctx, argv[1]);
+    GLfloat param = (GLfloat)arg_float64(ctx, argv[2]);
     glSamplerParameterf(sampler, pname, param);
-    return 0;
+    return JS_UNDEFINED;
 }
 
 // ============================================================
 // clearBuffer (WebGL2 / GLES3)
 // ============================================================
 
-static duk_ret_t dukwebgl_clearBufferfv(duk_context *ctx) {
-    GLenum buffer = (GLenum)duk_get_uint(ctx, 0);
-    GLint drawbuffer = (GLint)duk_get_int(ctx, 1);
-    const GLfloat *value = (const GLfloat *)duk_get_buffer_data(ctx, 2, NULL);
+static JSValue js_clearBufferfv(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    GLenum buffer = (GLenum)arg_uint(ctx, argv[0]);
+    GLint drawbuffer = (GLint)arg_int(ctx, argv[1]);
+    const GLfloat *value = (const GLfloat *)qjs_get_buffer(ctx, argv[2], NULL);
     glClearBufferfv(buffer, drawbuffer, value);
-    return 0;
+    return JS_UNDEFINED;
 }
 
-static duk_ret_t dukwebgl_clearBufferiv(duk_context *ctx) {
-    GLenum buffer = (GLenum)duk_get_uint(ctx, 0);
-    GLint drawbuffer = (GLint)duk_get_int(ctx, 1);
-    const GLint *value = (const GLint *)duk_get_buffer_data(ctx, 2, NULL);
+static JSValue js_clearBufferiv(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    GLenum buffer = (GLenum)arg_uint(ctx, argv[0]);
+    GLint drawbuffer = (GLint)arg_int(ctx, argv[1]);
+    const GLint *value = (const GLint *)qjs_get_buffer(ctx, argv[2], NULL);
     glClearBufferiv(buffer, drawbuffer, value);
-    return 0;
+    return JS_UNDEFINED;
 }
 
-static duk_ret_t dukwebgl_clearBufferuiv(duk_context *ctx) {
-    GLenum buffer = (GLenum)duk_get_uint(ctx, 0);
-    GLint drawbuffer = (GLint)duk_get_int(ctx, 1);
-    const GLuint *value = (const GLuint *)duk_get_buffer_data(ctx, 2, NULL);
+static JSValue js_clearBufferuiv(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    GLenum buffer = (GLenum)arg_uint(ctx, argv[0]);
+    GLint drawbuffer = (GLint)arg_int(ctx, argv[1]);
+    const GLuint *value = (const GLuint *)qjs_get_buffer(ctx, argv[2], NULL);
     glClearBufferuiv(buffer, drawbuffer, value);
-    return 0;
+    return JS_UNDEFINED;
 }
 
-static duk_ret_t dukwebgl_clearBufferfi(duk_context *ctx) {
-    GLenum buffer = (GLenum)duk_get_uint(ctx, 0);
-    GLint drawbuffer = (GLint)duk_get_int(ctx, 1);
-    GLfloat depth = (GLfloat)duk_get_number(ctx, 2);
-    GLint stencil = (GLint)duk_get_int(ctx, 3);
+static JSValue js_clearBufferfi(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    GLenum buffer = (GLenum)arg_uint(ctx, argv[0]);
+    GLint drawbuffer = (GLint)arg_int(ctx, argv[1]);
+    GLfloat depth = (GLfloat)arg_float64(ctx, argv[2]);
+    GLint stencil = (GLint)arg_int(ctx, argv[3]);
     glClearBufferfi(buffer, drawbuffer, depth, stencil);
-    return 0;
+    return JS_UNDEFINED;
 }
 
 // ============================================================
 // 定数登録
 // ============================================================
 
-static void dukwebgl_bind_constants(duk_context *ctx) {
+static void bind_constants(JSContext *ctx, JSValue gl) {
 
 #define PUSH_CONST(name) \
-    duk_push_uint(ctx, GL_##name); \
-    duk_put_prop_string(ctx, -2, #name)
+    JS_SetPropertyStr(ctx, gl, #name, JS_NewUint32(ctx, GL_##name))
 
     // データ型
     PUSH_CONST(BYTE);
@@ -1940,11 +1876,10 @@ static void dukwebgl_bind_constants(duk_context *ctx) {
     PUSH_CONST(VERTEX_ARRAY_BINDING);
 
     // WebGL 固有定数（GLES ヘッダに無い）
-    duk_push_uint(ctx, 0x9240); duk_put_prop_string(ctx, -2, "UNPACK_FLIP_Y_WEBGL");
-    duk_push_uint(ctx, 0x9241); duk_put_prop_string(ctx, -2, "UNPACK_PREMULTIPLY_ALPHA_WEBGL");
+    JS_SetPropertyStr(ctx, gl, "UNPACK_FLIP_Y_WEBGL", JS_NewUint32(ctx, 0x9240));
+    JS_SetPropertyStr(ctx, gl, "UNPACK_PREMULTIPLY_ALPHA_WEBGL", JS_NewUint32(ctx, 0x9241));
 
-    // OES_element_index_uint
-    PUSH_CONST(UNSIGNED_INT);
+    // OES_element_index_uint (UNSIGNED_INT は既に上で登録済み)
 
     // sync
     PUSH_CONST(SYNC_GPU_COMMANDS_COMPLETE);
@@ -1960,224 +1895,227 @@ static void dukwebgl_bind_constants(duk_context *ctx) {
 // バインド登録: dukwebgl_bind
 // ============================================================
 
-#define BIND_FUNC(jsName, cFunc, nargs) \
-    duk_push_c_function(ctx, cFunc, nargs); \
-    duk_put_prop_string(ctx, -2, #jsName)
+#define BIND_FUNC(gl, jsName, cFunc, nargs) \
+    JS_SetPropertyStr(ctx, gl, #jsName, JS_NewCFunction(ctx, cFunc, #jsName, nargs))
 
-void dukwebgl_bind(duk_context *ctx) {
-    // gl オブジェクトを直接作成（prototype 経由ではなく直接プロパティ設定）
-    duk_push_object(ctx);
+void dukwebgl_bind(JSContext *ctx) {
+    // gl オブジェクトを直接作成
+    JSValue gl = JS_NewObject(ctx);
 
     // 定数登録
-    dukwebgl_bind_constants(ctx);
+    bind_constants(ctx, gl);
 
     // コンテキスト情報
-    BIND_FUNC(getContextAttributes, dukwebgl_getContextAttributes, 0);
-    BIND_FUNC(isContextLost, dukwebgl_isContextLost, 0);
-    BIND_FUNC(getSupportedExtensions, dukwebgl_getSupportedExtensions, 0);
-    BIND_FUNC(getExtension, dukwebgl_getExtension, 1);
-    BIND_FUNC(getParameter, dukwebgl_getParameter, 1);
-    BIND_FUNC(getError, dukwebgl_getError, 0);
+    BIND_FUNC(gl, getContextAttributes, js_getContextAttributes, 0);
+    BIND_FUNC(gl, isContextLost, js_isContextLost, 0);
+    BIND_FUNC(gl, getSupportedExtensions, js_getSupportedExtensions, 0);
+    BIND_FUNC(gl, getExtension, js_getExtension, 1);
+    BIND_FUNC(gl, getParameter, js_getParameter, 1);
+    BIND_FUNC(gl, getError, js_getError, 0);
 
     // シェーダ
-    BIND_FUNC(createShader, dukwebgl_createShader, 1);
-    BIND_FUNC(deleteShader, dukwebgl_deleteShader, 1);
-    BIND_FUNC(shaderSource, dukwebgl_shaderSource, 2);
-    BIND_FUNC(compileShader, dukwebgl_compileShader, 1);
-    BIND_FUNC(getShaderParameter, dukwebgl_getShaderParameter, 2);
-    BIND_FUNC(getShaderInfoLog, dukwebgl_getShaderInfoLog, 1);
-    BIND_FUNC(getShaderSource, dukwebgl_getShaderSource, 1);
-    BIND_FUNC(isShader, dukwebgl_isShader, 1);
+    BIND_FUNC(gl, createShader, js_createShader, 1);
+    BIND_FUNC(gl, deleteShader, js_deleteShader, 1);
+    BIND_FUNC(gl, shaderSource, js_shaderSource, 2);
+    BIND_FUNC(gl, compileShader, js_compileShader, 1);
+    BIND_FUNC(gl, getShaderParameter, js_getShaderParameter, 2);
+    BIND_FUNC(gl, getShaderInfoLog, js_getShaderInfoLog, 1);
+    BIND_FUNC(gl, getShaderSource, js_getShaderSource, 1);
+    BIND_FUNC(gl, isShader, js_isShader, 1);
 
     // プログラム
-    BIND_FUNC(createProgram, dukwebgl_createProgram, 0);
-    BIND_FUNC(deleteProgram, dukwebgl_deleteProgram, 1);
-    BIND_FUNC(attachShader, dukwebgl_attachShader, 2);
-    BIND_FUNC(detachShader, dukwebgl_detachShader, 2);
-    BIND_FUNC(linkProgram, dukwebgl_linkProgram, 1);
-    BIND_FUNC(useProgram, dukwebgl_useProgram, 1);
-    BIND_FUNC(validateProgram, dukwebgl_validateProgram, 1);
-    BIND_FUNC(isProgram, dukwebgl_isProgram, 1);
-    BIND_FUNC(getProgramParameter, dukwebgl_getProgramParameter, 2);
-    BIND_FUNC(getProgramInfoLog, dukwebgl_getProgramInfoLog, 1);
-    BIND_FUNC(bindAttribLocation, dukwebgl_bindAttribLocation, 3);
-    BIND_FUNC(getAttribLocation, dukwebgl_getAttribLocation, 2);
-    BIND_FUNC(getUniformLocation, dukwebgl_getUniformLocation, 2);
-    BIND_FUNC(getActiveAttrib, dukwebgl_getActiveAttrib, 2);
-    BIND_FUNC(getActiveUniform, dukwebgl_getActiveUniform, 2);
+    BIND_FUNC(gl, createProgram, js_createProgram, 0);
+    BIND_FUNC(gl, deleteProgram, js_deleteProgram, 1);
+    BIND_FUNC(gl, attachShader, js_attachShader, 2);
+    BIND_FUNC(gl, detachShader, js_detachShader, 2);
+    BIND_FUNC(gl, linkProgram, js_linkProgram, 1);
+    BIND_FUNC(gl, useProgram, js_useProgram, 1);
+    BIND_FUNC(gl, validateProgram, js_validateProgram, 1);
+    BIND_FUNC(gl, isProgram, js_isProgram, 1);
+    BIND_FUNC(gl, getProgramParameter, js_getProgramParameter, 2);
+    BIND_FUNC(gl, getProgramInfoLog, js_getProgramInfoLog, 1);
+    BIND_FUNC(gl, bindAttribLocation, js_bindAttribLocation, 3);
+    BIND_FUNC(gl, getAttribLocation, js_getAttribLocation, 2);
+    BIND_FUNC(gl, getUniformLocation, js_getUniformLocation, 2);
+    BIND_FUNC(gl, getActiveAttrib, js_getActiveAttrib, 2);
+    BIND_FUNC(gl, getActiveUniform, js_getActiveUniform, 2);
 
     // バッファ
-    BIND_FUNC(createBuffer, dukwebgl_createBuffer, 0);
-    BIND_FUNC(deleteBuffer, dukwebgl_deleteBuffer, 1);
-    BIND_FUNC(isBuffer, dukwebgl_isBuffer, 1);
-    BIND_FUNC(bindBuffer, dukwebgl_bindBuffer, 2);
-    BIND_FUNC(bufferData, dukwebgl_bufferData, DUK_VARARGS);
-    BIND_FUNC(bufferSubData, dukwebgl_bufferSubData, DUK_VARARGS);
+    BIND_FUNC(gl, createBuffer, js_createBuffer, 0);
+    BIND_FUNC(gl, deleteBuffer, js_deleteBuffer, 1);
+    BIND_FUNC(gl, isBuffer, js_isBuffer, 1);
+    BIND_FUNC(gl, bindBuffer, js_bindBuffer, 2);
+    BIND_FUNC(gl, bufferData, js_bufferData, 5);
+    BIND_FUNC(gl, bufferSubData, js_bufferSubData, 5);
 
     // テクスチャ
-    BIND_FUNC(createTexture, dukwebgl_createTexture, 0);
-    BIND_FUNC(deleteTexture, dukwebgl_deleteTexture, 1);
-    BIND_FUNC(isTexture, dukwebgl_isTexture, 1);
-    BIND_FUNC(bindTexture, dukwebgl_bindTexture, 2);
-    BIND_FUNC(activeTexture, dukwebgl_activeTexture, 1);
-    BIND_FUNC(texParameteri, dukwebgl_texParameteri, 3);
-    BIND_FUNC(texParameterf, dukwebgl_texParameterf, 3);
-    BIND_FUNC(generateMipmap, dukwebgl_generateMipmap, 1);
-    BIND_FUNC(texImage2D, dukwebgl_texImage2D, DUK_VARARGS);
-    BIND_FUNC(texSubImage2D, dukwebgl_texSubImage2D, DUK_VARARGS);
-    BIND_FUNC(texImage3D, dukwebgl_texImage3D, DUK_VARARGS);
-    BIND_FUNC(copyTexImage2D, dukwebgl_copyTexImage2D, 8);
-    BIND_FUNC(copyTexSubImage2D, dukwebgl_copyTexSubImage2D, 8);
-    BIND_FUNC(pixelStorei, dukwebgl_pixelStorei, 2);
-    BIND_FUNC(readPixels, dukwebgl_readPixels, 7);
+    BIND_FUNC(gl, createTexture, js_createTexture, 0);
+    BIND_FUNC(gl, deleteTexture, js_deleteTexture, 1);
+    BIND_FUNC(gl, isTexture, js_isTexture, 1);
+    BIND_FUNC(gl, bindTexture, js_bindTexture, 2);
+    BIND_FUNC(gl, activeTexture, js_activeTexture, 1);
+    BIND_FUNC(gl, texParameteri, js_texParameteri, 3);
+    BIND_FUNC(gl, texParameterf, js_texParameterf, 3);
+    BIND_FUNC(gl, generateMipmap, js_generateMipmap, 1);
+    BIND_FUNC(gl, texImage2D, js_texImage2D, 10);
+    BIND_FUNC(gl, texSubImage2D, js_texSubImage2D, 10);
+    BIND_FUNC(gl, texImage3D, js_texImage3D, 10);
+    BIND_FUNC(gl, copyTexImage2D, js_copyTexImage2D, 8);
+    BIND_FUNC(gl, copyTexSubImage2D, js_copyTexSubImage2D, 8);
+    BIND_FUNC(gl, pixelStorei, js_pixelStorei, 2);
+    BIND_FUNC(gl, readPixels, js_readPixels, 7);
 
     // フレームバッファ / レンダーバッファ
-    BIND_FUNC(createFramebuffer, dukwebgl_createFramebuffer, 0);
-    BIND_FUNC(deleteFramebuffer, dukwebgl_deleteFramebuffer, 1);
-    BIND_FUNC(isFramebuffer, dukwebgl_isFramebuffer, 1);
-    BIND_FUNC(bindFramebuffer, dukwebgl_bindFramebuffer, 2);
-    BIND_FUNC(framebufferTexture2D, dukwebgl_framebufferTexture2D, 5);
-    BIND_FUNC(framebufferRenderbuffer, dukwebgl_framebufferRenderbuffer, 4);
-    BIND_FUNC(checkFramebufferStatus, dukwebgl_checkFramebufferStatus, 1);
-    BIND_FUNC(createRenderbuffer, dukwebgl_createRenderbuffer, 0);
-    BIND_FUNC(deleteRenderbuffer, dukwebgl_deleteRenderbuffer, 1);
-    BIND_FUNC(isRenderbuffer, dukwebgl_isRenderbuffer, 1);
-    BIND_FUNC(bindRenderbuffer, dukwebgl_bindRenderbuffer, 2);
-    BIND_FUNC(renderbufferStorage, dukwebgl_renderbufferStorage, 4);
-    BIND_FUNC(drawBuffers, dukwebgl_drawBuffers, 1);
-    BIND_FUNC(blitFramebuffer, dukwebgl_blitFramebuffer, 10);
+    BIND_FUNC(gl, createFramebuffer, js_createFramebuffer, 0);
+    BIND_FUNC(gl, deleteFramebuffer, js_deleteFramebuffer, 1);
+    BIND_FUNC(gl, isFramebuffer, js_isFramebuffer, 1);
+    BIND_FUNC(gl, bindFramebuffer, js_bindFramebuffer, 2);
+    BIND_FUNC(gl, framebufferTexture2D, js_framebufferTexture2D, 5);
+    BIND_FUNC(gl, framebufferRenderbuffer, js_framebufferRenderbuffer, 4);
+    BIND_FUNC(gl, checkFramebufferStatus, js_checkFramebufferStatus, 1);
+    BIND_FUNC(gl, createRenderbuffer, js_createRenderbuffer, 0);
+    BIND_FUNC(gl, deleteRenderbuffer, js_deleteRenderbuffer, 1);
+    BIND_FUNC(gl, isRenderbuffer, js_isRenderbuffer, 1);
+    BIND_FUNC(gl, bindRenderbuffer, js_bindRenderbuffer, 2);
+    BIND_FUNC(gl, renderbufferStorage, js_renderbufferStorage, 4);
+    BIND_FUNC(gl, drawBuffers, js_drawBuffers, 1);
+    BIND_FUNC(gl, blitFramebuffer, js_blitFramebuffer, 10);
 
     // VAO
-    BIND_FUNC(createVertexArray, dukwebgl_createVertexArray, 0);
-    BIND_FUNC(deleteVertexArray, dukwebgl_deleteVertexArray, 1);
-    BIND_FUNC(isVertexArray, dukwebgl_isVertexArray, 1);
-    BIND_FUNC(bindVertexArray, dukwebgl_bindVertexArray, 1);
+    BIND_FUNC(gl, createVertexArray, js_createVertexArray, 0);
+    BIND_FUNC(gl, deleteVertexArray, js_deleteVertexArray, 1);
+    BIND_FUNC(gl, isVertexArray, js_isVertexArray, 1);
+    BIND_FUNC(gl, bindVertexArray, js_bindVertexArray, 1);
 
     // 頂点属性
-    BIND_FUNC(enableVertexAttribArray, dukwebgl_enableVertexAttribArray, 1);
-    BIND_FUNC(disableVertexAttribArray, dukwebgl_disableVertexAttribArray, 1);
-    BIND_FUNC(vertexAttribPointer, dukwebgl_vertexAttribPointer, 6);
-    BIND_FUNC(vertexAttribIPointer, dukwebgl_vertexAttribIPointer, 5);
-    BIND_FUNC(vertexAttribDivisor, dukwebgl_vertexAttribDivisor, 2);
-    BIND_FUNC(vertexAttrib1f, dukwebgl_vertexAttrib1f, 2);
-    BIND_FUNC(vertexAttrib2f, dukwebgl_vertexAttrib2f, 3);
-    BIND_FUNC(vertexAttrib3f, dukwebgl_vertexAttrib3f, 4);
-    BIND_FUNC(vertexAttrib4f, dukwebgl_vertexAttrib4f, 5);
+    BIND_FUNC(gl, enableVertexAttribArray, js_enableVertexAttribArray, 1);
+    BIND_FUNC(gl, disableVertexAttribArray, js_disableVertexAttribArray, 1);
+    BIND_FUNC(gl, vertexAttribPointer, js_vertexAttribPointer, 6);
+    BIND_FUNC(gl, vertexAttribIPointer, js_vertexAttribIPointer, 5);
+    BIND_FUNC(gl, vertexAttribDivisor, js_vertexAttribDivisor, 2);
+    BIND_FUNC(gl, vertexAttrib1f, js_vertexAttrib1f, 2);
+    BIND_FUNC(gl, vertexAttrib2f, js_vertexAttrib2f, 3);
+    BIND_FUNC(gl, vertexAttrib3f, js_vertexAttrib3f, 4);
+    BIND_FUNC(gl, vertexAttrib4f, js_vertexAttrib4f, 5);
 
     // Uniform (scalar)
-    BIND_FUNC(uniform1i, dukwebgl_uniform1i, 2);
-    BIND_FUNC(uniform2i, dukwebgl_uniform2i, 3);
-    BIND_FUNC(uniform3i, dukwebgl_uniform3i, 4);
-    BIND_FUNC(uniform4i, dukwebgl_uniform4i, 5);
-    BIND_FUNC(uniform1f, dukwebgl_uniform1f, 2);
-    BIND_FUNC(uniform2f, dukwebgl_uniform2f, 3);
-    BIND_FUNC(uniform3f, dukwebgl_uniform3f, 4);
-    BIND_FUNC(uniform4f, dukwebgl_uniform4f, 5);
+    BIND_FUNC(gl, uniform1i, js_uniform1i, 2);
+    BIND_FUNC(gl, uniform2i, js_uniform2i, 3);
+    BIND_FUNC(gl, uniform3i, js_uniform3i, 4);
+    BIND_FUNC(gl, uniform4i, js_uniform4i, 5);
+    BIND_FUNC(gl, uniform1f, js_uniform1f, 2);
+    BIND_FUNC(gl, uniform2f, js_uniform2f, 3);
+    BIND_FUNC(gl, uniform3f, js_uniform3f, 4);
+    BIND_FUNC(gl, uniform4f, js_uniform4f, 5);
 
     // Uniform (vector)
-    BIND_FUNC(uniform1fv, dukwebgl_uniform1fv, 2);
-    BIND_FUNC(uniform2fv, dukwebgl_uniform2fv, 2);
-    BIND_FUNC(uniform3fv, dukwebgl_uniform3fv, 2);
-    BIND_FUNC(uniform4fv, dukwebgl_uniform4fv, 2);
-    BIND_FUNC(uniform1iv, dukwebgl_uniform1iv, 2);
-    BIND_FUNC(uniform2iv, dukwebgl_uniform2iv, 2);
-    BIND_FUNC(uniform3iv, dukwebgl_uniform3iv, 2);
-    BIND_FUNC(uniform4iv, dukwebgl_uniform4iv, 2);
-    BIND_FUNC(uniform1uiv, dukwebgl_uniform1uiv, 2);
-    BIND_FUNC(uniform2uiv, dukwebgl_uniform2uiv, 2);
-    BIND_FUNC(uniform3uiv, dukwebgl_uniform3uiv, 2);
-    BIND_FUNC(uniform4uiv, dukwebgl_uniform4uiv, 2);
+    BIND_FUNC(gl, uniform1fv, js_uniform1fv, 2);
+    BIND_FUNC(gl, uniform2fv, js_uniform2fv, 2);
+    BIND_FUNC(gl, uniform3fv, js_uniform3fv, 2);
+    BIND_FUNC(gl, uniform4fv, js_uniform4fv, 2);
+    BIND_FUNC(gl, uniform1iv, js_uniform1iv, 2);
+    BIND_FUNC(gl, uniform2iv, js_uniform2iv, 2);
+    BIND_FUNC(gl, uniform3iv, js_uniform3iv, 2);
+    BIND_FUNC(gl, uniform4iv, js_uniform4iv, 2);
+    BIND_FUNC(gl, uniform1uiv, js_uniform1uiv, 2);
+    BIND_FUNC(gl, uniform2uiv, js_uniform2uiv, 2);
+    BIND_FUNC(gl, uniform3uiv, js_uniform3uiv, 2);
+    BIND_FUNC(gl, uniform4uiv, js_uniform4uiv, 2);
 
     // Uniform (matrix)
-    BIND_FUNC(uniformMatrix2fv, dukwebgl_uniformMatrix2fv, DUK_VARARGS);
-    BIND_FUNC(uniformMatrix3fv, dukwebgl_uniformMatrix3fv, DUK_VARARGS);
-    BIND_FUNC(uniformMatrix4fv, dukwebgl_uniformMatrix4fv, DUK_VARARGS);
-    BIND_FUNC(uniformMatrix2x3fv, dukwebgl_uniformMatrix2x3fv, DUK_VARARGS);
-    BIND_FUNC(uniformMatrix2x4fv, dukwebgl_uniformMatrix2x4fv, DUK_VARARGS);
-    BIND_FUNC(uniformMatrix3x2fv, dukwebgl_uniformMatrix3x2fv, DUK_VARARGS);
-    BIND_FUNC(uniformMatrix3x4fv, dukwebgl_uniformMatrix3x4fv, DUK_VARARGS);
-    BIND_FUNC(uniformMatrix4x2fv, dukwebgl_uniformMatrix4x2fv, DUK_VARARGS);
-    BIND_FUNC(uniformMatrix4x3fv, dukwebgl_uniformMatrix4x3fv, DUK_VARARGS);
+    BIND_FUNC(gl, uniformMatrix2fv, js_uniformMatrix2fv, 3);
+    BIND_FUNC(gl, uniformMatrix3fv, js_uniformMatrix3fv, 3);
+    BIND_FUNC(gl, uniformMatrix4fv, js_uniformMatrix4fv, 3);
+    BIND_FUNC(gl, uniformMatrix2x3fv, js_uniformMatrix2x3fv, 3);
+    BIND_FUNC(gl, uniformMatrix2x4fv, js_uniformMatrix2x4fv, 3);
+    BIND_FUNC(gl, uniformMatrix3x2fv, js_uniformMatrix3x2fv, 3);
+    BIND_FUNC(gl, uniformMatrix3x4fv, js_uniformMatrix3x4fv, 3);
+    BIND_FUNC(gl, uniformMatrix4x2fv, js_uniformMatrix4x2fv, 3);
+    BIND_FUNC(gl, uniformMatrix4x3fv, js_uniformMatrix4x3fv, 3);
 
     // 描画
-    BIND_FUNC(drawArrays, dukwebgl_drawArrays, 3);
-    BIND_FUNC(drawElements, dukwebgl_drawElements, 4);
-    BIND_FUNC(drawArraysInstanced, dukwebgl_drawArraysInstanced, 4);
-    BIND_FUNC(drawElementsInstanced, dukwebgl_drawElementsInstanced, 5);
+    BIND_FUNC(gl, drawArrays, js_drawArrays, 3);
+    BIND_FUNC(gl, drawElements, js_drawElements, 4);
+    BIND_FUNC(gl, drawArraysInstanced, js_drawArraysInstanced, 4);
+    BIND_FUNC(gl, drawElementsInstanced, js_drawElementsInstanced, 5);
 
     // ステート
-    BIND_FUNC(enable, dukwebgl_enable, 1);
-    BIND_FUNC(disable, dukwebgl_disable, 1);
-    BIND_FUNC(isEnabled, dukwebgl_isEnabled, 1);
-    BIND_FUNC(viewport, dukwebgl_viewport, 4);
-    BIND_FUNC(scissor, dukwebgl_scissor, 4);
-    BIND_FUNC(clearColor, dukwebgl_clearColor, 4);
-    BIND_FUNC(clearDepth, dukwebgl_clearDepth, 1);
-    BIND_FUNC(clearStencil, dukwebgl_clearStencil, 1);
-    BIND_FUNC(clear, dukwebgl_clear, 1);
-    BIND_FUNC(colorMask, dukwebgl_colorMask, 4);
-    BIND_FUNC(depthMask, dukwebgl_depthMask, 1);
-    BIND_FUNC(depthFunc, dukwebgl_depthFunc, 1);
-    BIND_FUNC(depthRange, dukwebgl_depthRange, 2);
-    BIND_FUNC(blendFunc, dukwebgl_blendFunc, 2);
-    BIND_FUNC(blendFuncSeparate, dukwebgl_blendFuncSeparate, 4);
-    BIND_FUNC(blendEquation, dukwebgl_blendEquation, 1);
-    BIND_FUNC(blendEquationSeparate, dukwebgl_blendEquationSeparate, 2);
-    BIND_FUNC(blendColor, dukwebgl_blendColor, 4);
-    BIND_FUNC(stencilFunc, dukwebgl_stencilFunc, 3);
-    BIND_FUNC(stencilFuncSeparate, dukwebgl_stencilFuncSeparate, 4);
-    BIND_FUNC(stencilMask, dukwebgl_stencilMask, 1);
-    BIND_FUNC(stencilMaskSeparate, dukwebgl_stencilMaskSeparate, 2);
-    BIND_FUNC(stencilOp, dukwebgl_stencilOp, 3);
-    BIND_FUNC(stencilOpSeparate, dukwebgl_stencilOpSeparate, 4);
-    BIND_FUNC(cullFace, dukwebgl_cullFace, 1);
-    BIND_FUNC(frontFace, dukwebgl_frontFace, 1);
-    BIND_FUNC(lineWidth, dukwebgl_lineWidth, 1);
-    BIND_FUNC(polygonOffset, dukwebgl_polygonOffset, 2);
-    BIND_FUNC(sampleCoverage, dukwebgl_sampleCoverage, 2);
-    BIND_FUNC(hint, dukwebgl_hint, 2);
-    BIND_FUNC(flush, dukwebgl_flush, 0);
-    BIND_FUNC(finish, dukwebgl_finish, 0);
+    BIND_FUNC(gl, enable, js_enable, 1);
+    BIND_FUNC(gl, disable, js_disable, 1);
+    BIND_FUNC(gl, isEnabled, js_isEnabled, 1);
+    BIND_FUNC(gl, viewport, js_viewport, 4);
+    BIND_FUNC(gl, scissor, js_scissor, 4);
+    BIND_FUNC(gl, clearColor, js_clearColor, 4);
+    BIND_FUNC(gl, clearDepth, js_clearDepth, 1);
+    BIND_FUNC(gl, clearStencil, js_clearStencil, 1);
+    BIND_FUNC(gl, clear, js_clear, 1);
+    BIND_FUNC(gl, colorMask, js_colorMask, 4);
+    BIND_FUNC(gl, depthMask, js_depthMask, 1);
+    BIND_FUNC(gl, depthFunc, js_depthFunc, 1);
+    BIND_FUNC(gl, depthRange, js_depthRange, 2);
+    BIND_FUNC(gl, blendFunc, js_blendFunc, 2);
+    BIND_FUNC(gl, blendFuncSeparate, js_blendFuncSeparate, 4);
+    BIND_FUNC(gl, blendEquation, js_blendEquation, 1);
+    BIND_FUNC(gl, blendEquationSeparate, js_blendEquationSeparate, 2);
+    BIND_FUNC(gl, blendColor, js_blendColor, 4);
+    BIND_FUNC(gl, stencilFunc, js_stencilFunc, 3);
+    BIND_FUNC(gl, stencilFuncSeparate, js_stencilFuncSeparate, 4);
+    BIND_FUNC(gl, stencilMask, js_stencilMask, 1);
+    BIND_FUNC(gl, stencilMaskSeparate, js_stencilMaskSeparate, 2);
+    BIND_FUNC(gl, stencilOp, js_stencilOp, 3);
+    BIND_FUNC(gl, stencilOpSeparate, js_stencilOpSeparate, 4);
+    BIND_FUNC(gl, cullFace, js_cullFace, 1);
+    BIND_FUNC(gl, frontFace, js_frontFace, 1);
+    BIND_FUNC(gl, lineWidth, js_lineWidth, 1);
+    BIND_FUNC(gl, polygonOffset, js_polygonOffset, 2);
+    BIND_FUNC(gl, sampleCoverage, js_sampleCoverage, 2);
+    BIND_FUNC(gl, hint, js_hint, 2);
+    BIND_FUNC(gl, flush, js_flush, 0);
+    BIND_FUNC(gl, finish, js_finish, 0);
 
     // clearBuffer (WebGL2)
-    BIND_FUNC(clearBufferfv, dukwebgl_clearBufferfv, DUK_VARARGS);
-    BIND_FUNC(clearBufferiv, dukwebgl_clearBufferiv, DUK_VARARGS);
-    BIND_FUNC(clearBufferuiv, dukwebgl_clearBufferuiv, DUK_VARARGS);
-    BIND_FUNC(clearBufferfi, dukwebgl_clearBufferfi, 4);
+    BIND_FUNC(gl, clearBufferfv, js_clearBufferfv, 3);
+    BIND_FUNC(gl, clearBufferiv, js_clearBufferiv, 3);
+    BIND_FUNC(gl, clearBufferuiv, js_clearBufferuiv, 3);
+    BIND_FUNC(gl, clearBufferfi, js_clearBufferfi, 4);
 
     // Uniform Block
-    BIND_FUNC(getUniformBlockIndex, dukwebgl_getUniformBlockIndex, 2);
-    BIND_FUNC(uniformBlockBinding, dukwebgl_uniformBlockBinding, 3);
-    BIND_FUNC(bindBufferBase, dukwebgl_bindBufferBase, 3);
-    BIND_FUNC(bindBufferRange, dukwebgl_bindBufferRange, 5);
+    BIND_FUNC(gl, getUniformBlockIndex, js_getUniformBlockIndex, 2);
+    BIND_FUNC(gl, uniformBlockBinding, js_uniformBlockBinding, 3);
+    BIND_FUNC(gl, bindBufferBase, js_bindBufferBase, 3);
+    BIND_FUNC(gl, bindBufferRange, js_bindBufferRange, 5);
 
     // Transform Feedback
-    BIND_FUNC(createTransformFeedback, dukwebgl_createTransformFeedback, 0);
-    BIND_FUNC(deleteTransformFeedback, dukwebgl_deleteTransformFeedback, 1);
-    BIND_FUNC(bindTransformFeedback, dukwebgl_bindTransformFeedback, 2);
-    BIND_FUNC(beginTransformFeedback, dukwebgl_beginTransformFeedback, 1);
-    BIND_FUNC(endTransformFeedback, dukwebgl_endTransformFeedback, 0);
-    BIND_FUNC(transformFeedbackVaryings, dukwebgl_transformFeedbackVaryings, 3);
+    BIND_FUNC(gl, createTransformFeedback, js_createTransformFeedback, 0);
+    BIND_FUNC(gl, deleteTransformFeedback, js_deleteTransformFeedback, 1);
+    BIND_FUNC(gl, bindTransformFeedback, js_bindTransformFeedback, 2);
+    BIND_FUNC(gl, beginTransformFeedback, js_beginTransformFeedback, 1);
+    BIND_FUNC(gl, endTransformFeedback, js_endTransformFeedback, 0);
+    BIND_FUNC(gl, transformFeedbackVaryings, js_transformFeedbackVaryings, 3);
 
     // Query
-    BIND_FUNC(createQuery, dukwebgl_createQuery, 0);
-    BIND_FUNC(deleteQuery, dukwebgl_deleteQuery, 1);
-    BIND_FUNC(beginQuery, dukwebgl_beginQuery, 2);
-    BIND_FUNC(endQuery, dukwebgl_endQuery, 1);
+    BIND_FUNC(gl, createQuery, js_createQuery, 0);
+    BIND_FUNC(gl, deleteQuery, js_deleteQuery, 1);
+    BIND_FUNC(gl, beginQuery, js_beginQuery, 2);
+    BIND_FUNC(gl, endQuery, js_endQuery, 1);
 
     // Sampler
-    BIND_FUNC(createSampler, dukwebgl_createSampler, 0);
-    BIND_FUNC(deleteSampler, dukwebgl_deleteSampler, 1);
-    BIND_FUNC(bindSampler, dukwebgl_bindSampler, 2);
-    BIND_FUNC(samplerParameteri, dukwebgl_samplerParameteri, 3);
-    BIND_FUNC(samplerParameterf, dukwebgl_samplerParameterf, 3);
+    BIND_FUNC(gl, createSampler, js_createSampler, 0);
+    BIND_FUNC(gl, deleteSampler, js_deleteSampler, 1);
+    BIND_FUNC(gl, bindSampler, js_bindSampler, 2);
+    BIND_FUNC(gl, samplerParameteri, js_samplerParameteri, 3);
+    BIND_FUNC(gl, samplerParameterf, js_samplerParameterf, 3);
 
     // gl としてグローバル登録
-    duk_put_global_string(ctx, "gl");
+    JSValue global = JS_GetGlobalObject(ctx);
+    JS_SetPropertyStr(ctx, global, "gl", gl);
 
     // WebGL2RenderingContext コンストラクタ（互換性のため）
-    duk_eval_string(ctx, "(function WebGL2RenderingContext(){})");
-    duk_put_global_string(ctx, "WebGL2RenderingContext");
+    const char *ctor_src = "(function WebGL2RenderingContext(){})";
+    JSValue ctor = JS_Eval(ctx, ctor_src, strlen(ctor_src), "<webgl>", JS_EVAL_TYPE_GLOBAL);
+    JS_SetPropertyStr(ctx, global, "WebGL2RenderingContext", ctor);
+
+    JS_FreeValue(ctx, global);
 }
 
 #undef BIND_FUNC

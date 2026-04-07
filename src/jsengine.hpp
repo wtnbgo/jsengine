@@ -1,10 +1,8 @@
 #pragma once
+#include <quickjs.h>
 #include <cstdint>
 #include <string>
 
-// forward declarations
-struct duk_hthread;
-typedef struct duk_hthread duk_context;
 union SDL_Event;
 
 class JsEngine {
@@ -32,20 +30,21 @@ public:
     // SDL3 のファイル関数経由で JS ファイルを読み込み実行
     bool loadFile(const char *path);
 
-    duk_context* getContext() const { return ctx_; }
+    JSContext* getContext() const { return ctx_; }
 
     static JsEngine* getInstance() { return instance_; }
 
 private:
-    duk_context* ctx_;
+    JSRuntime* rt_;
+    JSContext* ctx_;
     std::string basePath_;
 
     static JsEngine* instance_;
 
     // イベントディスパッチヘルパー
-    void dispatchEvent(const char *type);
-    void pushKeyboardEvent(const SDL_Event *event, const char *type);
-    void pushMouseEvent(const SDL_Event *event, const char *type);
-    void pushWheelEvent(const SDL_Event *event);
-    void pushTouchEvent(const SDL_Event *event, const char *type);
+    void dispatchEvent(const char *type, JSValue event_obj);
+    JSValue pushKeyboardEvent(const SDL_Event *event, const char *type);
+    JSValue pushMouseEvent(const SDL_Event *event, const char *type);
+    JSValue pushWheelEvent(const SDL_Event *event);
+    JSValue pushTouchEvent(const SDL_Event *event, const char *type);
 };

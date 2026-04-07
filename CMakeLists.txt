@@ -62,9 +62,10 @@ FetchContent_MakeAvailable(SDL3_image)
 add_subdirectory(glad ${CMAKE_CURRENT_BINARY_DIR}/glad)
 
 # ----------------------------------------------------
-# duktape（自前ビルド）
+# QuickJS-ng (vcpkg)
 # ----------------------------------------------------
 
+find_package(qjs CONFIG REQUIRED)
 
 # ----------------------------------------------------
 # thorvg + (freetype vcpkg) + harfbuzz 
@@ -134,7 +135,6 @@ set(SOURCES
 	src/dukwebgl.cpp
 	src/webaudio.cpp
 	src/canvas2d.cpp
-	src/duktape/duktape.c
 	src/audio/AudioEngine.cpp
 	src/audio/AudioStream.cpp
 	src/main.cpp
@@ -158,7 +158,6 @@ add_executable(${PROJECT_NAME}
 
 target_include_directories(${PROJECT_NAME} PRIVATE
 	"${thorvg_SOURCE_DIR}/inc"
-	"${CMAKE_CURRENT_SOURCE_DIR}/src/duktape"
 )
 
 target_link_libraries(${PROJECT_NAME} PRIVATE
@@ -169,6 +168,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
 	thorvg
 	freetype
 	harfbuzz
+	qjs
 )
 
 

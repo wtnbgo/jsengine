@@ -2,28 +2,71 @@
 #include "dukwebgl.h"
 #include "webaudio.h"
 #include "canvas2d.h"
-#include <duktape.h>
+#include <quickjs.h>
 #include <SDL3/SDL.h>
 #include <SDL3_image/SDL_image.h>
 #include <cstring>
 #include <vector>
+#include <string>
+#include <algorithm>
+
+// ============================================================
+// ヘルパー: JSValue の例外チェックとログ出力
+// ============================================================
+static void log_exception(JSContext *ctx, const char *label = nullptr) {
+    JSValue ex = JS_GetException(ctx);
+    const char *str = JS_ToCString(ctx, ex);
+    if (label) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "%s: %s", label, str ? str : "unknown");
+    } else {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "JS error: %s", str ? str : "unknown");
+    }
+    // スタックトレースを出力
+    if (JS_IsObject(ex)) {
+        JSValue stack = JS_GetPropertyStr(ctx, ex, "stack");
+        if (!JS_IsUndefined(stack)) {
+            const char *stackStr = JS_ToCString(ctx, stack);
+            if (stackStr && stackStr[0]) {
+                SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "  stack: %s", stackStr);
+            }
+            JS_FreeCString(ctx, stackStr);
+        }
+        JS_FreeValue(ctx, stack);
+    }
+    JS_FreeCString(ctx, str);
+    JS_FreeValue(ctx, ex);
+}
 
 // console.log バインディング
-static duk_ret_t native_console_log(duk_context *ctx) {
-    duk_push_string(ctx, " ");
-    duk_insert(ctx, 0);
-    duk_join(ctx, duk_get_top(ctx) - 1);
-    SDL_Log("JS: %s", duk_safe_to_string(ctx, -1));
-    return 0;
+static JSValue native_console_log(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    (void)this_val;
+    std::string result;
+    for (int i = 0; i < argc; i++) {
+        if (i > 0) result += ' ';
+        const char *s = JS_ToCString(ctx, argv[i]);
+        if (s) {
+            result += s;
+            JS_FreeCString(ctx, s);
+        }
+    }
+    SDL_Log("JS: %s", result.c_str());
+    return JS_UNDEFINED;
 }
 
 // console.error バインディング
-static duk_ret_t native_console_error(duk_context *ctx) {
-    duk_push_string(ctx, " ");
-    duk_insert(ctx, 0);
-    duk_join(ctx, duk_get_top(ctx) - 1);
-    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "JS: %s", duk_safe_to_string(ctx, -1));
-    return 0;
+static JSValue native_console_error(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    (void)this_val;
+    std::string result;
+    for (int i = 0; i < argc; i++) {
+        if (i > 0) result += ' ';
+        const char *s = JS_ToCString(ctx, argv[i]);
+        if (s) {
+            result += s;
+            JS_FreeCString(ctx, s);
+        }
+    }
+    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "JS: %s", result.c_str());
+    return JS_UNDEFINED;
 }
 
 // SDL3 経由でファイルを読み込み、文字列として返す（呼び出し側で SDL_free）
@@ -46,27 +89,28 @@ static std::string resolve_path(const char *path) {
 }
 
 // JS から呼び出せる loadScript("path") バインディング
-static duk_ret_t native_load_script(duk_context *ctx) {
-    const char *path = duk_require_string(ctx, 0);
+static JSValue native_load_script(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    (void)this_val;
+    if (argc < 1) return JS_ThrowInternalError(ctx, "loadScript requires a path argument");
+    const char *path = JS_ToCString(ctx, argv[0]);
+    if (!path) return JS_EXCEPTION;
     std::string resolved = resolve_path(path);
     size_t size = 0;
     char *source = load_file_sdl(resolved.c_str(), &size);
     if (!source) {
-        return duk_error(ctx, DUK_ERR_ERROR, "Cannot load file: %s", resolved.c_str());
+        JSValue err = JS_ThrowInternalError(ctx, "Cannot load file: %s", resolved.c_str());
+        JS_FreeCString(ctx, path);
+        return err;
     }
-    duk_push_lstring(ctx, source, size);
+    // ファイル名付きで eval
+    JSValue result = JS_Eval(ctx, source, size, path, JS_EVAL_TYPE_GLOBAL);
     SDL_free(source);
-    // ファイル名付きでコンパイル・実行
-    duk_push_string(ctx, path);
-    if (duk_pcompile(ctx, DUK_COMPILE_EVAL) != 0) {
-        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "JS compile error (%s): %s", resolved.c_str(), duk_safe_to_string(ctx, -1));
-        return duk_throw(ctx);
+    JS_FreeCString(ctx, path);
+    if (JS_IsException(result)) {
+        log_exception(ctx, "JS loadScript error");
+        return JS_EXCEPTION;
     }
-    if (duk_pcall(ctx, 0) != 0) {
-        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "JS exec error (%s): %s", resolved.c_str(), duk_safe_to_string(ctx, -1));
-        return duk_throw(ctx);
-    }
-    return 1; // 実行結果を返す
+    return result;
 }
 
 // ============================================================
@@ -79,23 +123,25 @@ struct TimerEntry {
     bool interval;
     uint32_t delay;
     bool cancelled;
+    JSValue callback;    // JS_DupValue で保持
 };
 
 static int g_timerNextId = 1;
 static std::vector<TimerEntry> g_timers;
 static uint32_t g_currentTime = 0;
 
-// setTimeout(callback, delay) / setInterval(callback, delay)
-static duk_ret_t native_setTimeout(duk_context *ctx) {
-    bool isInterval = false;
-    // 関数名で区別（setInterval かどうか）
-    duk_push_current_function(ctx);
-    duk_get_prop_string(ctx, -1, "_isInterval");
-    if (duk_is_boolean(ctx, -1)) isInterval = duk_get_boolean(ctx, -1) != 0;
-    duk_pop_2(ctx);
-
-    duk_require_function(ctx, 0);
-    uint32_t delay = duk_get_top(ctx) > 1 ? (uint32_t)duk_get_uint(ctx, 1) : 0;
+// setTimeout(callback, delay) — isInterval フラグで setInterval と共用
+static JSValue native_setTimeout_impl(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, bool isInterval) {
+    (void)this_val;
+    if (argc < 1 || !JS_IsFunction(ctx, argv[0])) {
+        return JS_ThrowInternalError(ctx, "setTimeout/setInterval requires a function argument");
+    }
+    uint32_t delay = 0;
+    if (argc > 1) {
+        int32_t d = 0;
+        JS_ToInt32(ctx, &d, argv[1]);
+        if (d > 0) delay = (uint32_t)d;
+    }
 
     int id = g_timerNextId++;
     TimerEntry entry;
@@ -104,53 +150,67 @@ static duk_ret_t native_setTimeout(duk_context *ctx) {
     entry.interval = isInterval;
     entry.delay = delay;
     entry.cancelled = false;
+    entry.callback = JS_DupValue(ctx, argv[0]);
     g_timers.push_back(entry);
 
-    // コールバックを __timers[id] に保存
-    duk_get_global_string(ctx, "__timers");
-    duk_dup(ctx, 0);
-    duk_put_prop_index(ctx, -2, (duk_uarridx_t)id);
-    duk_pop(ctx);
-
-    duk_push_int(ctx, id);
-    return 1;
+    return JS_NewInt32(ctx, id);
 }
 
-static duk_ret_t native_clearTimeout(duk_context *ctx) {
-    int id = duk_get_int(ctx, 0);
+static JSValue native_setTimeout(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    return native_setTimeout_impl(ctx, this_val, argc, argv, false);
+}
+
+static JSValue native_setInterval(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    return native_setTimeout_impl(ctx, this_val, argc, argv, true);
+}
+
+static JSValue native_clearTimeout(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    (void)this_val;
+    if (argc < 1) return JS_UNDEFINED;
+    int32_t id = 0;
+    JS_ToInt32(ctx, &id, argv[0]);
     for (auto &t : g_timers) {
-        if (t.id == id) { t.cancelled = true; break; }
+        if (t.id == id) {
+            t.cancelled = true;
+            JS_FreeValue(ctx, t.callback);
+            t.callback = JS_UNDEFINED;
+            break;
+        }
     }
-    // __timers[id] を削除
-    duk_get_global_string(ctx, "__timers");
-    duk_del_prop_index(ctx, -1, (duk_uarridx_t)id);
-    duk_pop(ctx);
-    return 0;
+    return JS_UNDEFINED;
 }
 
 // requestAnimationFrame(callback) => id
-static duk_ret_t native_requestAnimationFrame(duk_context *ctx) {
-    duk_require_function(ctx, 0);
-    duk_get_global_string(ctx, "__rafCallbacks");
-    duk_get_prop_string(ctx, -1, "length");
-    duk_uarridx_t len = (duk_uarridx_t)duk_to_uint(ctx, -1);
-    duk_pop(ctx);
-    duk_dup(ctx, 0);
-    duk_put_prop_index(ctx, -2, len);
-    duk_pop(ctx);
-    duk_push_uint(ctx, len + 1);
-    return 1;
+// RAF コールバックはグローバル __rafCallbacks 配列に格納
+static JSValue native_requestAnimationFrame(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    (void)this_val;
+    if (argc < 1 || !JS_IsFunction(ctx, argv[0])) {
+        return JS_ThrowInternalError(ctx, "requestAnimationFrame requires a function argument");
+    }
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue arr = JS_GetPropertyStr(ctx, global, "__rafCallbacks");
+
+    JSValue lenVal = JS_GetPropertyStr(ctx, arr, "length");
+    uint32_t len = 0;
+    JS_ToUint32(ctx, &len, lenVal);
+    JS_FreeValue(ctx, lenVal);
+
+    JS_SetPropertyUint32(ctx, arr, len, JS_DupValue(ctx, argv[0]));
+    JS_FreeValue(ctx, arr);
+    JS_FreeValue(ctx, global);
+
+    return JS_NewUint32(ctx, len + 1);
 }
 
-static duk_ret_t native_cancelAnimationFrame(duk_context *ctx) {
-    (void)ctx;
-    return 0;
+static JSValue native_cancelAnimationFrame(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    (void)ctx; (void)this_val; (void)argc; (void)argv;
+    return JS_UNDEFINED;
 }
 
 // performance.now()
-static duk_ret_t native_performance_now(duk_context *ctx) {
-    duk_push_number(ctx, (double)SDL_GetTicks());
-    return 1;
+static JSValue native_performance_now(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    (void)this_val; (void)argc; (void)argv;
+    return JS_NewFloat64(ctx, (double)SDL_GetTicks());
 }
 
 // ============================================================
@@ -158,21 +218,25 @@ static duk_ret_t native_performance_now(duk_context *ctx) {
 // ImageBitmap: { width, height, data (ArrayBuffer, RGBA) }
 // ============================================================
 
-static duk_ret_t native_createImageBitmap(duk_context *ctx) {
-    const char *path = duk_require_string(ctx, 0);
+static JSValue native_createImageBitmap(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    (void)this_val;
+    if (argc < 1) return JS_ThrowInternalError(ctx, "createImageBitmap requires a path argument");
+    const char *path = JS_ToCString(ctx, argv[0]);
+    if (!path) return JS_EXCEPTION;
     std::string resolved = resolve_path(path);
+    JS_FreeCString(ctx, path);
 
     // SDL_image で画像読み込み
     SDL_Surface *surface = IMG_Load(resolved.c_str());
     if (!surface) {
-        return duk_error(ctx, DUK_ERR_ERROR, "Cannot load image: %s (%s)", resolved.c_str(), SDL_GetError());
+        return JS_ThrowInternalError(ctx, "Cannot load image: %s (%s)", resolved.c_str(), SDL_GetError());
     }
 
     // RGBA8888 に変換
     SDL_Surface *rgba = SDL_ConvertSurface(surface, SDL_PIXELFORMAT_RGBA32);
     SDL_DestroySurface(surface);
     if (!rgba) {
-        return duk_error(ctx, DUK_ERR_ERROR, "Failed to convert image to RGBA: %s", SDL_GetError());
+        return JS_ThrowInternalError(ctx, "Failed to convert image to RGBA: %s", SDL_GetError());
     }
 
     int w = rgba->w;
@@ -180,110 +244,165 @@ static duk_ret_t native_createImageBitmap(duk_context *ctx) {
     size_t dataSize = (size_t)w * h * 4;
 
     // ImageBitmap オブジェクト作成
-    duk_idx_t obj = duk_push_object(ctx);
+    JSValue obj = JS_NewObject(ctx);
 
-    duk_push_int(ctx, w);
-    duk_put_prop_string(ctx, obj, "width");
-    duk_push_int(ctx, h);
-    duk_put_prop_string(ctx, obj, "height");
+    JS_SetPropertyStr(ctx, obj, "width", JS_NewInt32(ctx, w));
+    JS_SetPropertyStr(ctx, obj, "height", JS_NewInt32(ctx, h));
 
     // ピクセルデータをバッファにコピー
-    void *buf = duk_push_buffer(ctx, dataSize, 0);
-    // SDL_Surface は pitch でアライメントされている可能性がある
+    uint8_t *buf = nullptr;
     if (rgba->pitch == w * 4) {
-        memcpy(buf, rgba->pixels, dataSize);
+        JSValue ab = JS_NewArrayBufferCopy(ctx, (const uint8_t*)rgba->pixels, dataSize);
+        JS_SetPropertyStr(ctx, obj, "data", ab);
     } else {
         // 行ごとにコピー
+        buf = (uint8_t*)SDL_malloc(dataSize);
         for (int y = 0; y < h; y++) {
-            memcpy((char*)buf + y * w * 4,
+            memcpy(buf + y * w * 4,
                    (char*)rgba->pixels + y * rgba->pitch,
                    w * 4);
         }
+        JSValue ab = JS_NewArrayBufferCopy(ctx, buf, dataSize);
+        SDL_free(buf);
+        JS_SetPropertyStr(ctx, obj, "data", ab);
     }
-    duk_put_prop_string(ctx, obj, "data");
 
     SDL_DestroySurface(rgba);
-    return 1;
+    return obj;
 }
 
 // ============================================================
 // addEventListener / removeEventListener
 // ============================================================
-// イベントリスナーは duktape のグローバル隠しオブジェクト __eventListeners に格納
+// イベントリスナーは QuickJS のグローバル隠しオブジェクト __eventListeners に格納
 // __eventListeners[type] = [callback, callback, ...]
 
 // addEventListener(type, callback)
-static duk_ret_t native_addEventListener(duk_context *ctx) {
-    const char *type = duk_require_string(ctx, 0);
+static JSValue native_addEventListener(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    (void)this_val;
+    if (argc < 2) return JS_UNDEFINED;
+    const char *type = JS_ToCString(ctx, argv[0]);
+    if (!type) return JS_EXCEPTION;
+
     // callback が null/undefined の場合は無視（passive event detection 等）
-    if (!duk_is_function(ctx, 1)) return 0;
+    if (!JS_IsFunction(ctx, argv[1])) {
+        JS_FreeCString(ctx, type);
+        return JS_UNDEFINED;
+    }
 
     // __eventListeners を取得（なければ作成）
-    if (!duk_get_global_string(ctx, "__eventListeners")) {
-        duk_pop(ctx);
-        duk_push_object(ctx);
-        duk_dup(ctx, -1);
-        duk_put_global_string(ctx, "__eventListeners");
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue listeners = JS_GetPropertyStr(ctx, global, "__eventListeners");
+    if (JS_IsUndefined(listeners)) {
+        JS_FreeValue(ctx, listeners);
+        listeners = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, global, "__eventListeners", JS_DupValue(ctx, listeners));
     }
 
     // __eventListeners[type] を取得（なければ配列作成）
-    if (!duk_get_prop_string(ctx, -1, type)) {
-        duk_pop(ctx);
-        duk_push_array(ctx);
-        duk_dup(ctx, -1);
-        duk_put_prop_string(ctx, -3, type);
+    JSValue arr = JS_GetPropertyStr(ctx, listeners, type);
+    if (JS_IsUndefined(arr)) {
+        JS_FreeValue(ctx, arr);
+        arr = JS_NewArray(ctx);
+        JS_SetPropertyStr(ctx, listeners, type, JS_DupValue(ctx, arr));
     }
 
     // 配列の末尾に callback を追加
-    duk_get_prop_string(ctx, -1, "length");
-    duk_idx_t len = (duk_idx_t)duk_to_uint(ctx, -1);
-    duk_pop(ctx);
+    JSValue lenVal = JS_GetPropertyStr(ctx, arr, "length");
+    uint32_t len = 0;
+    JS_ToUint32(ctx, &len, lenVal);
+    JS_FreeValue(ctx, lenVal);
 
-    duk_dup(ctx, 1); // callback
-    duk_put_prop_index(ctx, -2, (duk_uarridx_t)len);
+    JS_SetPropertyUint32(ctx, arr, len, JS_DupValue(ctx, argv[1]));
 
-    duk_pop_2(ctx); // array, __eventListeners
-    return 0;
+    JS_FreeValue(ctx, arr);
+    JS_FreeValue(ctx, listeners);
+    JS_FreeValue(ctx, global);
+    JS_FreeCString(ctx, type);
+    return JS_UNDEFINED;
 }
 
 // removeEventListener(type, callback)
-static duk_ret_t native_removeEventListener(duk_context *ctx) {
-    const char *type = duk_require_string(ctx, 0);
-    duk_require_function(ctx, 1);
+static JSValue native_removeEventListener(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    (void)this_val;
+    if (argc < 2) return JS_UNDEFINED;
+    const char *type = JS_ToCString(ctx, argv[0]);
+    if (!type) return JS_EXCEPTION;
 
-    if (!duk_get_global_string(ctx, "__eventListeners")) {
-        duk_pop(ctx);
-        return 0;
-    }
-    if (!duk_get_prop_string(ctx, -1, type)) {
-        duk_pop_2(ctx);
-        return 0;
+    if (!JS_IsFunction(ctx, argv[1])) {
+        JS_FreeCString(ctx, type);
+        return JS_UNDEFINED;
     }
 
-    duk_get_prop_string(ctx, -1, "length");
-    duk_idx_t len = (duk_idx_t)duk_to_uint(ctx, -1);
-    duk_pop(ctx);
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue listeners = JS_GetPropertyStr(ctx, global, "__eventListeners");
+    if (JS_IsUndefined(listeners)) {
+        JS_FreeValue(ctx, listeners);
+        JS_FreeValue(ctx, global);
+        JS_FreeCString(ctx, type);
+        return JS_UNDEFINED;
+    }
 
-    for (duk_idx_t i = 0; i < len; i++) {
-        duk_get_prop_index(ctx, -1, (duk_uarridx_t)i);
-        if (duk_strict_equals(ctx, -1, 1)) {
-            duk_pop(ctx);
-            // 配列要素を削除（後ろを詰める）
-            for (duk_idx_t j = i; j < len - 1; j++) {
-                duk_get_prop_index(ctx, -1, (duk_uarridx_t)(j + 1));
-                duk_put_prop_index(ctx, -2, (duk_uarridx_t)j);
+    JSValue arr = JS_GetPropertyStr(ctx, listeners, type);
+    if (JS_IsUndefined(arr)) {
+        JS_FreeValue(ctx, arr);
+        JS_FreeValue(ctx, listeners);
+        JS_FreeValue(ctx, global);
+        JS_FreeCString(ctx, type);
+        return JS_UNDEFINED;
+    }
+
+    JSValue lenVal = JS_GetPropertyStr(ctx, arr, "length");
+    uint32_t len = 0;
+    JS_ToUint32(ctx, &len, lenVal);
+    JS_FreeValue(ctx, lenVal);
+
+    for (uint32_t i = 0; i < len; i++) {
+        JSValue elem = JS_GetPropertyUint32(ctx, arr, i);
+        // QuickJS では関数の同一性を比較（同じ JSValue かどうか）
+        // JS_StrictEq は QuickJS にないので、JS_VALUE_GET_PTR で比較
+        // ただし QuickJS の公開 API では直接比較が難しいため、
+        // JS 側で === を使って比較する
+        // ここでは簡易的に JS_Eval で比較
+        bool match = false;
+        {
+            // argv[1] と elem を === で比較
+            JSValue args[2] = { argv[1], elem };
+            JSValue cmpFunc = JS_Eval(ctx,
+                "(function(a,b){return a===b;})", 30, "<cmp>", JS_EVAL_TYPE_GLOBAL);
+            if (!JS_IsException(cmpFunc)) {
+                JSValue result = JS_Call(ctx, cmpFunc, JS_UNDEFINED, 2, args);
+                if (!JS_IsException(result)) {
+                    match = JS_ToBool(ctx, result) != 0;
+                }
+                JS_FreeValue(ctx, result);
             }
-            duk_del_prop_index(ctx, -1, (duk_uarridx_t)(len - 1));
+            JS_FreeValue(ctx, cmpFunc);
+        }
+        JS_FreeValue(ctx, elem);
+
+        if (match) {
+            // 配列要素を削除（後ろを詰める）
+            for (uint32_t j = i; j < len - 1; j++) {
+                JSValue next = JS_GetPropertyUint32(ctx, arr, j + 1);
+                JS_SetPropertyUint32(ctx, arr, j, next);
+            }
+            {
+                JSAtom atom = JS_NewAtomUInt32(ctx, (uint32_t)(len - 1));
+                JS_DeleteProperty(ctx, arr, atom, 0);
+                JS_FreeAtom(ctx, atom);
+            }
             // length を更新
-            duk_push_uint(ctx, (duk_uint_t)(len - 1));
-            duk_put_prop_string(ctx, -2, "length");
+            JS_SetPropertyStr(ctx, arr, "length", JS_NewUint32(ctx, len - 1));
             break;
         }
-        duk_pop(ctx);
     }
 
-    duk_pop_2(ctx); // array, __eventListeners
-    return 0;
+    JS_FreeValue(ctx, arr);
+    JS_FreeValue(ctx, listeners);
+    JS_FreeValue(ctx, global);
+    JS_FreeCString(ctx, type);
+    return JS_UNDEFINED;
 }
 
 // ============================================================
@@ -429,250 +548,238 @@ static const char* sdl_scancode_to_js_code(SDL_Scancode sc) {
 
 // ============================================================
 // File System Access API (同期版)
-//
-// JS 側:
-//   var root = await navigator.storage.getDirectory()   に相当する
-//   fs.getDirectoryHandle(path, {create:true})
-//   fs.getFileHandle(path, {create:true})
-//   handle.getFile() => { name, size, type, text(), arrayBuffer() }
-//   handle.createWritable() => { write(data), close() }
-//   dirHandle.entries() => [[name, handle], ...]
-//   dirHandle.removeEntry(name, {recursive:true})
-//   fs.exists(path), fs.remove(path), fs.mkdir(path), fs.stat(path)
 // ============================================================
 
 // --- ユーティリティ: options から create フラグ取得 ---
-static bool get_create_option(duk_context *ctx, duk_idx_t opt_idx) {
-    if (duk_is_object(ctx, opt_idx)) {
-        duk_get_prop_string(ctx, opt_idx, "create");
-        bool create = duk_to_boolean(ctx, -1) != 0;
-        duk_pop(ctx);
+static bool get_create_option(JSContext *ctx, JSValueConst opt) {
+    if (JS_IsObject(opt)) {
+        JSValue val = JS_GetPropertyStr(ctx, opt, "create");
+        bool create = JS_ToBool(ctx, val) != 0;
+        JS_FreeValue(ctx, val);
         return create;
     }
     return false;
 }
 
-// --- ユーティリティ: options から recursive フラグ取得 ---
-static bool get_recursive_option(duk_context *ctx, duk_idx_t opt_idx) {
-    if (duk_is_object(ctx, opt_idx)) {
-        duk_get_prop_string(ctx, opt_idx, "recursive");
-        bool r = duk_to_boolean(ctx, -1) != 0;
-        duk_pop(ctx);
-        return r;
+// --- ユーティリティ: ファイル名抽出 ---
+static const char* extract_filename(const char *path) {
+    const char *name = path;
+    const char *p = path;
+    while (*p) {
+        if (*p == '/' || *p == '\\') name = p + 1;
+        p++;
     }
-    return false;
+    return name;
+}
+
+// --- ヘルパー: オブジェクトの _path プロパティを取得 ---
+// 呼び出し側で JS_FreeCString すること
+static const char* get_path_from_this(JSContext *ctx, JSValueConst this_val) {
+    JSValue pathVal = JS_GetPropertyStr(ctx, this_val, "_path");
+    const char *path = JS_ToCString(ctx, pathVal);
+    JS_FreeValue(ctx, pathVal);
+    return path;
 }
 
 // --- FileSystemFileHandle ---
-
-// handle._path にファイルパスを格納
-static void push_file_handle(duk_context *ctx, const char *path);
-static void push_directory_handle(duk_context *ctx, const char *path);
+static JSValue push_file_handle(JSContext *ctx, const char *path);
+static JSValue push_directory_handle(JSContext *ctx, const char *path);
 
 // getFile() => { name, size, text(), arrayBuffer() }
-static duk_ret_t filehandle_getFile(duk_context *ctx) {
-    duk_push_this(ctx);
-    duk_get_prop_string(ctx, -1, "_path");
-    const char *path = duk_get_string(ctx, -1);
-    duk_pop_2(ctx);
+static JSValue filehandle_getFile(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    (void)argc; (void)argv;
+    const char *path = get_path_from_this(ctx, this_val);
+    if (!path) return JS_EXCEPTION;
 
     SDL_PathInfo info;
     if (!SDL_GetPathInfo(path, &info) || info.type != SDL_PATHTYPE_FILE) {
-        return duk_error(ctx, DUK_ERR_ERROR, "File not found: %s", path);
+        JSValue err = JS_ThrowInternalError(ctx, "File not found: %s", path);
+        JS_FreeCString(ctx, path);
+        return err;
     }
 
-    // ファイル名抽出
-    const char *name = path;
-    const char *p = path;
-    while (*p) {
-        if (*p == '/' || *p == '\\') name = p + 1;
-        p++;
-    }
+    const char *name = extract_filename(path);
 
-    duk_idx_t obj = duk_push_object(ctx);
-
-    duk_push_string(ctx, name);
-    duk_put_prop_string(ctx, obj, "name");
-    duk_push_number(ctx, (double)info.size);
-    duk_put_prop_string(ctx, obj, "size");
-    duk_push_string(ctx, "");
-    duk_put_prop_string(ctx, obj, "type");
-
-    // ファイルパスを隠しプロパティとしてコピー
-    duk_push_string(ctx, path);
-    duk_put_prop_string(ctx, obj, "_path");
+    JSValue obj = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, obj, "name", JS_NewString(ctx, name));
+    JS_SetPropertyStr(ctx, obj, "size", JS_NewFloat64(ctx, (double)info.size));
+    JS_SetPropertyStr(ctx, obj, "type", JS_NewString(ctx, ""));
+    JS_SetPropertyStr(ctx, obj, "_path", JS_NewString(ctx, path));
+    JS_FreeCString(ctx, path);
 
     // text() メソッド
-    duk_push_c_function(ctx, [](duk_context *c) -> duk_ret_t {
-        duk_push_this(c);
-        duk_get_prop_string(c, -1, "_path");
-        const char *p = duk_get_string(c, -1);
-        duk_pop_2(c);
-        size_t sz = 0;
-        void *data = SDL_LoadFile(p, &sz);
-        if (!data) return duk_error(c, DUK_ERR_ERROR, "Cannot read file: %s", p);
-        duk_push_lstring(c, (const char*)data, sz);
-        SDL_free(data);
-        return 1;
-    }, 0);
-    duk_put_prop_string(ctx, obj, "text");
+    JS_SetPropertyStr(ctx, obj, "text",
+        JS_NewCFunction(ctx, [](JSContext *c, JSValueConst tv, int, JSValueConst *) -> JSValue {
+            const char *p = get_path_from_this(c, tv);
+            if (!p) return JS_EXCEPTION;
+            size_t sz = 0;
+            void *data = SDL_LoadFile(p, &sz);
+            if (!data) {
+                JSValue err = JS_ThrowInternalError(c, "Cannot read file: %s", p);
+                JS_FreeCString(c, p);
+                return err;
+            }
+            JSValue s = JS_NewStringLen(c, (const char*)data, sz);
+            SDL_free(data);
+            JS_FreeCString(c, p);
+            return s;
+        }, "text", 0));
 
     // arrayBuffer() メソッド
-    duk_push_c_function(ctx, [](duk_context *c) -> duk_ret_t {
-        duk_push_this(c);
-        duk_get_prop_string(c, -1, "_path");
-        const char *p = duk_get_string(c, -1);
-        duk_pop_2(c);
-        size_t sz = 0;
-        void *data = SDL_LoadFile(p, &sz);
-        if (!data) return duk_error(c, DUK_ERR_ERROR, "Cannot read file: %s", p);
-        void *buf = duk_push_buffer(c, sz, 0);
-        memcpy(buf, data, sz);
-        SDL_free(data);
-        return 1;
-    }, 0);
-    duk_put_prop_string(ctx, obj, "arrayBuffer");
+    JS_SetPropertyStr(ctx, obj, "arrayBuffer",
+        JS_NewCFunction(ctx, [](JSContext *c, JSValueConst tv, int, JSValueConst *) -> JSValue {
+            const char *p = get_path_from_this(c, tv);
+            if (!p) return JS_EXCEPTION;
+            size_t sz = 0;
+            void *data = SDL_LoadFile(p, &sz);
+            if (!data) {
+                JSValue err = JS_ThrowInternalError(c, "Cannot read file: %s", p);
+                JS_FreeCString(c, p);
+                return err;
+            }
+            JSValue ab = JS_NewArrayBufferCopy(c, (const uint8_t*)data, sz);
+            SDL_free(data);
+            JS_FreeCString(c, p);
+            return ab;
+        }, "arrayBuffer", 0));
 
-    return 1;
+    return obj;
 }
 
 // createWritable() => { _chunks: [], write(data), close() }
-static duk_ret_t filehandle_createWritable(duk_context *ctx) {
-    duk_push_this(ctx);
-    duk_get_prop_string(ctx, -1, "_path");
-    const char *path = duk_get_string(ctx, -1);
-    duk_pop_2(ctx);
+static JSValue filehandle_createWritable(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    (void)argc; (void)argv;
+    const char *path = get_path_from_this(ctx, this_val);
+    if (!path) return JS_EXCEPTION;
 
-    duk_idx_t obj = duk_push_object(ctx);
-
-    duk_push_string(ctx, path);
-    duk_put_prop_string(ctx, obj, "_path");
+    JSValue obj = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, obj, "_path", JS_NewString(ctx, path));
+    JS_FreeCString(ctx, path);
 
     // _chunks 配列
-    duk_push_array(ctx);
-    duk_put_prop_string(ctx, obj, "_chunks");
+    JS_SetPropertyStr(ctx, obj, "_chunks", JS_NewArray(ctx));
 
     // write(data) — 文字列またはバッファを _chunks に追加
-    duk_push_c_function(ctx, [](duk_context *c) -> duk_ret_t {
-        duk_push_this(c);
-        duk_get_prop_string(c, -1, "_chunks");
-        duk_get_prop_string(c, -1, "length");
-        duk_uarridx_t len = (duk_uarridx_t)duk_to_uint(c, -1);
-        duk_pop(c);
-        duk_dup(c, 0); // data
-        duk_put_prop_index(c, -2, len);
-        duk_pop_2(c); // _chunks, this
-        return 0;
-    }, 1);
-    duk_put_prop_string(ctx, obj, "write");
+    JS_SetPropertyStr(ctx, obj, "write",
+        JS_NewCFunction(ctx, [](JSContext *c, JSValueConst tv, int ac, JSValueConst *av) -> JSValue {
+            if (ac < 1) return JS_UNDEFINED;
+            JSValue chunks = JS_GetPropertyStr(c, tv, "_chunks");
+            JSValue lenVal = JS_GetPropertyStr(c, chunks, "length");
+            uint32_t len = 0;
+            JS_ToUint32(c, &len, lenVal);
+            JS_FreeValue(c, lenVal);
+            JS_SetPropertyUint32(c, chunks, len, JS_DupValue(c, av[0]));
+            JS_FreeValue(c, chunks);
+            return JS_UNDEFINED;
+        }, "write", 1));
 
     // close() — _chunks を結合してファイルに書き出す
-    duk_push_c_function(ctx, [](duk_context *c) -> duk_ret_t {
-        duk_push_this(c);
-        duk_get_prop_string(c, -1, "_path");
-        const char *p = duk_get_string(c, -1);
-        duk_pop(c);
-        duk_get_prop_string(c, -1, "_chunks");
+    JS_SetPropertyStr(ctx, obj, "close",
+        JS_NewCFunction(ctx, [](JSContext *c, JSValueConst tv, int, JSValueConst *) -> JSValue {
+            JSValue pathVal = JS_GetPropertyStr(c, tv, "_path");
+            const char *p = JS_ToCString(c, pathVal);
+            JS_FreeValue(c, pathVal);
+            if (!p) return JS_EXCEPTION;
 
-        duk_get_prop_string(c, -1, "length");
-        duk_uint_t len = duk_to_uint(c, -1);
-        duk_pop(c);
+            JSValue chunks = JS_GetPropertyStr(c, tv, "_chunks");
+            JSValue lenVal = JS_GetPropertyStr(c, chunks, "length");
+            uint32_t len = 0;
+            JS_ToUint32(c, &len, lenVal);
+            JS_FreeValue(c, lenVal);
 
-        // 全チャンクのサイズを計算
-        size_t total = 0;
-        for (duk_uint_t i = 0; i < len; i++) {
-            duk_get_prop_index(c, -1, i);
-            if (duk_is_buffer_data(c, -1)) {
-                duk_size_t sz;
-                duk_get_buffer_data(c, -1, &sz);
-                total += sz;
-            } else {
-                duk_size_t sz;
-                duk_to_lstring(c, -1, &sz);
-                total += sz;
+            // 全チャンクのサイズを計算
+            size_t total = 0;
+            for (uint32_t i = 0; i < len; i++) {
+                JSValue chunk = JS_GetPropertyUint32(c, chunks, i);
+                size_t sz = 0;
+                uint8_t *buf = JS_GetArrayBuffer(c, &sz, chunk);
+                if (buf) {
+                    total += sz;
+                } else {
+                    const char *s = JS_ToCString(c, chunk);
+                    if (s) {
+                        total += strlen(s);
+                        JS_FreeCString(c, s);
+                    }
+                }
+                JS_FreeValue(c, chunk);
             }
-            duk_pop(c);
-        }
 
-        // バッファに結合
-        char *buf = (char*)SDL_malloc(total);
-        if (!buf) {
-            duk_pop_2(c);
-            return duk_error(c, DUK_ERR_ERROR, "Out of memory");
-        }
-        size_t offset = 0;
-        for (duk_uint_t i = 0; i < len; i++) {
-            duk_get_prop_index(c, -1, i);
-            if (duk_is_buffer_data(c, -1)) {
-                duk_size_t sz;
-                void *data = duk_get_buffer_data(c, -1, &sz);
-                memcpy(buf + offset, data, sz);
-                offset += sz;
-            } else {
-                duk_size_t sz;
-                const char *s = duk_to_lstring(c, -1, &sz);
-                memcpy(buf + offset, s, sz);
-                offset += sz;
+            // バッファに結合
+            char *buf = (char*)SDL_malloc(total);
+            if (!buf) {
+                JS_FreeValue(c, chunks);
+                JS_FreeCString(c, p);
+                return JS_ThrowInternalError(c, "Out of memory");
             }
-            duk_pop(c);
-        }
+            size_t offset = 0;
+            for (uint32_t i = 0; i < len; i++) {
+                JSValue chunk = JS_GetPropertyUint32(c, chunks, i);
+                size_t sz = 0;
+                uint8_t *abuf = JS_GetArrayBuffer(c, &sz, chunk);
+                if (abuf) {
+                    memcpy(buf + offset, abuf, sz);
+                    offset += sz;
+                } else {
+                    const char *s = JS_ToCString(c, chunk);
+                    if (s) {
+                        size_t slen = strlen(s);
+                        memcpy(buf + offset, s, slen);
+                        offset += slen;
+                        JS_FreeCString(c, s);
+                    }
+                }
+                JS_FreeValue(c, chunk);
+            }
 
-        bool ok = SDL_SaveFile(p, buf, total);
-        SDL_free(buf);
-        duk_pop_2(c); // _chunks, this
+            bool ok = SDL_SaveFile(p, buf, total);
+            SDL_free(buf);
+            JS_FreeValue(c, chunks);
 
-        if (!ok) {
-            return duk_error(c, DUK_ERR_ERROR, "Failed to write file: %s", p);
-        }
-        return 0;
-    }, 0);
-    duk_put_prop_string(ctx, obj, "close");
+            if (!ok) {
+                JSValue err = JS_ThrowInternalError(c, "Failed to write file: %s", p);
+                JS_FreeCString(c, p);
+                return err;
+            }
+            JS_FreeCString(c, p);
+            return JS_UNDEFINED;
+        }, "close", 0));
 
-    return 1;
+    return obj;
 }
 
-static void push_file_handle(duk_context *ctx, const char *path) {
-    duk_idx_t obj = duk_push_object(ctx);
+static JSValue push_file_handle(JSContext *ctx, const char *path) {
+    JSValue obj = JS_NewObject(ctx);
 
-    duk_push_string(ctx, path);
-    duk_put_prop_string(ctx, obj, "_path");
-    duk_push_string(ctx, "file");
-    duk_put_prop_string(ctx, obj, "kind");
+    JS_SetPropertyStr(ctx, obj, "_path", JS_NewString(ctx, path));
+    JS_SetPropertyStr(ctx, obj, "kind", JS_NewString(ctx, "file"));
 
-    // ファイル名抽出
-    const char *name = path;
-    const char *p = path;
-    while (*p) {
-        if (*p == '/' || *p == '\\') name = p + 1;
-        p++;
-    }
-    duk_push_string(ctx, name);
-    duk_put_prop_string(ctx, obj, "name");
+    const char *name = extract_filename(path);
+    JS_SetPropertyStr(ctx, obj, "name", JS_NewString(ctx, name));
 
-    duk_push_c_function(ctx, filehandle_getFile, 0);
-    duk_put_prop_string(ctx, obj, "getFile");
-    duk_push_c_function(ctx, filehandle_createWritable, 0);
-    duk_put_prop_string(ctx, obj, "createWritable");
+    JS_SetPropertyStr(ctx, obj, "getFile", JS_NewCFunction(ctx, filehandle_getFile, "getFile", 0));
+    JS_SetPropertyStr(ctx, obj, "createWritable", JS_NewCFunction(ctx, filehandle_createWritable, "createWritable", 0));
+
+    return obj;
 }
 
 // --- FileSystemDirectoryHandle ---
 
-// entries() => [[name, handle], ...]
+// entries() で使うコールバック用コンテキスト
 struct EnumCtx {
-    duk_context *ctx;
-    duk_idx_t arr_idx;
-    duk_uint_t count;
+    JSContext *ctx;
+    JSValue arr;
+    uint32_t count;
     const char *dirname;
 };
 
 static SDL_EnumerationResult dir_enum_callback(void *userdata, const char *dirname, const char *fname) {
     EnumCtx *ec = (EnumCtx*)userdata;
+    JSContext *ctx = ec->ctx;
 
     // エントリ配列 [name, handle]
-    duk_push_array(ec->ctx);
-
-    duk_push_string(ec->ctx, fname);
-    duk_put_prop_index(ec->ctx, -2, 0);
+    JSValue entry = JS_NewArray(ctx);
+    JS_SetPropertyUint32(ctx, entry, 0, JS_NewString(ctx, fname));
 
     // フルパス構築
     size_t len = strlen(dirname) + strlen(fname) + 2;
@@ -681,41 +788,43 @@ static SDL_EnumerationResult dir_enum_callback(void *userdata, const char *dirna
 
     SDL_PathInfo info;
     if (SDL_GetPathInfo(fullpath, &info) && info.type == SDL_PATHTYPE_DIRECTORY) {
-        push_directory_handle(ec->ctx, fullpath);
+        JS_SetPropertyUint32(ctx, entry, 1, push_directory_handle(ctx, fullpath));
     } else {
-        push_file_handle(ec->ctx, fullpath);
+        JS_SetPropertyUint32(ctx, entry, 1, push_file_handle(ctx, fullpath));
     }
     SDL_free(fullpath);
-    duk_put_prop_index(ec->ctx, -2, 1);
 
     // 外側の配列に追加
-    duk_put_prop_index(ec->ctx, ec->arr_idx, ec->count);
+    JS_SetPropertyUint32(ctx, ec->arr, ec->count, entry);
     ec->count++;
 
     return SDL_ENUM_CONTINUE;
 }
 
-static duk_ret_t dirhandle_entries(duk_context *ctx) {
-    duk_push_this(ctx);
-    duk_get_prop_string(ctx, -1, "_path");
-    const char *path = duk_get_string(ctx, -1);
-    duk_pop_2(ctx);
+static JSValue dirhandle_entries(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    (void)argc; (void)argv;
+    const char *path = get_path_from_this(ctx, this_val);
+    if (!path) return JS_EXCEPTION;
 
-    duk_idx_t arr = duk_push_array(ctx);
+    JSValue arr = JS_NewArray(ctx);
     EnumCtx ec = { ctx, arr, 0, path };
     SDL_EnumerateDirectory(path, dir_enum_callback, &ec);
-    return 1;
+    JS_FreeCString(ctx, path);
+    return arr;
 }
 
 // getFileHandle(name, options)
-static duk_ret_t dirhandle_getFileHandle(duk_context *ctx) {
-    duk_push_this(ctx);
-    duk_get_prop_string(ctx, -1, "_path");
-    const char *dir = duk_get_string(ctx, -1);
-    duk_pop_2(ctx);
+static JSValue dirhandle_getFileHandle(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    const char *dir = get_path_from_this(ctx, this_val);
+    if (!dir) return JS_EXCEPTION;
+    if (argc < 1) {
+        JS_FreeCString(ctx, dir);
+        return JS_ThrowInternalError(ctx, "getFileHandle requires a name argument");
+    }
 
-    const char *name = duk_require_string(ctx, 0);
-    bool create = get_create_option(ctx, 1);
+    const char *name = JS_ToCString(ctx, argv[0]);
+    if (!name) { JS_FreeCString(ctx, dir); return JS_EXCEPTION; }
+    bool create = (argc > 1) ? get_create_option(ctx, argv[1]) : false;
 
     size_t len = strlen(dir) + strlen(name) + 2;
     char *fullpath = (char*)SDL_malloc(len);
@@ -724,28 +833,35 @@ static duk_ret_t dirhandle_getFileHandle(duk_context *ctx) {
     SDL_PathInfo info;
     if (!SDL_GetPathInfo(fullpath, &info) || info.type == SDL_PATHTYPE_NONE) {
         if (create) {
-            // 空ファイル作成
             SDL_SaveFile(fullpath, "", 0);
         } else {
+            JSValue err = JS_ThrowInternalError(ctx, "File not found: %s/%s", dir, name);
             SDL_free(fullpath);
-            return duk_error(ctx, DUK_ERR_ERROR, "File not found: %s/%s", dir, name);
+            JS_FreeCString(ctx, name);
+            JS_FreeCString(ctx, dir);
+            return err;
         }
     }
 
-    push_file_handle(ctx, fullpath);
+    JSValue handle = push_file_handle(ctx, fullpath);
     SDL_free(fullpath);
-    return 1;
+    JS_FreeCString(ctx, name);
+    JS_FreeCString(ctx, dir);
+    return handle;
 }
 
 // getDirectoryHandle(name, options)
-static duk_ret_t dirhandle_getDirectoryHandle(duk_context *ctx) {
-    duk_push_this(ctx);
-    duk_get_prop_string(ctx, -1, "_path");
-    const char *dir = duk_get_string(ctx, -1);
-    duk_pop_2(ctx);
+static JSValue dirhandle_getDirectoryHandle(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    const char *dir = get_path_from_this(ctx, this_val);
+    if (!dir) return JS_EXCEPTION;
+    if (argc < 1) {
+        JS_FreeCString(ctx, dir);
+        return JS_ThrowInternalError(ctx, "getDirectoryHandle requires a name argument");
+    }
 
-    const char *name = duk_require_string(ctx, 0);
-    bool create = get_create_option(ctx, 1);
+    const char *name = JS_ToCString(ctx, argv[0]);
+    if (!name) { JS_FreeCString(ctx, dir); return JS_EXCEPTION; }
+    bool create = (argc > 1) ? get_create_option(ctx, argv[1]) : false;
 
     size_t len = strlen(dir) + strlen(name) + 2;
     char *fullpath = (char*)SDL_malloc(len);
@@ -756,225 +872,259 @@ static duk_ret_t dirhandle_getDirectoryHandle(duk_context *ctx) {
         if (create) {
             SDL_CreateDirectory(fullpath);
         } else {
+            JSValue err = JS_ThrowInternalError(ctx, "Directory not found: %s/%s", dir, name);
             SDL_free(fullpath);
-            return duk_error(ctx, DUK_ERR_ERROR, "Directory not found: %s/%s", dir, name);
+            JS_FreeCString(ctx, name);
+            JS_FreeCString(ctx, dir);
+            return err;
         }
     }
 
-    push_directory_handle(ctx, fullpath);
+    JSValue handle = push_directory_handle(ctx, fullpath);
     SDL_free(fullpath);
-    return 1;
+    JS_FreeCString(ctx, name);
+    JS_FreeCString(ctx, dir);
+    return handle;
 }
 
 // removeEntry(name, options)
-static duk_ret_t dirhandle_removeEntry(duk_context *ctx) {
-    duk_push_this(ctx);
-    duk_get_prop_string(ctx, -1, "_path");
-    const char *dir = duk_get_string(ctx, -1);
-    duk_pop_2(ctx);
+static JSValue dirhandle_removeEntry(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    const char *dir = get_path_from_this(ctx, this_val);
+    if (!dir) return JS_EXCEPTION;
+    if (argc < 1) {
+        JS_FreeCString(ctx, dir);
+        return JS_ThrowInternalError(ctx, "removeEntry requires a name argument");
+    }
 
-    const char *name = duk_require_string(ctx, 0);
-    // recursive オプション（今は SDL_RemovePath のみ）
-    // bool recursive = get_recursive_option(ctx, 1);
+    const char *name = JS_ToCString(ctx, argv[0]);
+    if (!name) { JS_FreeCString(ctx, dir); return JS_EXCEPTION; }
 
     size_t len = strlen(dir) + strlen(name) + 2;
     char *fullpath = (char*)SDL_malloc(len);
     snprintf(fullpath, len, "%s/%s", dir, name);
 
     if (!SDL_RemovePath(fullpath)) {
+        JSValue err = JS_ThrowInternalError(ctx, "Failed to remove: %s/%s", dir, name);
         SDL_free(fullpath);
-        return duk_error(ctx, DUK_ERR_ERROR, "Failed to remove: %s/%s", dir, name);
+        JS_FreeCString(ctx, name);
+        JS_FreeCString(ctx, dir);
+        return err;
     }
     SDL_free(fullpath);
-    return 0;
+    JS_FreeCString(ctx, name);
+    JS_FreeCString(ctx, dir);
+    return JS_UNDEFINED;
 }
 
-static void push_directory_handle(duk_context *ctx, const char *path) {
-    duk_idx_t obj = duk_push_object(ctx);
+static JSValue push_directory_handle(JSContext *ctx, const char *path) {
+    JSValue obj = JS_NewObject(ctx);
 
-    duk_push_string(ctx, path);
-    duk_put_prop_string(ctx, obj, "_path");
-    duk_push_string(ctx, "directory");
-    duk_put_prop_string(ctx, obj, "kind");
+    JS_SetPropertyStr(ctx, obj, "_path", JS_NewString(ctx, path));
+    JS_SetPropertyStr(ctx, obj, "kind", JS_NewString(ctx, "directory"));
 
-    // ディレクトリ名抽出
-    const char *name = path;
-    const char *p = path;
-    while (*p) {
-        if (*p == '/' || *p == '\\') name = p + 1;
-        p++;
-    }
-    duk_push_string(ctx, name);
-    duk_put_prop_string(ctx, obj, "name");
+    const char *name = extract_filename(path);
+    JS_SetPropertyStr(ctx, obj, "name", JS_NewString(ctx, name));
 
-    duk_push_c_function(ctx, dirhandle_entries, 0);
-    duk_put_prop_string(ctx, obj, "entries");
-    duk_push_c_function(ctx, dirhandle_getFileHandle, 2);
-    duk_put_prop_string(ctx, obj, "getFileHandle");
-    duk_push_c_function(ctx, dirhandle_getDirectoryHandle, 2);
-    duk_put_prop_string(ctx, obj, "getDirectoryHandle");
-    duk_push_c_function(ctx, dirhandle_removeEntry, 2);
-    duk_put_prop_string(ctx, obj, "removeEntry");
+    JS_SetPropertyStr(ctx, obj, "entries", JS_NewCFunction(ctx, dirhandle_entries, "entries", 0));
+    JS_SetPropertyStr(ctx, obj, "getFileHandle", JS_NewCFunction(ctx, dirhandle_getFileHandle, "getFileHandle", 2));
+    JS_SetPropertyStr(ctx, obj, "getDirectoryHandle", JS_NewCFunction(ctx, dirhandle_getDirectoryHandle, "getDirectoryHandle", 2));
+    JS_SetPropertyStr(ctx, obj, "removeEntry", JS_NewCFunction(ctx, dirhandle_removeEntry, "removeEntry", 2));
+
+    return obj;
 }
 
 // --- グローバル fs オブジェクト ---
 
 // fs.getFileHandle(path, options)
-static duk_ret_t fs_getFileHandle(duk_context *ctx) {
-    std::string rpath = resolve_path(duk_require_string(ctx, 0));
-    bool create = get_create_option(ctx, 1);
+static JSValue fs_getFileHandle(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    (void)this_val;
+    if (argc < 1) return JS_ThrowInternalError(ctx, "getFileHandle requires a path argument");
+    const char *pathStr = JS_ToCString(ctx, argv[0]);
+    if (!pathStr) return JS_EXCEPTION;
+    std::string rpath = resolve_path(pathStr);
+    JS_FreeCString(ctx, pathStr);
+    bool create = (argc > 1) ? get_create_option(ctx, argv[1]) : false;
 
     SDL_PathInfo info;
     if (!SDL_GetPathInfo(rpath.c_str(), &info) || info.type == SDL_PATHTYPE_NONE) {
         if (create) {
             SDL_SaveFile(rpath.c_str(), "", 0);
         } else {
-            return duk_error(ctx, DUK_ERR_ERROR, "File not found: %s", rpath.c_str());
+            return JS_ThrowInternalError(ctx, "File not found: %s", rpath.c_str());
         }
     }
-    push_file_handle(ctx, rpath.c_str());
-    return 1;
+    return push_file_handle(ctx, rpath.c_str());
 }
 
 // fs.getDirectoryHandle(path, options)
-static duk_ret_t fs_getDirectoryHandle(duk_context *ctx) {
-    std::string rpath = resolve_path(duk_require_string(ctx, 0));
-    bool create = get_create_option(ctx, 1);
+static JSValue fs_getDirectoryHandle(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    (void)this_val;
+    if (argc < 1) return JS_ThrowInternalError(ctx, "getDirectoryHandle requires a path argument");
+    const char *pathStr = JS_ToCString(ctx, argv[0]);
+    if (!pathStr) return JS_EXCEPTION;
+    std::string rpath = resolve_path(pathStr);
+    JS_FreeCString(ctx, pathStr);
+    bool create = (argc > 1) ? get_create_option(ctx, argv[1]) : false;
 
     SDL_PathInfo info;
     if (!SDL_GetPathInfo(rpath.c_str(), &info) || info.type != SDL_PATHTYPE_DIRECTORY) {
         if (create) {
             SDL_CreateDirectory(rpath.c_str());
         } else {
-            return duk_error(ctx, DUK_ERR_ERROR, "Directory not found: %s", rpath.c_str());
+            return JS_ThrowInternalError(ctx, "Directory not found: %s", rpath.c_str());
         }
     }
-    push_directory_handle(ctx, rpath.c_str());
-    return 1;
+    return push_directory_handle(ctx, rpath.c_str());
 }
 
 // fs.exists(path) => boolean
-static duk_ret_t fs_exists(duk_context *ctx) {
-    std::string rpath = resolve_path(duk_require_string(ctx, 0));
+static JSValue fs_exists(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    (void)this_val;
+    if (argc < 1) return JS_FALSE;
+    const char *pathStr = JS_ToCString(ctx, argv[0]);
+    if (!pathStr) return JS_EXCEPTION;
+    std::string rpath = resolve_path(pathStr);
+    JS_FreeCString(ctx, pathStr);
     SDL_PathInfo info;
-    duk_push_boolean(ctx, SDL_GetPathInfo(rpath.c_str(), &info) && info.type != SDL_PATHTYPE_NONE);
-    return 1;
+    return JS_NewBool(ctx, SDL_GetPathInfo(rpath.c_str(), &info) && info.type != SDL_PATHTYPE_NONE);
 }
 
 // fs.stat(path) => { type, size, createTime, modifyTime, accessTime } | null
-static duk_ret_t fs_stat(duk_context *ctx) {
-    std::string rpath = resolve_path(duk_require_string(ctx, 0));
+static JSValue fs_stat(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    (void)this_val;
+    if (argc < 1) return JS_NULL;
+    const char *pathStr = JS_ToCString(ctx, argv[0]);
+    if (!pathStr) return JS_EXCEPTION;
+    std::string rpath = resolve_path(pathStr);
+    JS_FreeCString(ctx, pathStr);
     SDL_PathInfo info;
     if (!SDL_GetPathInfo(rpath.c_str(), &info) || info.type == SDL_PATHTYPE_NONE) {
-        duk_push_null(ctx);
-        return 1;
+        return JS_NULL;
     }
-    duk_idx_t obj = duk_push_object(ctx);
+    JSValue obj = JS_NewObject(ctx);
     const char *typeStr = "other";
     if (info.type == SDL_PATHTYPE_FILE) typeStr = "file";
     else if (info.type == SDL_PATHTYPE_DIRECTORY) typeStr = "directory";
-    duk_push_string(ctx, typeStr);
-    duk_put_prop_string(ctx, obj, "type");
-    duk_push_number(ctx, (double)info.size);
-    duk_put_prop_string(ctx, obj, "size");
-    duk_push_number(ctx, (double)info.create_time);
-    duk_put_prop_string(ctx, obj, "createTime");
-    duk_push_number(ctx, (double)info.modify_time);
-    duk_put_prop_string(ctx, obj, "modifyTime");
-    duk_push_number(ctx, (double)info.access_time);
-    duk_put_prop_string(ctx, obj, "accessTime");
-    return 1;
+    JS_SetPropertyStr(ctx, obj, "type", JS_NewString(ctx, typeStr));
+    JS_SetPropertyStr(ctx, obj, "size", JS_NewFloat64(ctx, (double)info.size));
+    JS_SetPropertyStr(ctx, obj, "createTime", JS_NewFloat64(ctx, (double)info.create_time));
+    JS_SetPropertyStr(ctx, obj, "modifyTime", JS_NewFloat64(ctx, (double)info.modify_time));
+    JS_SetPropertyStr(ctx, obj, "accessTime", JS_NewFloat64(ctx, (double)info.access_time));
+    return obj;
 }
 
 // fs.mkdir(path)
-static duk_ret_t fs_mkdir(duk_context *ctx) {
-    std::string rpath = resolve_path(duk_require_string(ctx, 0));
+static JSValue fs_mkdir(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    (void)this_val;
+    if (argc < 1) return JS_ThrowInternalError(ctx, "mkdir requires a path argument");
+    const char *pathStr = JS_ToCString(ctx, argv[0]);
+    if (!pathStr) return JS_EXCEPTION;
+    std::string rpath = resolve_path(pathStr);
+    JS_FreeCString(ctx, pathStr);
     if (!SDL_CreateDirectory(rpath.c_str())) {
-        return duk_error(ctx, DUK_ERR_ERROR, "Failed to create directory: %s", rpath.c_str());
+        return JS_ThrowInternalError(ctx, "Failed to create directory: %s", rpath.c_str());
     }
-    return 0;
+    return JS_UNDEFINED;
 }
 
 // fs.remove(path)
-static duk_ret_t fs_remove(duk_context *ctx) {
-    std::string rpath = resolve_path(duk_require_string(ctx, 0));
+static JSValue fs_remove(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    (void)this_val;
+    if (argc < 1) return JS_ThrowInternalError(ctx, "remove requires a path argument");
+    const char *pathStr = JS_ToCString(ctx, argv[0]);
+    if (!pathStr) return JS_EXCEPTION;
+    std::string rpath = resolve_path(pathStr);
+    JS_FreeCString(ctx, pathStr);
     if (!SDL_RemovePath(rpath.c_str())) {
-        return duk_error(ctx, DUK_ERR_ERROR, "Failed to remove: %s", rpath.c_str());
+        return JS_ThrowInternalError(ctx, "Failed to remove: %s", rpath.c_str());
     }
-    return 0;
+    return JS_UNDEFINED;
 }
 
 // fs.rename(oldPath, newPath)
-static duk_ret_t fs_rename(duk_context *ctx) {
-    std::string rold = resolve_path(duk_require_string(ctx, 0));
-    std::string rnew = resolve_path(duk_require_string(ctx, 1));
-    if (!SDL_RenamePath(rold.c_str(), rnew.c_str())) {
-        return duk_error(ctx, DUK_ERR_ERROR, "Failed to rename: %s -> %s", rold.c_str(), rnew.c_str());
+static JSValue fs_rename(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    (void)this_val;
+    if (argc < 2) return JS_ThrowInternalError(ctx, "rename requires oldPath and newPath arguments");
+    const char *oldStr = JS_ToCString(ctx, argv[0]);
+    const char *newStr = JS_ToCString(ctx, argv[1]);
+    if (!oldStr || !newStr) {
+        if (oldStr) JS_FreeCString(ctx, oldStr);
+        if (newStr) JS_FreeCString(ctx, newStr);
+        return JS_EXCEPTION;
     }
-    return 0;
+    std::string rold = resolve_path(oldStr);
+    std::string rnew = resolve_path(newStr);
+    JS_FreeCString(ctx, oldStr);
+    JS_FreeCString(ctx, newStr);
+    if (!SDL_RenamePath(rold.c_str(), rnew.c_str())) {
+        return JS_ThrowInternalError(ctx, "Failed to rename: %s -> %s", rold.c_str(), rnew.c_str());
+    }
+    return JS_UNDEFINED;
 }
 
 // fs.readText(path) => string
-static duk_ret_t fs_readText(duk_context *ctx) {
-    std::string rpath = resolve_path(duk_require_string(ctx, 0));
+static JSValue fs_readText(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    (void)this_val;
+    if (argc < 1) return JS_ThrowInternalError(ctx, "readText requires a path argument");
+    const char *pathStr = JS_ToCString(ctx, argv[0]);
+    if (!pathStr) return JS_EXCEPTION;
+    std::string rpath = resolve_path(pathStr);
+    JS_FreeCString(ctx, pathStr);
     size_t sz = 0;
     void *data = SDL_LoadFile(rpath.c_str(), &sz);
-    if (!data) return duk_error(ctx, DUK_ERR_ERROR, "Cannot read file: %s", rpath.c_str());
-    duk_push_lstring(ctx, (const char*)data, sz);
+    if (!data) return JS_ThrowInternalError(ctx, "Cannot read file: %s", rpath.c_str());
+    JSValue s = JS_NewStringLen(ctx, (const char*)data, sz);
     SDL_free(data);
-    return 1;
+    return s;
 }
 
 // fs.writeText(path, text)
-static duk_ret_t fs_writeText(duk_context *ctx) {
-    std::string rpath = resolve_path(duk_require_string(ctx, 0));
-    duk_size_t len;
-    const char *text = duk_require_lstring(ctx, 1, &len);
-    if (!SDL_SaveFile(rpath.c_str(), text, len)) {
-        return duk_error(ctx, DUK_ERR_ERROR, "Failed to write file: %s", rpath.c_str());
+static JSValue fs_writeText(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    (void)this_val;
+    if (argc < 2) return JS_ThrowInternalError(ctx, "writeText requires path and text arguments");
+    const char *pathStr = JS_ToCString(ctx, argv[0]);
+    if (!pathStr) return JS_EXCEPTION;
+    std::string rpath = resolve_path(pathStr);
+    JS_FreeCString(ctx, pathStr);
+    size_t len = 0;
+    const char *text = JS_ToCStringLen(ctx, &len, argv[1]);
+    if (!text) return JS_EXCEPTION;
+    bool ok = SDL_SaveFile(rpath.c_str(), text, len);
+    JS_FreeCString(ctx, text);
+    if (!ok) {
+        return JS_ThrowInternalError(ctx, "Failed to write file: %s", rpath.c_str());
     }
-    return 0;
+    return JS_UNDEFINED;
 }
 
-static void fs_register(duk_context *ctx) {
-    duk_idx_t obj = duk_push_object(ctx);
+static void fs_register(JSContext *ctx) {
+    JSValue obj = JS_NewObject(ctx);
 
-    duk_push_c_function(ctx, fs_getFileHandle, 2);
-    duk_put_prop_string(ctx, obj, "getFileHandle");
-    duk_push_c_function(ctx, fs_getDirectoryHandle, 2);
-    duk_put_prop_string(ctx, obj, "getDirectoryHandle");
-    duk_push_c_function(ctx, fs_exists, 1);
-    duk_put_prop_string(ctx, obj, "exists");
-    duk_push_c_function(ctx, fs_stat, 1);
-    duk_put_prop_string(ctx, obj, "stat");
-    duk_push_c_function(ctx, fs_mkdir, 1);
-    duk_put_prop_string(ctx, obj, "mkdir");
-    duk_push_c_function(ctx, fs_remove, 1);
-    duk_put_prop_string(ctx, obj, "remove");
-    duk_push_c_function(ctx, fs_rename, 2);
-    duk_put_prop_string(ctx, obj, "rename");
-    duk_push_c_function(ctx, fs_readText, 1);
-    duk_put_prop_string(ctx, obj, "readText");
-    duk_push_c_function(ctx, fs_writeText, 2);
-    duk_put_prop_string(ctx, obj, "writeText");
+    JS_SetPropertyStr(ctx, obj, "getFileHandle", JS_NewCFunction(ctx, fs_getFileHandle, "getFileHandle", 2));
+    JS_SetPropertyStr(ctx, obj, "getDirectoryHandle", JS_NewCFunction(ctx, fs_getDirectoryHandle, "getDirectoryHandle", 2));
+    JS_SetPropertyStr(ctx, obj, "exists", JS_NewCFunction(ctx, fs_exists, "exists", 1));
+    JS_SetPropertyStr(ctx, obj, "stat", JS_NewCFunction(ctx, fs_stat, "stat", 1));
+    JS_SetPropertyStr(ctx, obj, "mkdir", JS_NewCFunction(ctx, fs_mkdir, "mkdir", 1));
+    JS_SetPropertyStr(ctx, obj, "remove", JS_NewCFunction(ctx, fs_remove, "remove", 1));
+    JS_SetPropertyStr(ctx, obj, "rename", JS_NewCFunction(ctx, fs_rename, "rename", 2));
+    JS_SetPropertyStr(ctx, obj, "readText", JS_NewCFunction(ctx, fs_readText, "readText", 1));
+    JS_SetPropertyStr(ctx, obj, "writeText", JS_NewCFunction(ctx, fs_writeText, "writeText", 2));
 
     // fs.basePath を設定
     JsEngine *engine = JsEngine::getInstance();
     if (engine) {
-        duk_push_string(ctx, engine->getBasePath().c_str());
-        duk_put_prop_string(ctx, obj, "basePath");
+        JS_SetPropertyStr(ctx, obj, "basePath", JS_NewString(ctx, engine->getBasePath().c_str()));
     }
 
-    duk_put_global_string(ctx, "fs");
+    JSValue global = JS_GetGlobalObject(ctx);
+    JS_SetPropertyStr(ctx, global, "fs", obj);
+    JS_FreeValue(ctx, global);
 }
 
 // ============================================================
 // localStorage (Web Storage API)
 // データは SDL_GetPrefPath 配下の localStorage.json に保存
 // ============================================================
-
-// localStorage のデータは duktape のグローバル隠しオブジェクト __localStorageData に保持
-// 変更時に JSON ファイルに書き出す
 
 static char* get_storage_path() {
     char *pref = SDL_GetPrefPath("jsengine", "jsengine");
@@ -987,31 +1137,43 @@ static char* get_storage_path() {
 }
 
 // __localStorageData を JSON 文字列にして保存
-static void storage_save(duk_context *ctx) {
+static void storage_save(JSContext *ctx) {
     char *path = get_storage_path();
     if (!path) return;
 
-    duk_get_global_string(ctx, "JSON");
-    duk_get_prop_string(ctx, -1, "stringify");
-    duk_get_global_string(ctx, "__localStorageData");
-    duk_call(ctx, 1);
-    const char *json = duk_get_string(ctx, -1);
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue json = JS_GetPropertyStr(ctx, global, "JSON");
+    JSValue stringify = JS_GetPropertyStr(ctx, json, "stringify");
+    JSValue data = JS_GetPropertyStr(ctx, global, "__localStorageData");
 
-    SDL_IOStream *io = SDL_IOFromFile(path, "w");
-    if (io) {
-        SDL_WriteIO(io, json, strlen(json));
-        SDL_CloseIO(io);
+    JSValue result = JS_Call(ctx, stringify, json, 1, &data);
+    if (!JS_IsException(result)) {
+        const char *jsonStr = JS_ToCString(ctx, result);
+        if (jsonStr) {
+            SDL_IOStream *io = SDL_IOFromFile(path, "w");
+            if (io) {
+                SDL_WriteIO(io, jsonStr, strlen(jsonStr));
+                SDL_CloseIO(io);
+            }
+            JS_FreeCString(ctx, jsonStr);
+        }
     }
-    duk_pop_2(ctx); // json string, JSON object
+    JS_FreeValue(ctx, result);
+    JS_FreeValue(ctx, data);
+    JS_FreeValue(ctx, stringify);
+    JS_FreeValue(ctx, json);
+    JS_FreeValue(ctx, global);
     SDL_free(path);
 }
 
 // JSON ファイルから __localStorageData を復元
-static void storage_load(duk_context *ctx) {
+static void storage_load(JSContext *ctx) {
     char *path = get_storage_path();
+    JSValue global = JS_GetGlobalObject(ctx);
+
     if (!path) {
-        duk_push_object(ctx);
-        duk_put_global_string(ctx, "__localStorageData");
+        JS_SetPropertyStr(ctx, global, "__localStorageData", JS_NewObject(ctx));
+        JS_FreeValue(ctx, global);
         return;
     }
 
@@ -1020,138 +1182,184 @@ static void storage_load(duk_context *ctx) {
     SDL_free(path);
 
     if (data && size > 0) {
-        duk_get_global_string(ctx, "JSON");
-        duk_get_prop_string(ctx, -1, "parse");
-        duk_push_lstring(ctx, (const char*)data, size);
-        if (duk_pcall(ctx, 1) == 0 && duk_is_object(ctx, -1)) {
-            duk_put_global_string(ctx, "__localStorageData");
-            duk_pop(ctx); // JSON object
+        JSValue json = JS_GetPropertyStr(ctx, global, "JSON");
+        JSValue parse = JS_GetPropertyStr(ctx, json, "parse");
+        JSValue str = JS_NewStringLen(ctx, (const char*)data, size);
+        JSValue result = JS_Call(ctx, parse, json, 1, &str);
+        JS_FreeValue(ctx, str);
+        JS_FreeValue(ctx, parse);
+        JS_FreeValue(ctx, json);
+
+        if (!JS_IsException(result) && JS_IsObject(result)) {
+            JS_SetPropertyStr(ctx, global, "__localStorageData", result);
         } else {
-            duk_pop_2(ctx); // error/result, JSON object
-            duk_push_object(ctx);
-            duk_put_global_string(ctx, "__localStorageData");
+            JS_FreeValue(ctx, result);
+            JS_SetPropertyStr(ctx, global, "__localStorageData", JS_NewObject(ctx));
         }
     } else {
-        duk_push_object(ctx);
-        duk_put_global_string(ctx, "__localStorageData");
+        JS_SetPropertyStr(ctx, global, "__localStorageData", JS_NewObject(ctx));
     }
     if (data) SDL_free(data);
+    JS_FreeValue(ctx, global);
 }
 
 // localStorage.getItem(key) => string | null
-static duk_ret_t native_storage_getItem(duk_context *ctx) {
-    const char *key = duk_require_string(ctx, 0);
-    duk_get_global_string(ctx, "__localStorageData");
-    if (duk_get_prop_string(ctx, -1, key)) {
-        // 値あり — string として返す
-        duk_remove(ctx, -2); // __localStorageData
-        return 1;
+static JSValue native_storage_getItem(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    (void)this_val;
+    if (argc < 1) return JS_NULL;
+    const char *key = JS_ToCString(ctx, argv[0]);
+    if (!key) return JS_EXCEPTION;
+
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue data = JS_GetPropertyStr(ctx, global, "__localStorageData");
+    JSValue val = JS_GetPropertyStr(ctx, data, key);
+    JS_FreeValue(ctx, data);
+    JS_FreeValue(ctx, global);
+    JS_FreeCString(ctx, key);
+
+    if (JS_IsUndefined(val)) {
+        JS_FreeValue(ctx, val);
+        return JS_NULL;
     }
-    duk_pop_2(ctx); // undefined, __localStorageData
-    duk_push_null(ctx);
-    return 1;
+    return val;
 }
 
 // localStorage.setItem(key, value)
-static duk_ret_t native_storage_setItem(duk_context *ctx) {
-    const char *key = duk_require_string(ctx, 0);
-    const char *value = duk_to_string(ctx, 1);
-    duk_get_global_string(ctx, "__localStorageData");
-    duk_push_string(ctx, value);
-    duk_put_prop_string(ctx, -2, key);
-    duk_pop(ctx); // __localStorageData
+static JSValue native_storage_setItem(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    (void)this_val;
+    if (argc < 2) return JS_UNDEFINED;
+    const char *key = JS_ToCString(ctx, argv[0]);
+    if (!key) return JS_EXCEPTION;
+    const char *value = JS_ToCString(ctx, argv[1]);
+    if (!value) { JS_FreeCString(ctx, key); return JS_EXCEPTION; }
+
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue data = JS_GetPropertyStr(ctx, global, "__localStorageData");
+    JS_SetPropertyStr(ctx, data, key, JS_NewString(ctx, value));
+    JS_FreeValue(ctx, data);
+    JS_FreeValue(ctx, global);
+    JS_FreeCString(ctx, value);
+    JS_FreeCString(ctx, key);
+
     storage_save(ctx);
-    return 0;
+    return JS_UNDEFINED;
 }
 
 // localStorage.removeItem(key)
-static duk_ret_t native_storage_removeItem(duk_context *ctx) {
-    const char *key = duk_require_string(ctx, 0);
-    duk_get_global_string(ctx, "__localStorageData");
-    duk_del_prop_string(ctx, -1, key);
-    duk_pop(ctx);
+static JSValue native_storage_removeItem(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    (void)this_val;
+    if (argc < 1) return JS_UNDEFINED;
+    const char *key = JS_ToCString(ctx, argv[0]);
+    if (!key) return JS_EXCEPTION;
+
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue data = JS_GetPropertyStr(ctx, global, "__localStorageData");
+    JSAtom atom = JS_NewAtom(ctx, key);
+    JS_DeleteProperty(ctx, data, atom, 0);
+    JS_FreeAtom(ctx, atom);
+    JS_FreeValue(ctx, data);
+    JS_FreeValue(ctx, global);
+    JS_FreeCString(ctx, key);
+
     storage_save(ctx);
-    return 0;
+    return JS_UNDEFINED;
 }
 
 // localStorage.clear()
-static duk_ret_t native_storage_clear(duk_context *ctx) {
-    duk_push_object(ctx);
-    duk_put_global_string(ctx, "__localStorageData");
+static JSValue native_storage_clear(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    (void)this_val; (void)argc; (void)argv;
+    JSValue global = JS_GetGlobalObject(ctx);
+    JS_SetPropertyStr(ctx, global, "__localStorageData", JS_NewObject(ctx));
+    JS_FreeValue(ctx, global);
     storage_save(ctx);
-    return 0;
+    return JS_UNDEFINED;
 }
 
 // localStorage.key(index) => string | null
-static duk_ret_t native_storage_key(duk_context *ctx) {
-    duk_uint_t index = duk_require_uint(ctx, 0);
-    duk_get_global_string(ctx, "__localStorageData");
-    duk_enum(ctx, -1, DUK_ENUM_OWN_PROPERTIES_ONLY);
-    duk_uint_t i = 0;
-    while (duk_next(ctx, -1, 0)) {
-        if (i == index) {
-            // key はスタックトップ
-            duk_remove(ctx, -2); // enum
-            duk_remove(ctx, -2); // __localStorageData
-            return 1;
+static JSValue native_storage_key(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    (void)this_val;
+    if (argc < 1) return JS_NULL;
+    uint32_t index = 0;
+    JS_ToUint32(ctx, &index, argv[0]);
+
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue data = JS_GetPropertyStr(ctx, global, "__localStorageData");
+
+    // プロパティを列挙
+    JSPropertyEnum *tab = nullptr;
+    uint32_t len = 0;
+    if (JS_GetOwnPropertyNames(ctx, &tab, &len, data, JS_GPN_STRING_MASK | JS_GPN_ENUM_ONLY) == 0) {
+        JSValue result = JS_NULL;
+        if (index < len) {
+            result = JS_AtomToString(ctx, tab[index].atom);
         }
-        duk_pop(ctx); // key
-        i++;
+        for (uint32_t i = 0; i < len; i++) {
+            JS_FreeAtom(ctx, tab[i].atom);
+        }
+        js_free(ctx, tab);
+        JS_FreeValue(ctx, data);
+        JS_FreeValue(ctx, global);
+        return result;
     }
-    duk_pop_2(ctx); // enum, __localStorageData
-    duk_push_null(ctx);
-    return 1;
+
+    JS_FreeValue(ctx, data);
+    JS_FreeValue(ctx, global);
+    return JS_NULL;
 }
 
 // localStorage.length (getter)
-static duk_ret_t native_storage_length(duk_context *ctx) {
-    duk_get_global_string(ctx, "__localStorageData");
-    duk_enum(ctx, -1, DUK_ENUM_OWN_PROPERTIES_ONLY);
-    duk_uint_t count = 0;
-    while (duk_next(ctx, -1, 0)) {
-        duk_pop(ctx);
-        count++;
+static JSValue native_storage_length(JSContext *ctx, JSValueConst this_val) {
+    (void)this_val;
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue data = JS_GetPropertyStr(ctx, global, "__localStorageData");
+
+    JSPropertyEnum *tab = nullptr;
+    uint32_t len = 0;
+    uint32_t count = 0;
+    if (JS_GetOwnPropertyNames(ctx, &tab, &len, data, JS_GPN_STRING_MASK | JS_GPN_ENUM_ONLY) == 0) {
+        count = len;
+        for (uint32_t i = 0; i < len; i++) {
+            JS_FreeAtom(ctx, tab[i].atom);
+        }
+        js_free(ctx, tab);
     }
-    duk_pop_2(ctx); // enum, __localStorageData
-    duk_push_uint(ctx, count);
-    return 1;
+
+    JS_FreeValue(ctx, data);
+    JS_FreeValue(ctx, global);
+    return JS_NewUint32(ctx, count);
 }
 
-static void storage_register(duk_context *ctx) {
+static void storage_register(JSContext *ctx) {
     // ファイルからデータ復元
     storage_load(ctx);
 
     // localStorage オブジェクト作成
-    duk_push_object(ctx);
+    JSValue ls = JS_NewObject(ctx);
 
-    duk_push_c_function(ctx, native_storage_getItem, 1);
-    duk_put_prop_string(ctx, -2, "getItem");
-    duk_push_c_function(ctx, native_storage_setItem, 2);
-    duk_put_prop_string(ctx, -2, "setItem");
-    duk_push_c_function(ctx, native_storage_removeItem, 1);
-    duk_put_prop_string(ctx, -2, "removeItem");
-    duk_push_c_function(ctx, native_storage_clear, 0);
-    duk_put_prop_string(ctx, -2, "clear");
-    duk_push_c_function(ctx, native_storage_key, 1);
-    duk_put_prop_string(ctx, -2, "key");
+    JS_SetPropertyStr(ctx, ls, "getItem", JS_NewCFunction(ctx, native_storage_getItem, "getItem", 1));
+    JS_SetPropertyStr(ctx, ls, "setItem", JS_NewCFunction(ctx, native_storage_setItem, "setItem", 2));
+    JS_SetPropertyStr(ctx, ls, "removeItem", JS_NewCFunction(ctx, native_storage_removeItem, "removeItem", 1));
+    JS_SetPropertyStr(ctx, ls, "clear", JS_NewCFunction(ctx, native_storage_clear, "clear", 0));
+    JS_SetPropertyStr(ctx, ls, "key", JS_NewCFunction(ctx, native_storage_key, "key", 1));
 
     // length を getter プロパティとして定義
-    duk_push_string(ctx, "length");
-    duk_push_c_function(ctx, native_storage_length, 0);
-    duk_def_prop(ctx, -3, DUK_DEFPROP_HAVE_GETTER | DUK_DEFPROP_SET_ENUMERABLE);
+    JSAtom lengthAtom = JS_NewAtom(ctx, "length");
+    JSValue getter = JS_NewCFunction2(ctx, (JSCFunction*)native_storage_length, "length", 0, JS_CFUNC_getter, 0);
+    JS_DefinePropertyGetSet(ctx, ls, lengthAtom, getter, JS_UNDEFINED, JS_PROP_ENUMERABLE);
+    JS_FreeAtom(ctx, lengthAtom);
 
-    duk_put_global_string(ctx, "localStorage");
+    JSValue global = JS_GetGlobalObject(ctx);
+    JS_SetPropertyStr(ctx, global, "localStorage", ls);
+    JS_FreeValue(ctx, global);
 }
 
-// duktape fatal error handler
-static void fatal_handler(void *udata, const char *msg) {
-    (void)udata;
-    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Duktape fatal error: %s", msg ? msg : "unknown");
-}
+// ============================================================
+// JsEngine クラス実装
+// ============================================================
 
 JsEngine* JsEngine::instance_ = nullptr;
 
-JsEngine::JsEngine() : ctx_(nullptr) {
+JsEngine::JsEngine() : rt_(nullptr), ctx_(nullptr) {
     instance_ = this;
 }
 
@@ -1180,87 +1388,72 @@ std::string JsEngine::resolvePath(const char *path) const {
 }
 
 bool JsEngine::init(int argc, char **argv) {
-    ctx_ = duk_create_heap(nullptr, nullptr, nullptr, nullptr, fatal_handler);
-    if (!ctx_) {
-        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to create Duktape context");
+    rt_ = JS_NewRuntime();
+    if (!rt_) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to create QuickJS runtime");
         return false;
     }
 
+    ctx_ = JS_NewContext(rt_);
+    if (!ctx_) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to create QuickJS context");
+        JS_FreeRuntime(rt_);
+        rt_ = nullptr;
+        return false;
+    }
+
+    JSValue global = JS_GetGlobalObject(ctx_);
+
     // コマンドライン引数を JS グローバル __args に設定
-    duk_push_array(ctx_);
+    JSValue args = JS_NewArray(ctx_);
     if (argv) {
         for (int i = 0; i < argc; i++) {
-            duk_push_string(ctx_, argv[i]);
-            duk_put_prop_index(ctx_, -2, (duk_uarridx_t)i);
+            JS_SetPropertyUint32(ctx_, args, (uint32_t)i, JS_NewString(ctx_, argv[i]));
         }
     }
-    duk_put_global_string(ctx_, "__args");
+    JS_SetPropertyStr(ctx_, global, "__args", args);
 
     // console オブジェクト登録
-    duk_push_object(ctx_);
-    duk_push_c_function(ctx_, native_console_log, DUK_VARARGS);
-    duk_put_prop_string(ctx_, -2, "log");
-    duk_push_c_function(ctx_, native_console_log, DUK_VARARGS);
-    duk_put_prop_string(ctx_, -2, "warn");
-    duk_push_c_function(ctx_, native_console_log, DUK_VARARGS);
-    duk_put_prop_string(ctx_, -2, "info");
-    duk_push_c_function(ctx_, native_console_log, DUK_VARARGS);
-    duk_put_prop_string(ctx_, -2, "debug");
-    duk_push_c_function(ctx_, native_console_error, DUK_VARARGS);
-    duk_put_prop_string(ctx_, -2, "error");
-    duk_put_global_string(ctx_, "console");
+    JSValue console = JS_NewObject(ctx_);
+    JS_SetPropertyStr(ctx_, console, "log", JS_NewCFunction(ctx_, native_console_log, "log", 0));
+    JS_SetPropertyStr(ctx_, console, "warn", JS_NewCFunction(ctx_, native_console_log, "warn", 0));
+    JS_SetPropertyStr(ctx_, console, "info", JS_NewCFunction(ctx_, native_console_log, "info", 0));
+    JS_SetPropertyStr(ctx_, console, "debug", JS_NewCFunction(ctx_, native_console_log, "debug", 0));
+    JS_SetPropertyStr(ctx_, console, "error", JS_NewCFunction(ctx_, native_console_error, "error", 0));
+    JS_SetPropertyStr(ctx_, global, "console", console);
 
     // loadScript バインディング登録
-    duk_push_c_function(ctx_, native_load_script, 1);
-    duk_put_global_string(ctx_, "loadScript");
+    JS_SetPropertyStr(ctx_, global, "loadScript", JS_NewCFunction(ctx_, native_load_script, "loadScript", 1));
 
     // createImageBitmap 登録
-    duk_push_c_function(ctx_, native_createImageBitmap, 1);
-    duk_put_global_string(ctx_, "createImageBitmap");
+    JS_SetPropertyStr(ctx_, global, "createImageBitmap", JS_NewCFunction(ctx_, native_createImageBitmap, "createImageBitmap", 1));
 
     // addEventListener / removeEventListener 登録
-    duk_push_c_function(ctx_, native_addEventListener, 2);
-    duk_put_global_string(ctx_, "addEventListener");
-    duk_push_c_function(ctx_, native_removeEventListener, 2);
-    duk_put_global_string(ctx_, "removeEventListener");
+    JS_SetPropertyStr(ctx_, global, "addEventListener", JS_NewCFunction(ctx_, native_addEventListener, "addEventListener", 2));
+    JS_SetPropertyStr(ctx_, global, "removeEventListener", JS_NewCFunction(ctx_, native_removeEventListener, "removeEventListener", 2));
 
     // イベントリスナー格納用オブジェクト
-    duk_push_object(ctx_);
-    duk_put_global_string(ctx_, "__eventListeners");
+    JS_SetPropertyStr(ctx_, global, "__eventListeners", JS_NewObject(ctx_));
 
     // タイマー格納用
-    duk_push_object(ctx_);
-    duk_put_global_string(ctx_, "__timers");
-    duk_push_array(ctx_);
-    duk_put_global_string(ctx_, "__rafCallbacks");
+    JS_SetPropertyStr(ctx_, global, "__rafCallbacks", JS_NewArray(ctx_));
 
     // setTimeout / setInterval
-    duk_push_c_function(ctx_, native_setTimeout, DUK_VARARGS);
-    duk_push_boolean(ctx_, 0);
-    duk_put_prop_string(ctx_, -2, "_isInterval");
-    duk_put_global_string(ctx_, "setTimeout");
-
-    duk_push_c_function(ctx_, native_setTimeout, DUK_VARARGS);
-    duk_push_boolean(ctx_, 1);
-    duk_put_prop_string(ctx_, -2, "_isInterval");
-    duk_put_global_string(ctx_, "setInterval");
-
-    duk_push_c_function(ctx_, native_clearTimeout, 1);
-    duk_put_global_string(ctx_, "clearTimeout");
-    duk_push_c_function(ctx_, native_clearTimeout, 1);
-    duk_put_global_string(ctx_, "clearInterval");
+    JS_SetPropertyStr(ctx_, global, "setTimeout", JS_NewCFunction(ctx_, native_setTimeout, "setTimeout", 2));
+    JS_SetPropertyStr(ctx_, global, "setInterval", JS_NewCFunction(ctx_, native_setInterval, "setInterval", 2));
+    JS_SetPropertyStr(ctx_, global, "clearTimeout", JS_NewCFunction(ctx_, native_clearTimeout, "clearTimeout", 1));
+    JS_SetPropertyStr(ctx_, global, "clearInterval", JS_NewCFunction(ctx_, native_clearTimeout, "clearInterval", 1));
 
     // requestAnimationFrame
-    duk_push_c_function(ctx_, native_requestAnimationFrame, 1);
-    duk_put_global_string(ctx_, "requestAnimationFrame");
-    duk_push_c_function(ctx_, native_cancelAnimationFrame, 1);
-    duk_put_global_string(ctx_, "cancelAnimationFrame");
+    JS_SetPropertyStr(ctx_, global, "requestAnimationFrame", JS_NewCFunction(ctx_, native_requestAnimationFrame, "requestAnimationFrame", 1));
+    JS_SetPropertyStr(ctx_, global, "cancelAnimationFrame", JS_NewCFunction(ctx_, native_cancelAnimationFrame, "cancelAnimationFrame", 1));
 
     // performance.now()
-    duk_push_object(ctx_);
-    duk_push_c_function(ctx_, native_performance_now, 0);
-    duk_put_prop_string(ctx_, -2, "now");
-    duk_put_global_string(ctx_, "performance");
+    JSValue perf = JS_NewObject(ctx_);
+    JS_SetPropertyStr(ctx_, perf, "now", JS_NewCFunction(ctx_, native_performance_now, "now", 0));
+    JS_SetPropertyStr(ctx_, global, "performance", perf);
+
+    JS_FreeValue(ctx_, global);
 
     // File System Access API 登録
     fs_register(ctx_);
@@ -1277,7 +1470,7 @@ bool JsEngine::init(int argc, char **argv) {
     // Canvas 2D API バインディング登録
     canvas2d_bind(ctx_);
 
-    SDL_Log("JsEngine initialized");
+    SDL_Log("JsEngine initialized (QuickJS)");
     return true;
 }
 
@@ -1289,20 +1482,14 @@ bool JsEngine::loadFile(const char *path) {
     char *source = load_file_sdl(resolved.c_str(), &size);
     if (!source) return false;
 
-    duk_push_lstring(ctx_, source, size);
+    JSValue result = JS_Eval(ctx_, source, size, path, JS_EVAL_TYPE_GLOBAL);
     SDL_free(source);
-    duk_push_string(ctx_, path);
-    if (duk_pcompile(ctx_, DUK_COMPILE_EVAL) != 0) {
-        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "JS compile error (%s): %s", resolved.c_str(), duk_safe_to_string(ctx_, -1));
-        duk_pop(ctx_);
+
+    if (JS_IsException(result)) {
+        log_exception(ctx_, resolved.c_str());
         return false;
     }
-    if (duk_pcall(ctx_, 0) != 0) {
-        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "JS exec error (%s): %s", resolved.c_str(), duk_safe_to_string(ctx_, -1));
-        duk_pop(ctx_);
-        return false;
-    }
-    duk_pop(ctx_); // 実行結果を捨てる
+    JS_FreeValue(ctx_, result);
     SDL_Log("Loaded JS: %s", resolved.c_str());
     return true;
 }
@@ -1321,26 +1508,19 @@ void JsEngine::processTimers() {
             int id = g_timers[i].id;
             bool isInterval = g_timers[i].interval;
             uint32_t delay = g_timers[i].delay;
+            JSValue cb = g_timers[i].callback;
 
-            duk_get_global_string(ctx_, "__timers");
-            duk_get_prop_index(ctx_, -1, (duk_uarridx_t)id);
-            if (duk_is_function(ctx_, -1)) {
-                if (duk_pcall(ctx_, 0) != 0) {
-                    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Timer error: %s", duk_safe_to_string(ctx_, -1));
-                }
-                duk_pop(ctx_);
-            } else {
-                duk_pop(ctx_);
+            JSValue result = JS_Call(ctx_, cb, JS_UNDEFINED, 0, nullptr);
+            if (JS_IsException(result)) {
+                log_exception(ctx_, "Timer error");
             }
-            duk_pop(ctx_);
+            JS_FreeValue(ctx_, result);
 
             if (isInterval) {
                 g_timers[i].fireTime = g_currentTime + delay;
                 i++;
             } else {
-                duk_get_global_string(ctx_, "__timers");
-                duk_del_prop_index(ctx_, -1, (duk_uarridx_t)id);
-                duk_pop(ctx_);
+                JS_FreeValue(ctx_, cb);
                 g_timers.erase(g_timers.begin() + (ptrdiff_t)i);
             }
         } else {
@@ -1352,36 +1532,39 @@ void JsEngine::processTimers() {
 void JsEngine::processRAF() {
     if (!ctx_) return;
 
-    // __rafCallbacks を取得、新しい配列に入れ替え
-    duk_get_global_string(ctx_, "__rafCallbacks");
-    duk_get_prop_string(ctx_, -1, "length");
-    duk_uint_t len = duk_to_uint(ctx_, -1);
-    duk_pop(ctx_);
+    JSValue global = JS_GetGlobalObject(ctx_);
+    JSValue oldArr = JS_GetPropertyStr(ctx_, global, "__rafCallbacks");
+    JSValue lenVal = JS_GetPropertyStr(ctx_, oldArr, "length");
+    uint32_t len = 0;
+    JS_ToUint32(ctx_, &len, lenVal);
+    JS_FreeValue(ctx_, lenVal);
 
     if (len == 0) {
-        duk_pop(ctx_);
+        JS_FreeValue(ctx_, oldArr);
+        JS_FreeValue(ctx_, global);
         return;
     }
 
     // 空の配列に入れ替え
-    duk_push_array(ctx_);
-    duk_put_global_string(ctx_, "__rafCallbacks");
+    JS_SetPropertyStr(ctx_, global, "__rafCallbacks", JS_NewArray(ctx_));
 
     // コールバック実行
     double now = (double)SDL_GetTicks();
-    for (duk_uint_t i = 0; i < len; i++) {
-        duk_get_prop_index(ctx_, -1, (duk_uarridx_t)i);
-        if (duk_is_function(ctx_, -1)) {
-            duk_push_number(ctx_, now);
-            if (duk_pcall(ctx_, 1) != 0) {
-                SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "RAF error: %s", duk_safe_to_string(ctx_, -1));
+    JSValue nowVal = JS_NewFloat64(ctx_, now);
+    for (uint32_t i = 0; i < len; i++) {
+        JSValue cb = JS_GetPropertyUint32(ctx_, oldArr, i);
+        if (JS_IsFunction(ctx_, cb)) {
+            JSValue result = JS_Call(ctx_, cb, JS_UNDEFINED, 1, &nowVal);
+            if (JS_IsException(result)) {
+                log_exception(ctx_, "RAF error");
             }
-            duk_pop(ctx_);
-        } else {
-            duk_pop(ctx_);
+            JS_FreeValue(ctx_, result);
         }
+        JS_FreeValue(ctx_, cb);
     }
-    duk_pop(ctx_); // old array
+    JS_FreeValue(ctx_, nowVal);
+    JS_FreeValue(ctx_, oldArr);
+    JS_FreeValue(ctx_, global);
 }
 
 void JsEngine::update(uint32_t delta) {
@@ -1391,136 +1574,137 @@ void JsEngine::update(uint32_t delta) {
     processRAF();
 
     // グローバルに update 関数があれば呼び出す
-    duk_get_global_string(ctx_, "update");
-    if (duk_is_function(ctx_, -1)) {
-        duk_push_uint(ctx_, delta);
-        if (duk_pcall(ctx_, 1) != 0) {
-            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "JS update error: %s", duk_safe_to_string(ctx_, -1));
+    JSValue global = JS_GetGlobalObject(ctx_);
+    JSValue updateFn = JS_GetPropertyStr(ctx_, global, "update");
+    if (JS_IsFunction(ctx_, updateFn)) {
+        JSValue arg = JS_NewUint32(ctx_, delta);
+        JSValue result = JS_Call(ctx_, updateFn, JS_UNDEFINED, 1, &arg);
+        if (JS_IsException(result)) {
+            log_exception(ctx_, "JS update error");
         }
+        JS_FreeValue(ctx_, result);
+        JS_FreeValue(ctx_, arg);
     }
-    duk_pop(ctx_);
+    JS_FreeValue(ctx_, updateFn);
+    JS_FreeValue(ctx_, global);
 }
 
 void JsEngine::render() {
     if (!ctx_) return;
 
-    duk_get_global_string(ctx_, "render");
-    if (duk_is_function(ctx_, -1)) {
-        if (duk_pcall(ctx_, 0) != 0) {
-            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "JS render error: %s", duk_safe_to_string(ctx_, -1));
+    JSValue global = JS_GetGlobalObject(ctx_);
+    JSValue renderFn = JS_GetPropertyStr(ctx_, global, "render");
+    if (JS_IsFunction(ctx_, renderFn)) {
+        JSValue result = JS_Call(ctx_, renderFn, JS_UNDEFINED, 0, nullptr);
+        if (JS_IsException(result)) {
+            log_exception(ctx_, "JS render error");
         }
+        JS_FreeValue(ctx_, result);
     }
-    duk_pop(ctx_);
+    JS_FreeValue(ctx_, renderFn);
+    JS_FreeValue(ctx_, global);
 }
 
 // ============================================================
 // イベントディスパッチ: __eventListeners[type] の全コールバックを呼ぶ
-// スタックトップにイベントオブジェクトが積まれた状態で呼ぶ
 // ============================================================
-void JsEngine::dispatchEvent(const char *type) {
-    // stack: [ event_obj ]
-    if (!duk_get_global_string(ctx_, "__eventListeners")) {
-        duk_pop_2(ctx_); // undefined, event_obj
-        return;
-    }
-    if (!duk_get_prop_string(ctx_, -1, type)) {
-        duk_pop_3(ctx_); // undefined, __eventListeners, event_obj
-        return;
-    }
-    // stack: [ event_obj, __eventListeners, array ]
-    duk_get_prop_string(ctx_, -1, "length");
-    duk_idx_t len = (duk_idx_t)duk_to_uint(ctx_, -1);
-    duk_pop(ctx_);
+void JsEngine::dispatchEvent(const char *type, JSValue event_obj) {
+    JSValue global = JS_GetGlobalObject(ctx_);
+    JSValue listeners = JS_GetPropertyStr(ctx_, global, "__eventListeners");
+    JS_FreeValue(ctx_, global);
 
-    for (duk_idx_t i = 0; i < len; i++) {
-        duk_get_prop_index(ctx_, -1, (duk_uarridx_t)i);
-        if (duk_is_function(ctx_, -1)) {
-            duk_dup(ctx_, -4); // event_obj をコピー
-            if (duk_pcall(ctx_, 1) != 0) {
-                SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
-                    "JS %s handler error: %s", type, duk_safe_to_string(ctx_, -1));
-            }
-        }
-        duk_pop(ctx_); // 戻り値 or error
+    if (JS_IsUndefined(listeners)) {
+        JS_FreeValue(ctx_, listeners);
+        JS_FreeValue(ctx_, event_obj);
+        return;
     }
-    duk_pop_3(ctx_); // array, __eventListeners, event_obj
+
+    JSValue arr = JS_GetPropertyStr(ctx_, listeners, type);
+    JS_FreeValue(ctx_, listeners);
+
+    if (JS_IsUndefined(arr)) {
+        JS_FreeValue(ctx_, arr);
+        JS_FreeValue(ctx_, event_obj);
+        return;
+    }
+
+    JSValue lenVal = JS_GetPropertyStr(ctx_, arr, "length");
+    uint32_t len = 0;
+    JS_ToUint32(ctx_, &len, lenVal);
+    JS_FreeValue(ctx_, lenVal);
+
+    for (uint32_t i = 0; i < len; i++) {
+        JSValue cb = JS_GetPropertyUint32(ctx_, arr, i);
+        if (JS_IsFunction(ctx_, cb)) {
+            JSValue result = JS_Call(ctx_, cb, JS_UNDEFINED, 1, &event_obj);
+            if (JS_IsException(result)) {
+                log_exception(ctx_, type);
+            }
+            JS_FreeValue(ctx_, result);
+        }
+        JS_FreeValue(ctx_, cb);
+    }
+    JS_FreeValue(ctx_, arr);
+    JS_FreeValue(ctx_, event_obj);
 }
 
 // ============================================================
 // キーボードイベント構築
 // ============================================================
-void JsEngine::pushKeyboardEvent(const SDL_Event *event, const char *type) {
+JSValue JsEngine::pushKeyboardEvent(const SDL_Event *event, const char *type) {
     const SDL_KeyboardEvent &key = event->key;
-    duk_idx_t obj = duk_push_object(ctx_);
+    JSValue obj = JS_NewObject(ctx_);
 
-    duk_push_string(ctx_, type);
-    duk_put_prop_string(ctx_, obj, "type");
+    JS_SetPropertyStr(ctx_, obj, "type", JS_NewString(ctx_, type));
 
     // key: ブラウザ互換の文字列
     const char *jsKey = sdl_keycode_to_js_key(key.key);
     if (jsKey) {
-        duk_push_string(ctx_, jsKey);
+        JS_SetPropertyStr(ctx_, obj, "key", JS_NewString(ctx_, jsKey));
     } else {
         const char *name = SDL_GetKeyName(key.key);
-        duk_push_string(ctx_, name ? name : "Unidentified");
+        JS_SetPropertyStr(ctx_, obj, "key", JS_NewString(ctx_, name ? name : "Unidentified"));
     }
-    duk_put_prop_string(ctx_, obj, "key");
 
     // code: 物理キー名
     const char *jsCode = sdl_scancode_to_js_code(key.scancode);
-    duk_push_string(ctx_, jsCode ? jsCode : "");
-    duk_put_prop_string(ctx_, obj, "code");
+    JS_SetPropertyStr(ctx_, obj, "code", JS_NewString(ctx_, jsCode ? jsCode : ""));
 
     // keyCode (レガシー互換)
-    duk_push_uint(ctx_, (duk_uint_t)key.key);
-    duk_put_prop_string(ctx_, obj, "keyCode");
+    JS_SetPropertyStr(ctx_, obj, "keyCode", JS_NewUint32(ctx_, (uint32_t)key.key));
 
     // 修飾キー
-    duk_push_boolean(ctx_, (key.mod & SDL_KMOD_ALT) != 0);
-    duk_put_prop_string(ctx_, obj, "altKey");
-    duk_push_boolean(ctx_, (key.mod & SDL_KMOD_CTRL) != 0);
-    duk_put_prop_string(ctx_, obj, "ctrlKey");
-    duk_push_boolean(ctx_, (key.mod & SDL_KMOD_SHIFT) != 0);
-    duk_put_prop_string(ctx_, obj, "shiftKey");
-    duk_push_boolean(ctx_, (key.mod & SDL_KMOD_GUI) != 0);
-    duk_put_prop_string(ctx_, obj, "metaKey");
+    JS_SetPropertyStr(ctx_, obj, "altKey", JS_NewBool(ctx_, (key.mod & SDL_KMOD_ALT) != 0));
+    JS_SetPropertyStr(ctx_, obj, "ctrlKey", JS_NewBool(ctx_, (key.mod & SDL_KMOD_CTRL) != 0));
+    JS_SetPropertyStr(ctx_, obj, "shiftKey", JS_NewBool(ctx_, (key.mod & SDL_KMOD_SHIFT) != 0));
+    JS_SetPropertyStr(ctx_, obj, "metaKey", JS_NewBool(ctx_, (key.mod & SDL_KMOD_GUI) != 0));
 
-    duk_push_boolean(ctx_, key.repeat);
-    duk_put_prop_string(ctx_, obj, "repeat");
+    JS_SetPropertyStr(ctx_, obj, "repeat", JS_NewBool(ctx_, key.repeat));
 
-    // event_obj がスタックトップに残っている
+    return obj;
 }
 
 // ============================================================
 // マウスイベント構築
 // ============================================================
-void JsEngine::pushMouseEvent(const SDL_Event *event, const char *type) {
-    duk_idx_t obj = duk_push_object(ctx_);
+JSValue JsEngine::pushMouseEvent(const SDL_Event *event, const char *type) {
+    JSValue obj = JS_NewObject(ctx_);
 
-    duk_push_string(ctx_, type);
-    duk_put_prop_string(ctx_, obj, "type");
+    JS_SetPropertyStr(ctx_, obj, "type", JS_NewString(ctx_, type));
 
     if (event->type == SDL_EVENT_MOUSE_MOTION) {
         const SDL_MouseMotionEvent &m = event->motion;
-        duk_push_number(ctx_, m.x);
-        duk_put_prop_string(ctx_, obj, "clientX");
-        duk_push_number(ctx_, m.y);
-        duk_put_prop_string(ctx_, obj, "clientY");
-        duk_push_number(ctx_, m.xrel);
-        duk_put_prop_string(ctx_, obj, "movementX");
-        duk_push_number(ctx_, m.yrel);
-        duk_put_prop_string(ctx_, obj, "movementY");
+        JS_SetPropertyStr(ctx_, obj, "clientX", JS_NewFloat64(ctx_, m.x));
+        JS_SetPropertyStr(ctx_, obj, "clientY", JS_NewFloat64(ctx_, m.y));
+        JS_SetPropertyStr(ctx_, obj, "movementX", JS_NewFloat64(ctx_, m.xrel));
+        JS_SetPropertyStr(ctx_, obj, "movementY", JS_NewFloat64(ctx_, m.yrel));
         // buttons ビットマスク（ブラウザ互換: 1=左, 2=右, 4=中）
-        duk_push_uint(ctx_, (duk_uint_t)m.state);
-        duk_put_prop_string(ctx_, obj, "buttons");
-        duk_push_int(ctx_, 0);
-        duk_put_prop_string(ctx_, obj, "button");
+        JS_SetPropertyStr(ctx_, obj, "buttons", JS_NewUint32(ctx_, (uint32_t)m.state));
+        JS_SetPropertyStr(ctx_, obj, "button", JS_NewInt32(ctx_, 0));
     } else {
         const SDL_MouseButtonEvent &b = event->button;
-        duk_push_number(ctx_, b.x);
-        duk_put_prop_string(ctx_, obj, "clientX");
-        duk_push_number(ctx_, b.y);
-        duk_put_prop_string(ctx_, obj, "clientY");
+        JS_SetPropertyStr(ctx_, obj, "clientX", JS_NewFloat64(ctx_, b.x));
+        JS_SetPropertyStr(ctx_, obj, "clientY", JS_NewFloat64(ctx_, b.y));
         // SDL button: 1=左,2=中,3=右 → ブラウザ button: 0=左,1=中,2=右
         int jsButton = 0;
         switch (b.button) {
@@ -1530,74 +1714,59 @@ void JsEngine::pushMouseEvent(const SDL_Event *event, const char *type) {
         case SDL_BUTTON_X1:     jsButton = 3; break;
         case SDL_BUTTON_X2:     jsButton = 4; break;
         }
-        duk_push_int(ctx_, jsButton);
-        duk_put_prop_string(ctx_, obj, "button");
-        duk_push_number(ctx_, 0);
-        duk_put_prop_string(ctx_, obj, "movementX");
-        duk_push_number(ctx_, 0);
-        duk_put_prop_string(ctx_, obj, "movementY");
+        JS_SetPropertyStr(ctx_, obj, "button", JS_NewInt32(ctx_, jsButton));
+        JS_SetPropertyStr(ctx_, obj, "movementX", JS_NewFloat64(ctx_, 0));
+        JS_SetPropertyStr(ctx_, obj, "movementY", JS_NewFloat64(ctx_, 0));
     }
 
     // 修飾キー（現在の状態）
     SDL_Keymod mod = SDL_GetModState();
-    duk_push_boolean(ctx_, (mod & SDL_KMOD_ALT) != 0);
-    duk_put_prop_string(ctx_, obj, "altKey");
-    duk_push_boolean(ctx_, (mod & SDL_KMOD_CTRL) != 0);
-    duk_put_prop_string(ctx_, obj, "ctrlKey");
-    duk_push_boolean(ctx_, (mod & SDL_KMOD_SHIFT) != 0);
-    duk_put_prop_string(ctx_, obj, "shiftKey");
-    duk_push_boolean(ctx_, (mod & SDL_KMOD_GUI) != 0);
-    duk_put_prop_string(ctx_, obj, "metaKey");
+    JS_SetPropertyStr(ctx_, obj, "altKey", JS_NewBool(ctx_, (mod & SDL_KMOD_ALT) != 0));
+    JS_SetPropertyStr(ctx_, obj, "ctrlKey", JS_NewBool(ctx_, (mod & SDL_KMOD_CTRL) != 0));
+    JS_SetPropertyStr(ctx_, obj, "shiftKey", JS_NewBool(ctx_, (mod & SDL_KMOD_SHIFT) != 0));
+    JS_SetPropertyStr(ctx_, obj, "metaKey", JS_NewBool(ctx_, (mod & SDL_KMOD_GUI) != 0));
+
+    return obj;
 }
 
 // ============================================================
 // ホイールイベント構築
 // ============================================================
-void JsEngine::pushWheelEvent(const SDL_Event *event) {
+JSValue JsEngine::pushWheelEvent(const SDL_Event *event) {
     const SDL_MouseWheelEvent &w = event->wheel;
-    duk_idx_t obj = duk_push_object(ctx_);
+    JSValue obj = JS_NewObject(ctx_);
 
-    duk_push_string(ctx_, "wheel");
-    duk_put_prop_string(ctx_, obj, "type");
+    JS_SetPropertyStr(ctx_, obj, "type", JS_NewString(ctx_, "wheel"));
 
     // ブラウザの deltaX/deltaY はピクセル単位（SDL は行単位なので ×100 で近似）
     float dirMul = (w.direction == SDL_MOUSEWHEEL_FLIPPED) ? -1.0f : 1.0f;
-    duk_push_number(ctx_, w.x * dirMul * 100.0);
-    duk_put_prop_string(ctx_, obj, "deltaX");
-    duk_push_number(ctx_, -w.y * dirMul * 100.0); // ブラウザは下方向が正
-    duk_put_prop_string(ctx_, obj, "deltaY");
-    duk_push_number(ctx_, 0);
-    duk_put_prop_string(ctx_, obj, "deltaZ");
+    JS_SetPropertyStr(ctx_, obj, "deltaX", JS_NewFloat64(ctx_, w.x * dirMul * 100.0));
+    JS_SetPropertyStr(ctx_, obj, "deltaY", JS_NewFloat64(ctx_, -w.y * dirMul * 100.0)); // ブラウザは下方向が正
+    JS_SetPropertyStr(ctx_, obj, "deltaZ", JS_NewFloat64(ctx_, 0));
 
-    duk_push_number(ctx_, w.mouse_x);
-    duk_put_prop_string(ctx_, obj, "clientX");
-    duk_push_number(ctx_, w.mouse_y);
-    duk_put_prop_string(ctx_, obj, "clientY");
+    JS_SetPropertyStr(ctx_, obj, "clientX", JS_NewFloat64(ctx_, w.mouse_x));
+    JS_SetPropertyStr(ctx_, obj, "clientY", JS_NewFloat64(ctx_, w.mouse_y));
 
     // deltaMode: 0 = DOM_DELTA_PIXEL
-    duk_push_int(ctx_, 0);
-    duk_put_prop_string(ctx_, obj, "deltaMode");
+    JS_SetPropertyStr(ctx_, obj, "deltaMode", JS_NewInt32(ctx_, 0));
 
     SDL_Keymod mod = SDL_GetModState();
-    duk_push_boolean(ctx_, (mod & SDL_KMOD_ALT) != 0);
-    duk_put_prop_string(ctx_, obj, "altKey");
-    duk_push_boolean(ctx_, (mod & SDL_KMOD_CTRL) != 0);
-    duk_put_prop_string(ctx_, obj, "ctrlKey");
-    duk_push_boolean(ctx_, (mod & SDL_KMOD_SHIFT) != 0);
-    duk_put_prop_string(ctx_, obj, "shiftKey");
-    duk_push_boolean(ctx_, (mod & SDL_KMOD_GUI) != 0);
-    duk_put_prop_string(ctx_, obj, "metaKey");
+    JS_SetPropertyStr(ctx_, obj, "altKey", JS_NewBool(ctx_, (mod & SDL_KMOD_ALT) != 0));
+    JS_SetPropertyStr(ctx_, obj, "ctrlKey", JS_NewBool(ctx_, (mod & SDL_KMOD_CTRL) != 0));
+    JS_SetPropertyStr(ctx_, obj, "shiftKey", JS_NewBool(ctx_, (mod & SDL_KMOD_SHIFT) != 0));
+    JS_SetPropertyStr(ctx_, obj, "metaKey", JS_NewBool(ctx_, (mod & SDL_KMOD_GUI) != 0));
+
+    return obj;
 }
 
 // ============================================================
 // タッチイベント構築
 // ============================================================
-void JsEngine::pushTouchEvent(const SDL_Event *event, const char *type) {
+JSValue JsEngine::pushTouchEvent(const SDL_Event *event, const char *type) {
     const SDL_TouchFingerEvent &t = event->tfinger;
-    duk_idx_t obj = duk_push_object(ctx_);
+    JSValue obj = JS_NewObject(ctx_);
 
-    duk_push_string(ctx_, type);
-    duk_put_prop_string(ctx_, obj, "type");
+    JS_SetPropertyStr(ctx_, obj, "type", JS_NewString(ctx_, type));
 
     // タッチ座標をウィンドウピクセルに変換（SDL3 は正規化 0..1）
     int winW = 1, winH = 1;
@@ -1609,33 +1778,27 @@ void JsEngine::pushTouchEvent(const SDL_Event *event, const char *type) {
     float py = t.y * winH;
 
     // touches 配列（簡易: 現在のタッチ1つ分）
-    duk_push_array(ctx_);
-    duk_idx_t touch = duk_push_object(ctx_);
-    duk_push_number(ctx_, (double)t.fingerID);
-    duk_put_prop_string(ctx_, touch, "identifier");
-    duk_push_number(ctx_, px);
-    duk_put_prop_string(ctx_, touch, "clientX");
-    duk_push_number(ctx_, py);
-    duk_put_prop_string(ctx_, touch, "clientY");
-    duk_push_number(ctx_, px);
-    duk_put_prop_string(ctx_, touch, "pageX");
-    duk_push_number(ctx_, py);
-    duk_put_prop_string(ctx_, touch, "pageY");
-    duk_push_number(ctx_, t.pressure);
-    duk_put_prop_string(ctx_, touch, "force");
-    duk_put_prop_index(ctx_, -2, 0);
+    JSValue touchArr = JS_NewArray(ctx_);
+    JSValue touch = JS_NewObject(ctx_);
+    JS_SetPropertyStr(ctx_, touch, "identifier", JS_NewFloat64(ctx_, (double)t.fingerID));
+    JS_SetPropertyStr(ctx_, touch, "clientX", JS_NewFloat64(ctx_, px));
+    JS_SetPropertyStr(ctx_, touch, "clientY", JS_NewFloat64(ctx_, py));
+    JS_SetPropertyStr(ctx_, touch, "pageX", JS_NewFloat64(ctx_, px));
+    JS_SetPropertyStr(ctx_, touch, "pageY", JS_NewFloat64(ctx_, py));
+    JS_SetPropertyStr(ctx_, touch, "force", JS_NewFloat64(ctx_, t.pressure));
+    JS_SetPropertyUint32(ctx_, touchArr, 0, touch);
 
     // touchend では changedTouches に入れ、touches は空
     if (strcmp(type, "touchend") == 0 || strcmp(type, "touchcancel") == 0) {
-        duk_put_prop_string(ctx_, obj, "changedTouches");
-        duk_push_array(ctx_);
-        duk_put_prop_string(ctx_, obj, "touches");
+        JS_SetPropertyStr(ctx_, obj, "changedTouches", touchArr);
+        JS_SetPropertyStr(ctx_, obj, "touches", JS_NewArray(ctx_));
     } else {
         // touchstart / touchmove: touches と changedTouches 両方に同じ配列
-        duk_dup(ctx_, -1);
-        duk_put_prop_string(ctx_, obj, "changedTouches");
-        duk_put_prop_string(ctx_, obj, "touches");
+        JS_SetPropertyStr(ctx_, obj, "changedTouches", JS_DupValue(ctx_, touchArr));
+        JS_SetPropertyStr(ctx_, obj, "touches", touchArr);
     }
+
+    return obj;
 }
 
 // ============================================================
@@ -1646,44 +1809,34 @@ void JsEngine::handleEvent(const SDL_Event *event) {
 
     switch (event->type) {
     case SDL_EVENT_KEY_DOWN:
-        pushKeyboardEvent(event, "keydown");
-        dispatchEvent("keydown");
+        dispatchEvent("keydown", pushKeyboardEvent(event, "keydown"));
         break;
     case SDL_EVENT_KEY_UP:
-        pushKeyboardEvent(event, "keyup");
-        dispatchEvent("keyup");
+        dispatchEvent("keyup", pushKeyboardEvent(event, "keyup"));
         break;
     case SDL_EVENT_MOUSE_MOTION:
-        pushMouseEvent(event, "mousemove");
-        dispatchEvent("mousemove");
+        dispatchEvent("mousemove", pushMouseEvent(event, "mousemove"));
         break;
     case SDL_EVENT_MOUSE_BUTTON_DOWN:
-        pushMouseEvent(event, "mousedown");
-        dispatchEvent("mousedown");
+        dispatchEvent("mousedown", pushMouseEvent(event, "mousedown"));
         break;
     case SDL_EVENT_MOUSE_BUTTON_UP:
-        pushMouseEvent(event, "mouseup");
-        dispatchEvent("mouseup");
+        dispatchEvent("mouseup", pushMouseEvent(event, "mouseup"));
         break;
     case SDL_EVENT_MOUSE_WHEEL:
-        pushWheelEvent(event);
-        dispatchEvent("wheel");
+        dispatchEvent("wheel", pushWheelEvent(event));
         break;
     case SDL_EVENT_FINGER_DOWN:
-        pushTouchEvent(event, "touchstart");
-        dispatchEvent("touchstart");
+        dispatchEvent("touchstart", pushTouchEvent(event, "touchstart"));
         break;
     case SDL_EVENT_FINGER_MOTION:
-        pushTouchEvent(event, "touchmove");
-        dispatchEvent("touchmove");
+        dispatchEvent("touchmove", pushTouchEvent(event, "touchmove"));
         break;
     case SDL_EVENT_FINGER_UP:
-        pushTouchEvent(event, "touchend");
-        dispatchEvent("touchend");
+        dispatchEvent("touchend", pushTouchEvent(event, "touchend"));
         break;
     case SDL_EVENT_FINGER_CANCELED:
-        pushTouchEvent(event, "touchcancel");
-        dispatchEvent("touchcancel");
+        dispatchEvent("touchcancel", pushTouchEvent(event, "touchcancel"));
         break;
     default:
         break;
@@ -1694,15 +1847,30 @@ void JsEngine::done() {
     if (!ctx_) return;
 
     // グローバルに done 関数があれば呼び出す
-    duk_get_global_string(ctx_, "done");
-    if (duk_is_function(ctx_, -1)) {
-        if (duk_pcall(ctx_, 0) != 0) {
-            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "JS done error: %s", duk_safe_to_string(ctx_, -1));
+    JSValue global = JS_GetGlobalObject(ctx_);
+    JSValue doneFn = JS_GetPropertyStr(ctx_, global, "done");
+    if (JS_IsFunction(ctx_, doneFn)) {
+        JSValue result = JS_Call(ctx_, doneFn, JS_UNDEFINED, 0, nullptr);
+        if (JS_IsException(result)) {
+            log_exception(ctx_, "JS done error");
+        }
+        JS_FreeValue(ctx_, result);
+    }
+    JS_FreeValue(ctx_, doneFn);
+    JS_FreeValue(ctx_, global);
+
+    // 残っているタイマーのコールバックを解放
+    for (auto &t : g_timers) {
+        if (!t.cancelled) {
+            JS_FreeValue(ctx_, t.callback);
         }
     }
-    duk_pop(ctx_);
+    g_timers.clear();
+    g_timerNextId = 1;
 
-    duk_destroy_heap(ctx_);
+    JS_FreeContext(ctx_);
     ctx_ = nullptr;
+    JS_FreeRuntime(rt_);
+    rt_ = nullptr;
     SDL_Log("JsEngine destroyed");
 }

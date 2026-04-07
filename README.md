@@ -1,6 +1,6 @@
 # jsengine
 
-A cross-platform application built on SDL3 + OpenGL ES 3.0, integrating the duktape JavaScript engine with WebGL 2.0 compatible bindings. Write rendering logic in JavaScript using browser-compatible WebGL APIs.
+A cross-platform application built on SDL3 + OpenGL ES 3.0, integrating the QuickJS-ng JavaScript engine (ES2023) with WebGL 2.0 compatible bindings. Write rendering logic in JavaScript using browser-compatible WebGL APIs.
 
 ## Prerequisites
 
@@ -41,7 +41,7 @@ jsengine -quiet             # Warnings and errors only
 | SDL3 | FetchContent | Window management, input, file I/O |
 | SDL3_image | FetchContent | Image loading (BMP, JPG, PNG) |
 | GLAD | Local (glad/) | OpenGL ES 3.0 loader |
-| duktape 2.7.0 | Local (src/duktape/) | JavaScript engine |
+| QuickJS-ng | vcpkg | JavaScript engine (ES2023) |
 | glm | vcpkg | Math library |
 | miniaudio 0.11.25 | Local (src/audio/) | Audio engine (WAV, MP3, FLAC, OGG) |
 | ThorVG | FetchContent | 2D vector graphics (Canvas 2D API) |
@@ -126,15 +126,6 @@ Demo 1 displays a HUD overlay showing controls, demo list, and system informatio
 
 Use `-demo N` to select the initial demo mode at launch.
 
-### three.js ES5 Transpilation
-
-three.js r128 uses ES6 class syntax which duktape cannot parse. Babel transpilation to ES5 is required.
-
-```bash
-make setup-npm          # Install Babel (first time only)
-make transpile          # data/lib/three.min.js → data/lib/three.es5.js
-```
-
 Place font files in `data/fonts/` (e.g., OpenSans, Roboto).
 
 ## License
@@ -147,7 +138,7 @@ This project is licensed under the [MIT License](LICENSE).
 |---------|---------|-------|
 | [SDL3](https://github.com/libsdl-org/SDL) | zlib License | Window management, input, file I/O |
 | [SDL3_image](https://github.com/libsdl-org/SDL_image) | zlib License | Image loading |
-| [duktape](https://duktape.org/) | MIT License | JavaScript engine (bundled in src/duktape/) |
+| [QuickJS-ng](https://github.com/quickjs-ng/quickjs) | MIT License | JavaScript engine (ES2023, via vcpkg) |
 | [GLAD](https://github.com/Dav1dde/glad) | MIT License / Public Domain | OpenGL ES 3.0 loader (bundled in glad/) |
 | [miniaudio](https://miniaud.io/) | MIT-0 / Public Domain | Audio engine (bundled in src/audio/) |
 | [ThorVG](https://www.thorvg.org/) | MIT License | 2D vector graphics |

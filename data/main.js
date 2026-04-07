@@ -853,10 +853,10 @@ function initDemo8() {
     if (typeof Map === "undefined") loadScript("lib/polyfill.js");
     if (typeof window === "undefined" || !window.HTMLCanvasElement) loadScript("lib/browser_shim.js");
 
-    // three.js ES5 ビルド読み込み
+    // three.js 読み込み（QuickJS は ES2023 対応なので ES6 版を直接使用）
     console.log("Loading three.js...");
     try {
-        loadScript("lib/three.es5.js");
+        loadScript("lib/three.min.js");
         console.log("THREE loaded: r" + THREE.REVISION);
     } catch(e) {
         console.error("three.js load failed: " + e);

@@ -23,7 +23,7 @@
 #include "jsengine.hpp"
 #include "audio/AudioEngine.h"
 #include "audio/AudioStream.h"
-#include <duktape.h>
+#include <quickjs.h>
 #include <SDL3/SDL.h>
 #include <vector>
 #include <string>
@@ -57,18 +57,6 @@ void webaudio_uninit()
     g_playingStreams.clear();
 }
 
-// ============================================================
-// JS バインディング: AudioBufferSourceNode
-// ============================================================
-
-static AudioStream* get_audio_stream(duk_context *ctx) {
-    duk_push_this(ctx);
-    duk_get_prop_string(ctx, -1, "\xff" "ptr");
-    AudioStream *stream = (AudioStream*)duk_get_pointer(ctx, -1);
-    duk_pop_2(ctx);
-    return stream;
-}
-
 // 再生完了したストリームを回収（update 等から呼ぶ）
 void webaudio_gc()
 {
@@ -82,122 +70,131 @@ void webaudio_gc()
     }
 }
 
+// ============================================================
+// JS バインディング: AudioBufferSourceNode
+// ============================================================
+
+static JSClassID js_audio_source_class_id;
+
 // ファイナライザ: 再生中なら g_playingStreams に移して延命
-static duk_ret_t source_finalizer(duk_context *ctx) {
-    duk_get_prop_string(ctx, 0, "\xff" "ptr");
-    if (duk_is_pointer(ctx, -1)) {
-        AudioStream *stream = (AudioStream*)duk_get_pointer(ctx, -1);
-        if (stream) {
-            if (stream->IsPlaying()) {
-                // 再生中なので破棄を遅延
-                g_playingStreams.push_back(stream);
-            } else {
-                delete stream;
-            }
+static void js_audio_source_finalizer(JSRuntime *rt, JSValue val) {
+    AudioStream *stream = (AudioStream *)JS_GetOpaque(val, js_audio_source_class_id);
+    if (stream) {
+        if (stream->IsPlaying()) {
+            // 再生中なので破棄を遅延
+            g_playingStreams.push_back(stream);
+        } else {
+            delete stream;
         }
     }
-    duk_pop(ctx);
-    return 0;
 }
 
-static duk_ret_t source_start(duk_context *ctx) {
-    AudioStream *s = get_audio_stream(ctx);
+static JSClassDef js_audio_source_class = {
+    "AudioBufferSourceNode",
+    js_audio_source_finalizer, // finalizer
+};
+
+static JSValue source_start(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    AudioStream *s = (AudioStream *)JS_GetOpaque(this_val, js_audio_source_class_id);
     if (s) s->Play(s->GetLooping());
-    return 0;
+    return JS_UNDEFINED;
 }
 
-static duk_ret_t source_stop(duk_context *ctx) {
-    AudioStream *s = get_audio_stream(ctx);
+static JSValue source_stop(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    AudioStream *s = (AudioStream *)JS_GetOpaque(this_val, js_audio_source_class_id);
     if (s) s->Stop();
-    return 0;
+    return JS_UNDEFINED;
 }
 
 // volume getter/setter (0.0 ~ 1.0+)
-static duk_ret_t source_get_volume(duk_context *ctx) {
-    AudioStream *s = get_audio_stream(ctx);
-    duk_push_number(ctx, s ? s->GetVolume() / 100.0 : 1.0);
-    return 1;
+static JSValue source_get_volume(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    AudioStream *s = (AudioStream *)JS_GetOpaque(this_val, js_audio_source_class_id);
+    return JS_NewFloat64(ctx, s ? s->GetVolume() / 100.0 : 1.0);
 }
 
-static duk_ret_t source_set_volume(duk_context *ctx) {
-    AudioStream *s = get_audio_stream(ctx);
-    float vol = (float)duk_require_number(ctx, 0);
-    if (s) s->SetVolume((int)(vol * 100.0f));
-    return 0;
+static JSValue source_set_volume(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    AudioStream *s = (AudioStream *)JS_GetOpaque(this_val, js_audio_source_class_id);
+    double vol;
+    JS_ToFloat64(ctx, &vol, argv[0]);
+    if (s) s->SetVolume((int)(vol * 100.0));
+    return JS_UNDEFINED;
 }
 
 // pan getter/setter (-1.0 ~ 1.0)
-static duk_ret_t source_get_pan(duk_context *ctx) {
-    AudioStream *s = get_audio_stream(ctx);
-    duk_push_number(ctx, s ? s->GetPan() / 100.0 : 0.0);
-    return 1;
+static JSValue source_get_pan(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    AudioStream *s = (AudioStream *)JS_GetOpaque(this_val, js_audio_source_class_id);
+    return JS_NewFloat64(ctx, s ? s->GetPan() / 100.0 : 0.0);
 }
 
-static duk_ret_t source_set_pan(duk_context *ctx) {
-    AudioStream *s = get_audio_stream(ctx);
-    float pan = (float)duk_require_number(ctx, 0);
-    if (s) s->SetPan((int)(pan * 100.0f));
-    return 0;
+static JSValue source_set_pan(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    AudioStream *s = (AudioStream *)JS_GetOpaque(this_val, js_audio_source_class_id);
+    double pan;
+    JS_ToFloat64(ctx, &pan, argv[0]);
+    if (s) s->SetPan((int)(pan * 100.0));
+    return JS_UNDEFINED;
 }
 
 // loop getter/setter
-static duk_ret_t source_get_loop(duk_context *ctx) {
-    AudioStream *s = get_audio_stream(ctx);
-    duk_push_boolean(ctx, s ? s->GetLooping() : 0);
-    return 1;
+static JSValue source_get_loop(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    AudioStream *s = (AudioStream *)JS_GetOpaque(this_val, js_audio_source_class_id);
+    return JS_NewBool(ctx, s ? s->GetLooping() : 0);
 }
 
-static duk_ret_t source_set_loop(duk_context *ctx) {
-    AudioStream *s = get_audio_stream(ctx);
-    bool loop = duk_require_boolean(ctx, 0) != 0;
-    if (s) s->SetLooping(loop);
-    return 0;
+static JSValue source_set_loop(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    AudioStream *s = (AudioStream *)JS_GetOpaque(this_val, js_audio_source_class_id);
+    int loop = JS_ToBool(ctx, argv[0]);
+    if (s) s->SetLooping(loop != 0);
+    return JS_UNDEFINED;
 }
 
 // ended getter
-static duk_ret_t source_get_ended(duk_context *ctx) {
-    AudioStream *s = get_audio_stream(ctx);
-    duk_push_boolean(ctx, s ? !s->IsPlaying() : 1);
-    return 1;
+static JSValue source_get_ended(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    AudioStream *s = (AudioStream *)JS_GetOpaque(this_val, js_audio_source_class_id);
+    return JS_NewBool(ctx, s ? !s->IsPlaying() : 1);
 }
 
-static void push_source_node(duk_context *ctx, AudioStream *stream) {
-    duk_idx_t obj = duk_push_object(ctx);
+// ソースノードオブジェクトを生成
+static JSValue push_source_node(JSContext *ctx, AudioStream *stream) {
+    JSValue obj = JS_NewObjectClass(ctx, js_audio_source_class_id);
+    JS_SetOpaque(obj, stream);
 
-    duk_push_pointer(ctx, stream);
-    duk_put_prop_string(ctx, obj, "\xff" "ptr");
+    // メソッド
+    JS_SetPropertyStr(ctx, obj, "start", JS_NewCFunction(ctx, source_start, "start", 0));
+    JS_SetPropertyStr(ctx, obj, "stop", JS_NewCFunction(ctx, source_stop, "stop", 0));
 
-    duk_push_c_function(ctx, source_start, 0);
-    duk_put_prop_string(ctx, obj, "start");
-    duk_push_c_function(ctx, source_stop, 0);
-    duk_put_prop_string(ctx, obj, "stop");
+    // volume getter/setter
+    JSAtom atom = JS_NewAtom(ctx, "volume");
+    JS_DefinePropertyGetSet(ctx, obj, atom,
+        JS_NewCFunction(ctx, source_get_volume, "get volume", 0),
+        JS_NewCFunction(ctx, source_set_volume, "set volume", 1),
+        JS_PROP_ENUMERABLE);
+    JS_FreeAtom(ctx, atom);
 
-    // volume
-    duk_push_string(ctx, "volume");
-    duk_push_c_function(ctx, source_get_volume, 0);
-    duk_push_c_function(ctx, source_set_volume, 1);
-    duk_def_prop(ctx, obj, DUK_DEFPROP_HAVE_GETTER | DUK_DEFPROP_HAVE_SETTER | DUK_DEFPROP_SET_ENUMERABLE);
+    // pan getter/setter
+    atom = JS_NewAtom(ctx, "pan");
+    JS_DefinePropertyGetSet(ctx, obj, atom,
+        JS_NewCFunction(ctx, source_get_pan, "get pan", 0),
+        JS_NewCFunction(ctx, source_set_pan, "set pan", 1),
+        JS_PROP_ENUMERABLE);
+    JS_FreeAtom(ctx, atom);
 
-    // pan
-    duk_push_string(ctx, "pan");
-    duk_push_c_function(ctx, source_get_pan, 0);
-    duk_push_c_function(ctx, source_set_pan, 1);
-    duk_def_prop(ctx, obj, DUK_DEFPROP_HAVE_GETTER | DUK_DEFPROP_HAVE_SETTER | DUK_DEFPROP_SET_ENUMERABLE);
+    // loop getter/setter
+    atom = JS_NewAtom(ctx, "loop");
+    JS_DefinePropertyGetSet(ctx, obj, atom,
+        JS_NewCFunction(ctx, source_get_loop, "get loop", 0),
+        JS_NewCFunction(ctx, source_set_loop, "set loop", 1),
+        JS_PROP_ENUMERABLE);
+    JS_FreeAtom(ctx, atom);
 
-    // loop
-    duk_push_string(ctx, "loop");
-    duk_push_c_function(ctx, source_get_loop, 0);
-    duk_push_c_function(ctx, source_set_loop, 1);
-    duk_def_prop(ctx, obj, DUK_DEFPROP_HAVE_GETTER | DUK_DEFPROP_HAVE_SETTER | DUK_DEFPROP_SET_ENUMERABLE);
+    // ended getter (read-only)
+    atom = JS_NewAtom(ctx, "ended");
+    JS_DefinePropertyGetSet(ctx, obj, atom,
+        JS_NewCFunction(ctx, source_get_ended, "get ended", 0),
+        JS_UNDEFINED,
+        JS_PROP_ENUMERABLE);
+    JS_FreeAtom(ctx, atom);
 
-    // ended
-    duk_push_string(ctx, "ended");
-    duk_push_c_function(ctx, source_get_ended, 0);
-    duk_def_prop(ctx, obj, DUK_DEFPROP_HAVE_GETTER | DUK_DEFPROP_SET_ENUMERABLE);
-
-    // ファイナライザ
-    duk_push_c_function(ctx, source_finalizer, 1);
-    duk_set_finalizer(ctx, obj);
+    return obj;
 }
 
 // ============================================================
@@ -205,119 +202,123 @@ static void push_source_node(duk_context *ctx, AudioStream *stream) {
 // ============================================================
 
 // createBufferSource(path)
-static duk_ret_t actx_createBufferSource(duk_context *ctx) {
-    const char *path = duk_require_string(ctx, 0);
+static JSValue actx_createBufferSource(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    const char *path = JS_ToCString(ctx, argv[0]);
+    if (!path) return JS_EXCEPTION;
 
     JsEngine *engine = JsEngine::getInstance();
     std::string resolved = engine ? engine->resolvePath(path) : path;
+    JS_FreeCString(ctx, path);
 
     AudioStream *stream = AudioEngine::GetInstance().CreateStream(0);
     if (!stream) {
-        return duk_error(ctx, DUK_ERR_ERROR, "Failed to create audio stream");
+        return JS_ThrowInternalError(ctx, "Failed to create audio stream");
     }
 
     if (!stream->Open(resolved.c_str())) {
         delete stream;
-        return duk_error(ctx, DUK_ERR_ERROR, "Cannot load audio: %s", resolved.c_str());
+        return JS_ThrowInternalError(ctx, "Cannot load audio: %s", resolved.c_str());
     }
 
-    push_source_node(ctx, stream);
-    return 1;
+    return push_source_node(ctx, stream);
 }
 
 // resume()
-static duk_ret_t actx_resume(duk_context *ctx) {
-    (void)ctx;
-    return 0;
+static JSValue actx_resume(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    return JS_UNDEFINED;
 }
 
 // suspend()
-static duk_ret_t actx_suspend(duk_context *ctx) {
-    (void)ctx;
-    return 0;
+static JSValue actx_suspend(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    return JS_UNDEFINED;
 }
 
 // close()
-static duk_ret_t actx_close(duk_context *ctx) {
+static JSValue actx_close(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     AudioEngine::GetInstance().StopAll();
-    (void)ctx;
-    return 0;
+    return JS_UNDEFINED;
 }
 
 // sampleRate getter
-static duk_ret_t actx_get_sampleRate(duk_context *ctx) {
+static JSValue actx_get_sampleRate(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     ma_engine *eng = AudioEngine::GetInstance().GetEngine();
     if (eng) {
-        duk_push_uint(ctx, ma_engine_get_sample_rate(eng));
+        return JS_NewUint32(ctx, ma_engine_get_sample_rate(eng));
     } else {
-        duk_push_uint(ctx, 48000);
+        return JS_NewUint32(ctx, 48000);
     }
-    return 1;
 }
 
 // state getter
-static duk_ret_t actx_get_state(duk_context *ctx) {
-    duk_push_string(ctx, AudioEngine::GetInstance().GetEngine() ? "running" : "closed");
-    return 1;
+static JSValue actx_get_state(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    return JS_NewString(ctx, AudioEngine::GetInstance().GetEngine() ? "running" : "closed");
 }
 
 // masterVolume getter/setter
-static duk_ret_t actx_get_masterVolume(duk_context *ctx) {
-    duk_push_number(ctx, AudioEngine::GetInstance().GetMasterVolume() / 100.0);
-    return 1;
+static JSValue actx_get_masterVolume(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    return JS_NewFloat64(ctx, AudioEngine::GetInstance().GetMasterVolume() / 100.0);
 }
 
-static duk_ret_t actx_set_masterVolume(duk_context *ctx) {
-    float vol = (float)duk_require_number(ctx, 0);
-    AudioEngine::GetInstance().SetMasterVolume((int)(vol * 100.0f));
-    return 0;
+static JSValue actx_set_masterVolume(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    double vol;
+    JS_ToFloat64(ctx, &vol, argv[0]);
+    AudioEngine::GetInstance().SetMasterVolume((int)(vol * 100.0));
+    return JS_UNDEFINED;
 }
 
 // AudioContext コンストラクタ
-static duk_ret_t actx_constructor(duk_context *ctx) {
-    if (!duk_is_constructor_call(ctx)) {
-        return DUK_RET_TYPE_ERROR;
-    }
+static JSValue actx_constructor(JSContext *ctx, JSValueConst new_target, int argc, JSValueConst *argv) {
+    JSValue obj = JS_NewObject(ctx);
 
-    duk_push_this(ctx);
-    duk_idx_t obj = duk_get_top_index(ctx);
+    // メソッド
+    JS_SetPropertyStr(ctx, obj, "createBufferSource", JS_NewCFunction(ctx, actx_createBufferSource, "createBufferSource", 1));
+    JS_SetPropertyStr(ctx, obj, "resume", JS_NewCFunction(ctx, actx_resume, "resume", 0));
+    JS_SetPropertyStr(ctx, obj, "suspend", JS_NewCFunction(ctx, actx_suspend, "suspend", 0));
+    JS_SetPropertyStr(ctx, obj, "close", JS_NewCFunction(ctx, actx_close, "close", 0));
 
-    duk_push_c_function(ctx, actx_createBufferSource, 1);
-    duk_put_prop_string(ctx, obj, "createBufferSource");
-    duk_push_c_function(ctx, actx_resume, 0);
-    duk_put_prop_string(ctx, obj, "resume");
-    duk_push_c_function(ctx, actx_suspend, 0);
-    duk_put_prop_string(ctx, obj, "suspend");
-    duk_push_c_function(ctx, actx_close, 0);
-    duk_put_prop_string(ctx, obj, "close");
+    // destination ダミーノード
+    JS_SetPropertyStr(ctx, obj, "destination", JS_NewObject(ctx));
 
-    duk_push_object(ctx);
-    duk_put_prop_string(ctx, obj, "destination");
+    // sampleRate getter
+    JSAtom atom = JS_NewAtom(ctx, "sampleRate");
+    JS_DefinePropertyGetSet(ctx, obj, atom,
+        JS_NewCFunction(ctx, actx_get_sampleRate, "get sampleRate", 0),
+        JS_UNDEFINED,
+        JS_PROP_ENUMERABLE);
+    JS_FreeAtom(ctx, atom);
 
-    duk_push_string(ctx, "sampleRate");
-    duk_push_c_function(ctx, actx_get_sampleRate, 0);
-    duk_def_prop(ctx, obj, DUK_DEFPROP_HAVE_GETTER | DUK_DEFPROP_SET_ENUMERABLE);
+    // state getter
+    atom = JS_NewAtom(ctx, "state");
+    JS_DefinePropertyGetSet(ctx, obj, atom,
+        JS_NewCFunction(ctx, actx_get_state, "get state", 0),
+        JS_UNDEFINED,
+        JS_PROP_ENUMERABLE);
+    JS_FreeAtom(ctx, atom);
 
-    duk_push_string(ctx, "state");
-    duk_push_c_function(ctx, actx_get_state, 0);
-    duk_def_prop(ctx, obj, DUK_DEFPROP_HAVE_GETTER | DUK_DEFPROP_SET_ENUMERABLE);
+    // masterVolume getter/setter
+    atom = JS_NewAtom(ctx, "masterVolume");
+    JS_DefinePropertyGetSet(ctx, obj, atom,
+        JS_NewCFunction(ctx, actx_get_masterVolume, "get masterVolume", 0),
+        JS_NewCFunction(ctx, actx_set_masterVolume, "set masterVolume", 1),
+        JS_PROP_ENUMERABLE);
+    JS_FreeAtom(ctx, atom);
 
-    duk_push_string(ctx, "masterVolume");
-    duk_push_c_function(ctx, actx_get_masterVolume, 0);
-    duk_push_c_function(ctx, actx_set_masterVolume, 1);
-    duk_def_prop(ctx, obj, DUK_DEFPROP_HAVE_GETTER | DUK_DEFPROP_HAVE_SETTER | DUK_DEFPROP_SET_ENUMERABLE);
-
-    duk_pop(ctx);
-    return 0;
+    return obj;
 }
 
 // ============================================================
 // バインディング登録
 // ============================================================
 
-void webaudio_bind(duk_context *ctx) {
-    duk_push_c_function(ctx, actx_constructor, 0);
-    duk_push_object(ctx);
-    duk_put_prop_string(ctx, -2, "prototype");
-    duk_put_global_string(ctx, "AudioContext");
+void webaudio_bind(JSContext *ctx) {
+    // AudioBufferSourceNode クラスを登録
+    JS_NewClassID(JS_GetRuntime(ctx), &js_audio_source_class_id);
+    JS_NewClass(JS_GetRuntime(ctx), js_audio_source_class_id, &js_audio_source_class);
+
+    // AudioContext コンストラクタをグローバルに登録
+    JSValue ctor = JS_NewCFunction2(ctx, actx_constructor, "AudioContext", 0, JS_CFUNC_constructor, 0);
+
+    JSValue global = JS_GetGlobalObject(ctx);
+    JS_SetPropertyStr(ctx, global, "AudioContext", ctor);
+    JS_FreeValue(ctx, global);
 }

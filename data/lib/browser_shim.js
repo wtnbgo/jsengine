@@ -5,7 +5,7 @@
 
 // --- window ---
 if (typeof window === "undefined") {
-    var window = this; // duktape のグローバルオブジェクト
+    var window = globalThis;
 }
 window.window = window;
 window.self = window;
@@ -26,7 +26,7 @@ window.removeEventListener = removeEventListener;
 if (typeof navigator === "undefined") {
     var navigator = {};
 }
-navigator.userAgent = "Mozilla/5.0 (jsengine; duktape) AppleWebKit/537.36";
+navigator.userAgent = "Mozilla/5.0 (jsengine; quickjs) AppleWebKit/537.36";
 navigator.platform = "jsengine";
 window.navigator = navigator;
 

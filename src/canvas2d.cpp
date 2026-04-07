@@ -10,7 +10,7 @@
 #include "jsengine.hpp"
 #include "glad/gles2.h"
 #include <thorvg.h>
-#include <duktape.h>
+#include <quickjs.h>
 #include <SDL3/SDL.h>
 #include <cstring>
 #include <cstdlib>
@@ -312,12 +312,24 @@ struct Canvas2DData {
     }
 };
 
-static Canvas2DData* get_data(duk_context *ctx) {
-    duk_push_this(ctx);
-    duk_get_prop_string(ctx, -1, "\xff" "data");
-    auto *d = (Canvas2DData*)duk_get_pointer(ctx, -1);
-    duk_pop_2(ctx);
-    return d;
+// ============================================================
+// QuickJS クラス定義
+// ============================================================
+
+static JSClassID js_canvas2d_class_id;
+
+static void js_canvas2d_finalizer(JSRuntime *rt, JSValue val) {
+    Canvas2DData *d = (Canvas2DData *)JS_GetOpaque(val, js_canvas2d_class_id);
+    delete d;
+}
+
+static JSClassDef js_canvas2d_class = {
+    "Canvas2D",
+    js_canvas2d_finalizer, // finalizer
+};
+
+static Canvas2DData* get_data(JSContext *ctx, JSValueConst this_val) {
+    return (Canvas2DData *)JS_GetOpaque(this_val, js_canvas2d_class_id);
 }
 
 static tvg::Matrix mat_mul(const tvg::Matrix &a, const tvg::Matrix &b) {
@@ -366,156 +378,196 @@ static tvg::Shape* build_shape(const std::vector<PathCmd> &cmds) {
 // 矩形（即座にバッファに描画）
 // ============================================================
 
-static duk_ret_t ctx_fillRect(duk_context *ctx) {
-    auto *d = get_data(ctx);
-    float x=(float)duk_get_number(ctx,0), y=(float)duk_get_number(ctx,1);
-    float w=(float)duk_get_number(ctx,2), h=(float)duk_get_number(ctx,3);
+static JSValue ctx_fillRect(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    auto *d = get_data(ctx, this_val);
+    double x, y, w, h;
+    JS_ToFloat64(ctx, &x, argv[0]); JS_ToFloat64(ctx, &y, argv[1]);
+    JS_ToFloat64(ctx, &w, argv[2]); JS_ToFloat64(ctx, &h, argv[3]);
     auto *shape = tvg::Shape::gen();
-    shape->appendRect(x,y,w,h,0,0);
+    shape->appendRect((float)x,(float)y,(float)w,(float)h,0,0);
     uint8_t a = (uint8_t)(d->state.fillStyle.a * d->state.globalAlpha);
     shape->fill(d->state.fillStyle.r, d->state.fillStyle.g, d->state.fillStyle.b, a);
     shape->transform(d->state.transform);
     d->addPaint(shape);
-    return 0;
+    return JS_UNDEFINED;
 }
 
-static duk_ret_t ctx_strokeRect(duk_context *ctx) {
-    auto *d = get_data(ctx);
-    float x=(float)duk_get_number(ctx,0), y=(float)duk_get_number(ctx,1);
-    float w=(float)duk_get_number(ctx,2), h=(float)duk_get_number(ctx,3);
+static JSValue ctx_strokeRect(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    auto *d = get_data(ctx, this_val);
+    double x, y, w, h;
+    JS_ToFloat64(ctx, &x, argv[0]); JS_ToFloat64(ctx, &y, argv[1]);
+    JS_ToFloat64(ctx, &w, argv[2]); JS_ToFloat64(ctx, &h, argv[3]);
     auto *shape = tvg::Shape::gen();
-    shape->appendRect(x,y,w,h,0,0);
+    shape->appendRect((float)x,(float)y,(float)w,(float)h,0,0);
     uint8_t a = (uint8_t)(d->state.strokeStyle.a * d->state.globalAlpha);
     shape->strokeFill(d->state.strokeStyle.r, d->state.strokeStyle.g, d->state.strokeStyle.b, a);
     shape->strokeWidth(d->state.lineWidth);
     shape->transform(d->state.transform);
     d->addPaint(shape);
-    return 0;
+    return JS_UNDEFINED;
 }
 
-static duk_ret_t ctx_clearRect(duk_context *ctx) {
-    auto *d = get_data(ctx);
-    int x=(int)duk_get_number(ctx,0), y=(int)duk_get_number(ctx,1);
-    int w=(int)duk_get_number(ctx,2), h=(int)duk_get_number(ctx,3);
-    d->clearPixels(x, y, w, h);
-    return 0;
+static JSValue ctx_clearRect(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    auto *d = get_data(ctx, this_val);
+    double x, y, w, h;
+    JS_ToFloat64(ctx, &x, argv[0]); JS_ToFloat64(ctx, &y, argv[1]);
+    JS_ToFloat64(ctx, &w, argv[2]); JS_ToFloat64(ctx, &h, argv[3]);
+    d->clearPixels((int)x, (int)y, (int)w, (int)h);
+    return JS_UNDEFINED;
 }
 
 // ============================================================
 // パス
 // ============================================================
 
-static duk_ret_t ctx_beginPath(duk_context *ctx) { get_data(ctx)->pathCmds.clear(); return 0; }
-static duk_ret_t ctx_moveTo(duk_context *ctx) {
-    auto *d = get_data(ctx);
-    PathCmd c = {PathMoveTo, {(float)duk_get_number(ctx,0),(float)duk_get_number(ctx,1)}};
-    d->pathCmds.push_back(c); return 0;
+static JSValue ctx_beginPath(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    get_data(ctx, this_val)->pathCmds.clear();
+    return JS_UNDEFINED;
 }
-static duk_ret_t ctx_lineTo(duk_context *ctx) {
-    auto *d = get_data(ctx);
-    PathCmd c = {PathLineTo, {(float)duk_get_number(ctx,0),(float)duk_get_number(ctx,1)}};
-    d->pathCmds.push_back(c); return 0;
+
+static JSValue ctx_moveTo(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    auto *d = get_data(ctx, this_val);
+    double x, y;
+    JS_ToFloat64(ctx, &x, argv[0]); JS_ToFloat64(ctx, &y, argv[1]);
+    PathCmd c = {PathMoveTo, {(float)x,(float)y}};
+    d->pathCmds.push_back(c);
+    return JS_UNDEFINED;
 }
-static duk_ret_t ctx_bezierCurveTo(duk_context *ctx) {
-    auto *d = get_data(ctx);
-    PathCmd c = {PathCubicTo, {(float)duk_get_number(ctx,0),(float)duk_get_number(ctx,1),
-        (float)duk_get_number(ctx,2),(float)duk_get_number(ctx,3),
-        (float)duk_get_number(ctx,4),(float)duk_get_number(ctx,5)}};
-    d->pathCmds.push_back(c); return 0;
+
+static JSValue ctx_lineTo(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    auto *d = get_data(ctx, this_val);
+    double x, y;
+    JS_ToFloat64(ctx, &x, argv[0]); JS_ToFloat64(ctx, &y, argv[1]);
+    PathCmd c = {PathLineTo, {(float)x,(float)y}};
+    d->pathCmds.push_back(c);
+    return JS_UNDEFINED;
 }
-static duk_ret_t ctx_rect(duk_context *ctx) {
-    auto *d = get_data(ctx);
-    PathCmd c = {PathRect, {(float)duk_get_number(ctx,0),(float)duk_get_number(ctx,1),
-        (float)duk_get_number(ctx,2),(float)duk_get_number(ctx,3)}};
-    d->pathCmds.push_back(c); return 0;
+
+static JSValue ctx_bezierCurveTo(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    auto *d = get_data(ctx, this_val);
+    double cp1x, cp1y, cp2x, cp2y, x, y;
+    JS_ToFloat64(ctx, &cp1x, argv[0]); JS_ToFloat64(ctx, &cp1y, argv[1]);
+    JS_ToFloat64(ctx, &cp2x, argv[2]); JS_ToFloat64(ctx, &cp2y, argv[3]);
+    JS_ToFloat64(ctx, &x, argv[4]); JS_ToFloat64(ctx, &y, argv[5]);
+    PathCmd c = {PathCubicTo, {(float)cp1x,(float)cp1y,(float)cp2x,(float)cp2y,(float)x,(float)y}};
+    d->pathCmds.push_back(c);
+    return JS_UNDEFINED;
 }
-static duk_ret_t ctx_arc(duk_context *ctx) {
-    auto *d = get_data(ctx);
-    float cx=(float)duk_get_number(ctx,0), cy=(float)duk_get_number(ctx,1), r=(float)duk_get_number(ctx,2);
-    float sa=(float)duk_get_number(ctx,3), ea=(float)duk_get_number(ctx,4);
-    bool ccw = duk_get_top(ctx) > 5 ? (duk_get_boolean(ctx,5)!=0) : false;
-    float sd = sa*(float)(180.0/M_PI), ed = ea*(float)(180.0/M_PI);
+
+static JSValue ctx_rect(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    auto *d = get_data(ctx, this_val);
+    double x, y, w, h;
+    JS_ToFloat64(ctx, &x, argv[0]); JS_ToFloat64(ctx, &y, argv[1]);
+    JS_ToFloat64(ctx, &w, argv[2]); JS_ToFloat64(ctx, &h, argv[3]);
+    PathCmd c = {PathRect, {(float)x,(float)y,(float)w,(float)h}};
+    d->pathCmds.push_back(c);
+    return JS_UNDEFINED;
+}
+
+static JSValue ctx_arc(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    auto *d = get_data(ctx, this_val);
+    double cx, cy, r, sa, ea;
+    JS_ToFloat64(ctx, &cx, argv[0]); JS_ToFloat64(ctx, &cy, argv[1]);
+    JS_ToFloat64(ctx, &r, argv[2]);
+    JS_ToFloat64(ctx, &sa, argv[3]); JS_ToFloat64(ctx, &ea, argv[4]);
+    bool ccw = (argc > 5) ? (JS_ToBool(ctx, argv[5]) != 0) : false;
+    float sd = (float)(sa * (180.0/M_PI)), ed = (float)(ea * (180.0/M_PI));
     float sweep = ed - sd;
     if (ccw) { if (sweep > 0) sweep -= 360.0f; } else { if (sweep < 0) sweep += 360.0f; }
-    PathCmd c = {PathArc, {cx, cy, r, sd, sweep, 0}};
-    d->pathCmds.push_back(c); return 0;
+    PathCmd c = {PathArc, {(float)cx, (float)cy, (float)r, sd, sweep, 0}};
+    d->pathCmds.push_back(c);
+    return JS_UNDEFINED;
 }
-static duk_ret_t ctx_closePath(duk_context *ctx) {
-    PathCmd c = {PathClose, {}}; get_data(ctx)->pathCmds.push_back(c); return 0;
+
+static JSValue ctx_closePath(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    PathCmd c = {PathClose, {}};
+    get_data(ctx, this_val)->pathCmds.push_back(c);
+    return JS_UNDEFINED;
 }
-static duk_ret_t ctx_fill(duk_context *ctx) {
-    auto *d = get_data(ctx);
-    if (d->pathCmds.empty()) return 0;
+
+static JSValue ctx_fill(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    auto *d = get_data(ctx, this_val);
+    if (d->pathCmds.empty()) return JS_UNDEFINED;
     auto *shape = build_shape(d->pathCmds);
     uint8_t a = (uint8_t)(d->state.fillStyle.a * d->state.globalAlpha);
     shape->fill(d->state.fillStyle.r, d->state.fillStyle.g, d->state.fillStyle.b, a);
     shape->transform(d->state.transform);
     d->addPaint(shape);
-    return 0;
+    return JS_UNDEFINED;
 }
-static duk_ret_t ctx_stroke(duk_context *ctx) {
-    auto *d = get_data(ctx);
-    if (d->pathCmds.empty()) return 0;
+
+static JSValue ctx_stroke(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    auto *d = get_data(ctx, this_val);
+    if (d->pathCmds.empty()) return JS_UNDEFINED;
     auto *shape = build_shape(d->pathCmds);
     uint8_t a = (uint8_t)(d->state.strokeStyle.a * d->state.globalAlpha);
     shape->strokeFill(d->state.strokeStyle.r, d->state.strokeStyle.g, d->state.strokeStyle.b, a);
     shape->strokeWidth(d->state.lineWidth);
     shape->transform(d->state.transform);
     d->addPaint(shape);
-    return 0;
+    return JS_UNDEFINED;
 }
 
 // ============================================================
 // テキスト
 // ============================================================
 
-static duk_ret_t ctx_fillText(duk_context *ctx) {
-    auto *d = get_data(ctx);
-    const char *str = duk_require_string(ctx, 0);
-    float x = (float)duk_get_number(ctx, 1), y = (float)duk_get_number(ctx, 2);
+static JSValue ctx_fillText(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    auto *d = get_data(ctx, this_val);
+    const char *str = JS_ToCString(ctx, argv[0]);
+    if (!str) return JS_EXCEPTION;
+    double x, y;
+    JS_ToFloat64(ctx, &x, argv[1]); JS_ToFloat64(ctx, &y, argv[2]);
     auto *text = tvg::Text::gen();
     // フォント未ロード時はスキップ（ThorVG ハング回避）
     if (text->font(d->state.fontName.c_str()) != tvg::Result::Success) {
         text->unref();
-        return 0;
+        JS_FreeCString(ctx, str);
+        return JS_UNDEFINED;
     }
     text->size(d->state.fontSize);
     text->text(str);
     text->fill(d->state.fillStyle.r, d->state.fillStyle.g, d->state.fillStyle.b);
     text->opacity((uint8_t)(d->state.fillStyle.a * d->state.globalAlpha));
-    tvg::Matrix t = {1,0,x, 0,1,y - d->state.fontSize * 0.85f, 0,0,1};
+    tvg::Matrix t = {1,0,(float)x, 0,1,(float)y - d->state.fontSize * 0.85f, 0,0,1};
     text->transform(mat_mul(d->state.transform, t));
     d->addPaint(text);
-    return 0;
+    JS_FreeCString(ctx, str);
+    return JS_UNDEFINED;
 }
 
-static duk_ret_t ctx_strokeText(duk_context *ctx) {
-    auto *d = get_data(ctx);
-    const char *str = duk_require_string(ctx, 0);
-    float x = (float)duk_get_number(ctx, 1), y = (float)duk_get_number(ctx, 2);
+static JSValue ctx_strokeText(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    auto *d = get_data(ctx, this_val);
+    const char *str = JS_ToCString(ctx, argv[0]);
+    if (!str) return JS_EXCEPTION;
+    double x, y;
+    JS_ToFloat64(ctx, &x, argv[1]); JS_ToFloat64(ctx, &y, argv[2]);
     auto *text = tvg::Text::gen();
     if (text->font(d->state.fontName.c_str()) != tvg::Result::Success) {
         text->unref();
-        return 0;
+        JS_FreeCString(ctx, str);
+        return JS_UNDEFINED;
     }
     text->size(d->state.fontSize);
     text->text(str);
     text->outline(d->state.lineWidth, d->state.strokeStyle.r, d->state.strokeStyle.g, d->state.strokeStyle.b);
     text->opacity((uint8_t)(d->state.strokeStyle.a * d->state.globalAlpha));
-    tvg::Matrix t = {1,0,x, 0,1,y - d->state.fontSize * 0.85f, 0,0,1};
+    tvg::Matrix t = {1,0,(float)x, 0,1,(float)y - d->state.fontSize * 0.85f, 0,0,1};
     text->transform(mat_mul(d->state.transform, t));
     d->addPaint(text);
-    return 0;
+    JS_FreeCString(ctx, str);
+    return JS_UNDEFINED;
 }
 
-static duk_ret_t ctx_measureText(duk_context *ctx) {
-    auto *d = get_data(ctx);
-    const char *str = duk_require_string(ctx, 0);
+static JSValue ctx_measureText(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    auto *d = get_data(ctx, this_val);
+    const char *str = JS_ToCString(ctx, argv[0]);
+    if (!str) return JS_EXCEPTION;
     float estimatedWidth = (float)strlen(str) * d->state.fontSize * 0.6f;
-    duk_idx_t obj = duk_push_object(ctx);
-    duk_push_number(ctx, estimatedWidth);
-    duk_put_prop_string(ctx, obj, "width");
-    return 1;
+    JS_FreeCString(ctx, str);
+    JSValue obj = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, obj, "width", JS_NewFloat64(ctx, estimatedWidth));
+    return obj;
 }
 
 // ============================================================
@@ -523,7 +575,6 @@ static duk_ret_t ctx_measureText(duk_context *ctx) {
 // ============================================================
 
 // ソースの RGBA データから Canvas2DData のバッファ上に描画する
-// ThorVG Picture でロードし、translate/scale/clip で位置・サイズ・切り出しを制御
 static void drawImageViaPicture(Canvas2DData *d,
     const uint8_t *srcRGBA, int srcW, int srcH,
     int sx, int sy, int sw, int sh,
@@ -568,76 +619,82 @@ static void drawImageViaPicture(Canvas2DData *d,
     d->blitPixels(srcRGBA, srcW, srcH, sx, sy, sw, sh, dx, dy, dw, dh);
 }
 
-static duk_ret_t ctx_drawImage(duk_context *ctx) {
-    auto *d = get_data(ctx);
-    int argc = duk_get_top(ctx);
+static JSValue ctx_drawImage(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    auto *d = get_data(ctx, this_val);
 
     // source オブジェクトからピクセルデータをローカルにコピー
     std::vector<uint8_t> srcCopy;
     int srcW = 0, srcH = 0;
 
-    if (duk_is_object(ctx, 0)) {
-        duk_get_prop_string(ctx, 0, "width");
-        srcW = duk_to_int(ctx, -1); duk_pop(ctx);
-        duk_get_prop_string(ctx, 0, "height");
-        srcH = duk_to_int(ctx, -1); duk_pop(ctx);
+    if (JS_IsObject(argv[0])) {
+        JSValue wVal = JS_GetPropertyStr(ctx, argv[0], "width");
+        JS_ToInt32(ctx, &srcW, wVal); JS_FreeValue(ctx, wVal);
+        JSValue hVal = JS_GetPropertyStr(ctx, argv[0], "height");
+        JS_ToInt32(ctx, &srcH, hVal); JS_FreeValue(ctx, hVal);
 
-        const uint8_t *bufPtr = nullptr;
-        duk_size_t bufSz = 0;
-        // data (ImageBitmap / createImageBitmap)
-        if (duk_has_prop_string(ctx, 0, "data")) {
-            duk_get_prop_string(ctx, 0, "data");
-            bufPtr = (const uint8_t*)duk_get_buffer_data(ctx, -1, &bufSz);
-            duk_pop(ctx);
+        // data (ImageBitmap / createImageBitmap) → _data (Image シム) の順に試行
+        size_t bufSz = 0;
+        uint8_t *bufPtr = nullptr;
+
+        JSValue dataVal = JS_GetPropertyStr(ctx, argv[0], "data");
+        bufPtr = JS_GetArrayBuffer(ctx, &bufSz, dataVal);
+        if (!bufPtr) {
+            JS_FreeValue(ctx, dataVal);
+            dataVal = JS_GetPropertyStr(ctx, argv[0], "_data");
+            bufPtr = JS_GetArrayBuffer(ctx, &bufSz, dataVal);
         }
-        // _data (Image シム)
-        if (!bufPtr && duk_has_prop_string(ctx, 0, "_data")) {
-            duk_get_prop_string(ctx, 0, "_data");
-            bufPtr = (const uint8_t*)duk_get_buffer_data(ctx, -1, &bufSz);
-            duk_pop(ctx);
-        }
-        // ローカルにコピー（duktape GC によるポインタ無効化を防止）
-        if (bufPtr && bufSz >= (duk_size_t)(srcW * srcH * 4)) {
+        // ローカルにコピー（GC によるポインタ無効化を防止）
+        if (bufPtr && bufSz >= (size_t)(srcW * srcH * 4)) {
             srcCopy.assign(bufPtr, bufPtr + srcW * srcH * 4);
         }
+        JS_FreeValue(ctx, dataVal);
     }
-    if (srcCopy.empty() || srcW <= 0 || srcH <= 0) return 0;
+    if (srcCopy.empty() || srcW <= 0 || srcH <= 0) return JS_UNDEFINED;
 
     int sx=0, sy=0, sw=srcW, sh=srcH;
     int dx=0, dy=0, dw=srcW, dh=srcH;
 
     if (argc >= 9) {
-        sx=(int)duk_get_number(ctx,1); sy=(int)duk_get_number(ctx,2);
-        sw=(int)duk_get_number(ctx,3); sh=(int)duk_get_number(ctx,4);
-        dx=(int)duk_get_number(ctx,5); dy=(int)duk_get_number(ctx,6);
-        dw=(int)duk_get_number(ctx,7); dh=(int)duk_get_number(ctx,8);
+        double v;
+        JS_ToFloat64(ctx, &v, argv[1]); sx=(int)v;
+        JS_ToFloat64(ctx, &v, argv[2]); sy=(int)v;
+        JS_ToFloat64(ctx, &v, argv[3]); sw=(int)v;
+        JS_ToFloat64(ctx, &v, argv[4]); sh=(int)v;
+        JS_ToFloat64(ctx, &v, argv[5]); dx=(int)v;
+        JS_ToFloat64(ctx, &v, argv[6]); dy=(int)v;
+        JS_ToFloat64(ctx, &v, argv[7]); dw=(int)v;
+        JS_ToFloat64(ctx, &v, argv[8]); dh=(int)v;
     } else if (argc >= 5) {
-        dx=(int)duk_get_number(ctx,1); dy=(int)duk_get_number(ctx,2);
-        dw=(int)duk_get_number(ctx,3); dh=(int)duk_get_number(ctx,4);
+        double v;
+        JS_ToFloat64(ctx, &v, argv[1]); dx=(int)v;
+        JS_ToFloat64(ctx, &v, argv[2]); dy=(int)v;
+        JS_ToFloat64(ctx, &v, argv[3]); dw=(int)v;
+        JS_ToFloat64(ctx, &v, argv[4]); dh=(int)v;
     } else {
-        dx=(int)duk_get_number(ctx,1); dy=(int)duk_get_number(ctx,2);
+        double v;
+        JS_ToFloat64(ctx, &v, argv[1]); dx=(int)v;
+        JS_ToFloat64(ctx, &v, argv[2]); dy=(int)v;
     }
 
     drawImageViaPicture(d, srcCopy.data(), srcW, srcH, sx, sy, sw, sh, dx, dy, dw, dh);
-    return 0;
+    return JS_UNDEFINED;
 }
 
 // ============================================================
 // getImageData / putImageData
 // ============================================================
 
-static duk_ret_t ctx_getImageData(duk_context *ctx) {
-    auto *d = get_data(ctx);
+static JSValue ctx_getImageData(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    auto *d = get_data(ctx, this_val);
     d->flushPaints(); // 蓄積分を先にバッファに反映
-    int x=(int)duk_get_number(ctx,0), y=(int)duk_get_number(ctx,1);
-    int w=(int)duk_get_number(ctx,2), h=(int)duk_get_number(ctx,3);
+    double xd, yd, wd, hd;
+    JS_ToFloat64(ctx, &xd, argv[0]); JS_ToFloat64(ctx, &yd, argv[1]);
+    JS_ToFloat64(ctx, &wd, argv[2]); JS_ToFloat64(ctx, &hd, argv[3]);
+    int x=(int)xd, y=(int)yd, w=(int)wd, h=(int)hd;
 
-    duk_idx_t obj = duk_push_object(ctx);
-    duk_push_int(ctx, w); duk_put_prop_string(ctx, obj, "width");
-    duk_push_int(ctx, h); duk_put_prop_string(ctx, obj, "height");
-
-    void *buf = duk_push_buffer(ctx, w * h * 4, 0);
-    uint8_t *out = (uint8_t*)buf;
+    // ピクセルデータを準備
+    size_t sz = (size_t)(w * h * 4);
+    std::vector<uint8_t> out(sz);
     for (int py = 0; py < h; py++) {
         for (int px = 0; px < w; px++) {
             int srcX = x + px, srcY = y + py;
@@ -653,24 +710,33 @@ static duk_ret_t ctx_getImageData(duk_context *ctx) {
             }
         }
     }
-    duk_put_prop_string(ctx, obj, "data");
-    return 1;
+
+    JSValue obj = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, obj, "width", JS_NewInt32(ctx, w));
+    JS_SetPropertyStr(ctx, obj, "height", JS_NewInt32(ctx, h));
+    JS_SetPropertyStr(ctx, obj, "data", JS_NewArrayBufferCopy(ctx, out.data(), sz));
+    return obj;
 }
 
-static duk_ret_t ctx_putImageData(duk_context *ctx) {
-    auto *d = get_data(ctx);
-    int dx = (int)duk_get_number(ctx, 1), dy = (int)duk_get_number(ctx, 2);
+static JSValue ctx_putImageData(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    auto *d = get_data(ctx, this_val);
+    double dxd, dyd;
+    JS_ToFloat64(ctx, &dxd, argv[1]); JS_ToFloat64(ctx, &dyd, argv[2]);
+    int dx = (int)dxd, dy = (int)dyd;
 
-    if (!duk_is_object(ctx, 0)) return 0;
-    duk_get_prop_string(ctx, 0, "width");
-    int w = duk_to_int(ctx, -1); duk_pop(ctx);
-    duk_get_prop_string(ctx, 0, "height");
-    int h = duk_to_int(ctx, -1); duk_pop(ctx);
-    duk_get_prop_string(ctx, 0, "data");
-    duk_size_t sz = 0;
-    const uint8_t *src = (const uint8_t*)duk_get_buffer_data(ctx, -1, &sz);
-    duk_pop(ctx);
-    if (!src) return 0;
+    if (!JS_IsObject(argv[0])) return JS_UNDEFINED;
+
+    int w = 0, h = 0;
+    JSValue wVal = JS_GetPropertyStr(ctx, argv[0], "width");
+    JS_ToInt32(ctx, &w, wVal); JS_FreeValue(ctx, wVal);
+    JSValue hVal = JS_GetPropertyStr(ctx, argv[0], "height");
+    JS_ToInt32(ctx, &h, hVal); JS_FreeValue(ctx, hVal);
+
+    JSValue dataVal = JS_GetPropertyStr(ctx, argv[0], "data");
+    size_t sz = 0;
+    const uint8_t *src = JS_GetArrayBuffer(ctx, &sz, dataVal);
+    JS_FreeValue(ctx, dataVal);
+    if (!src) return JS_UNDEFINED;
 
     for (int py = 0; py < h; py++) {
         for (int px = 0; px < w; px++) {
@@ -683,43 +749,62 @@ static duk_ret_t ctx_putImageData(duk_context *ctx) {
         }
     }
     d->markDirty(dx, dy, w, h);
-    return 0;
+    return JS_UNDEFINED;
 }
 
 // ============================================================
 // 変換 / 状態
 // ============================================================
 
-static duk_ret_t ctx_save(duk_context *ctx) { get_data(ctx)->stateStack.push_back(get_data(ctx)->state); return 0; }
-static duk_ret_t ctx_restore(duk_context *ctx) {
-    auto *d = get_data(ctx);
+static JSValue ctx_save(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    auto *d = get_data(ctx, this_val);
+    d->stateStack.push_back(d->state);
+    return JS_UNDEFINED;
+}
+
+static JSValue ctx_restore(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    auto *d = get_data(ctx, this_val);
     if (!d->stateStack.empty()) { d->state = d->stateStack.back(); d->stateStack.pop_back(); }
-    return 0;
+    return JS_UNDEFINED;
 }
-static duk_ret_t ctx_translate(duk_context *ctx) {
-    auto *d = get_data(ctx);
-    tvg::Matrix t = {1,0,(float)duk_get_number(ctx,0), 0,1,(float)duk_get_number(ctx,1), 0,0,1};
-    d->state.transform = mat_mul(d->state.transform, t); return 0;
+
+static JSValue ctx_translate(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    auto *d = get_data(ctx, this_val);
+    double tx, ty;
+    JS_ToFloat64(ctx, &tx, argv[0]); JS_ToFloat64(ctx, &ty, argv[1]);
+    tvg::Matrix t = {1,0,(float)tx, 0,1,(float)ty, 0,0,1};
+    d->state.transform = mat_mul(d->state.transform, t);
+    return JS_UNDEFINED;
 }
-static duk_ret_t ctx_rotate(duk_context *ctx) {
-    auto *d = get_data(ctx);
-    float a=(float)duk_get_number(ctx,0), c=cosf(a), s=sinf(a);
+
+static JSValue ctx_rotate(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    auto *d = get_data(ctx, this_val);
+    double a;
+    JS_ToFloat64(ctx, &a, argv[0]);
+    float c = cosf((float)a), s = sinf((float)a);
     tvg::Matrix r = {c,-s,0, s,c,0, 0,0,1};
-    d->state.transform = mat_mul(d->state.transform, r); return 0;
+    d->state.transform = mat_mul(d->state.transform, r);
+    return JS_UNDEFINED;
 }
-static duk_ret_t ctx_scale(duk_context *ctx) {
-    auto *d = get_data(ctx);
-    tvg::Matrix sc = {(float)duk_get_number(ctx,0),0,0, 0,(float)duk_get_number(ctx,1),0, 0,0,1};
-    d->state.transform = mat_mul(d->state.transform, sc); return 0;
+
+static JSValue ctx_scale(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    auto *d = get_data(ctx, this_val);
+    double sx, sy;
+    JS_ToFloat64(ctx, &sx, argv[0]); JS_ToFloat64(ctx, &sy, argv[1]);
+    tvg::Matrix sc = {(float)sx,0,0, 0,(float)sy,0, 0,0,1};
+    d->state.transform = mat_mul(d->state.transform, sc);
+    return JS_UNDEFINED;
 }
+
 // resize: バッファサイズを変更（内容はクリアされる）
-static duk_ret_t ctx_resize(duk_context *ctx) {
-    auto *d = get_data(ctx);
-    uint32_t w = (uint32_t)duk_require_uint(ctx, 0);
-    uint32_t h = (uint32_t)duk_require_uint(ctx, 1);
+static JSValue ctx_resize(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    auto *d = get_data(ctx, this_val);
+    uint32_t w, h;
+    JS_ToUint32(ctx, &w, argv[0]);
+    JS_ToUint32(ctx, &h, argv[1]);
     if (w < 1) w = 1;
     if (h < 1) h = 1;
-    if (w == d->width && h == d->height) return 0;
+    if (w == d->width && h == d->height) return JS_UNDEFINED;
 
     // 蓄積分を破棄
     for (auto *p : d->pendingPaints) p->unref();
@@ -744,26 +829,28 @@ static duk_ret_t ctx_resize(duk_context *ctx) {
     }
 
     // JS 側の width/height プロパティも更新
-    duk_push_this(ctx);
-    duk_push_uint(ctx, w); duk_put_prop_string(ctx, -2, "width");
-    duk_push_uint(ctx, h); duk_put_prop_string(ctx, -2, "height");
-    duk_pop(ctx);
+    JS_SetPropertyStr(ctx, this_val, "width", JS_NewUint32(ctx, w));
+    JS_SetPropertyStr(ctx, this_val, "height", JS_NewUint32(ctx, h));
 
-    return 0;
+    return JS_UNDEFINED;
 }
 
-static duk_ret_t ctx_setTransform(duk_context *ctx) {
-    auto *d = get_data(ctx);
-    if (duk_get_top(ctx) >= 6) {
+static JSValue ctx_setTransform(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    auto *d = get_data(ctx, this_val);
+    if (argc >= 6) {
+        double a, b, c, dd, e, f;
+        JS_ToFloat64(ctx, &a, argv[0]); JS_ToFloat64(ctx, &b, argv[1]);
+        JS_ToFloat64(ctx, &c, argv[2]); JS_ToFloat64(ctx, &dd, argv[3]);
+        JS_ToFloat64(ctx, &e, argv[4]); JS_ToFloat64(ctx, &f, argv[5]);
         d->state.transform = {
-            (float)duk_get_number(ctx,0), (float)duk_get_number(ctx,2), (float)duk_get_number(ctx,4),
-            (float)duk_get_number(ctx,1), (float)duk_get_number(ctx,3), (float)duk_get_number(ctx,5),
+            (float)a, (float)c, (float)e,
+            (float)b, (float)dd, (float)f,
             0, 0, 1
         };
     } else {
         d->state.transform = {1,0,0, 0,1,0, 0,0,1};
     }
-    return 0;
+    return JS_UNDEFINED;
 }
 
 // ============================================================
@@ -772,13 +859,12 @@ static duk_ret_t ctx_setTransform(duk_context *ctx) {
 
 // _getRGBA: ARGB8888 premultiplied → RGBA premultiplied に変換して返す
 // texImage2D 連携用（pixi.js の UNPACK_PREMULTIPLY_ALPHA と合わせて使う）
-static duk_ret_t ctx_getRGBA(duk_context *ctx) {
-    auto *d = get_data(ctx);
+static JSValue ctx_getRGBA(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    auto *d = get_data(ctx, this_val);
     d->flushPaints();
     size_t n = d->width * d->height;
     size_t sz = n * 4;
-    void *buf = duk_push_buffer(ctx, sz, 0);
-    uint8_t *out = (uint8_t*)buf;
+    std::vector<uint8_t> out(sz);
     // ARGB → RGBA（premultiplied のまま、バイト順のみ入れ替え）
     for (size_t i = 0; i < n; i++) {
         uint32_t argb = d->pixels[i];
@@ -787,144 +873,237 @@ static duk_ret_t ctx_getRGBA(duk_context *ctx) {
         out[i*4+2] = argb & 0xFF;          // B
         out[i*4+3] = (argb >> 24) & 0xFF;  // A
     }
-    return 1;
+    return JS_NewArrayBufferCopy(ctx, out.data(), sz);
 }
 
-static duk_ret_t ctx_flush(duk_context *ctx) {
-    auto *d = get_data(ctx);
+static JSValue ctx_flush(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    auto *d = get_data(ctx, this_val);
     d->flushPaints();  // 蓄積描画をバッファに反映
     d->flushDirty();   // dirty 領域を GL テクスチャにアップロード
-    return 0;
+    return JS_UNDEFINED;
 }
 
 // ============================================================
 // プロパティ getter/setter
 // ============================================================
 
-static duk_ret_t ctx_get_fillStyle(duk_context *ctx) {
-    auto *d = get_data(ctx); char buf[32];
+static JSValue ctx_get_fillStyle(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    auto *d = get_data(ctx, this_val); char buf[32];
     snprintf(buf, sizeof(buf), "rgba(%d,%d,%d,%.2f)", d->state.fillStyle.r, d->state.fillStyle.g, d->state.fillStyle.b, d->state.fillStyle.a/255.0f);
-    duk_push_string(ctx, buf); return 1;
-}
-static duk_ret_t ctx_set_fillStyle(duk_context *ctx) { get_data(ctx)->state.fillStyle = parse_color(duk_to_string(ctx,0)); return 0; }
-static duk_ret_t ctx_get_strokeStyle(duk_context *ctx) {
-    auto *d = get_data(ctx); char buf[32];
-    snprintf(buf, sizeof(buf), "rgba(%d,%d,%d,%.2f)", d->state.strokeStyle.r, d->state.strokeStyle.g, d->state.strokeStyle.b, d->state.strokeStyle.a/255.0f);
-    duk_push_string(ctx, buf); return 1;
-}
-static duk_ret_t ctx_set_strokeStyle(duk_context *ctx) { get_data(ctx)->state.strokeStyle = parse_color(duk_to_string(ctx,0)); return 0; }
-static duk_ret_t ctx_get_lineWidth(duk_context *ctx) { duk_push_number(ctx, get_data(ctx)->state.lineWidth); return 1; }
-static duk_ret_t ctx_set_lineWidth(duk_context *ctx) { get_data(ctx)->state.lineWidth = (float)duk_require_number(ctx,0); return 0; }
-static duk_ret_t ctx_get_globalAlpha(duk_context *ctx) { duk_push_number(ctx, get_data(ctx)->state.globalAlpha); return 1; }
-static duk_ret_t ctx_set_globalAlpha(duk_context *ctx) { get_data(ctx)->state.globalAlpha = (float)duk_require_number(ctx,0); return 0; }
-static duk_ret_t ctx_get_font(duk_context *ctx) {
-    auto *d = get_data(ctx); char buf[256];
-    snprintf(buf, sizeof(buf), "%.0fpx %s", d->state.fontSize, d->state.fontName.c_str());
-    duk_push_string(ctx, buf); return 1;
-}
-static duk_ret_t ctx_set_font(duk_context *ctx) {
-    auto *d = get_data(ctx); const char *str = duk_to_string(ctx,0);
-    float size = 16.0f; char name[256] = "";
-    if (sscanf(str, "%fpx %255[^\n]", &size, name) >= 1) { d->state.fontSize = size; if (name[0]) d->state.fontName = name; }
-    return 0;
-}
-static duk_ret_t ctx_get_textAlign(duk_context *ctx) { duk_push_string(ctx, get_data(ctx)->state.textAlign.c_str()); return 1; }
-static duk_ret_t ctx_set_textAlign(duk_context *ctx) { get_data(ctx)->state.textAlign = duk_to_string(ctx,0); return 0; }
-static duk_ret_t ctx_get_lineCap(duk_context *ctx) {
-    auto *d = get_data(ctx); const char *v = "butt";
-    if (d->state.lineCap == tvg::StrokeCap::Round) v = "round";
-    else if (d->state.lineCap == tvg::StrokeCap::Square) v = "square";
-    duk_push_string(ctx, v); return 1;
-}
-static duk_ret_t ctx_set_lineCap(duk_context *ctx) {
-    auto *d = get_data(ctx); const char *v = duk_to_string(ctx,0);
-    if (strcmp(v,"round")==0) d->state.lineCap = tvg::StrokeCap::Round;
-    else if (strcmp(v,"square")==0) d->state.lineCap = tvg::StrokeCap::Square;
-    else d->state.lineCap = tvg::StrokeCap::Butt; return 0;
-}
-static duk_ret_t ctx_get_lineJoin(duk_context *ctx) {
-    auto *d = get_data(ctx); const char *v = "miter";
-    if (d->state.lineJoin == tvg::StrokeJoin::Round) v = "round";
-    else if (d->state.lineJoin == tvg::StrokeJoin::Bevel) v = "bevel";
-    duk_push_string(ctx, v); return 1;
-}
-static duk_ret_t ctx_set_lineJoin(duk_context *ctx) {
-    auto *d = get_data(ctx); const char *v = duk_to_string(ctx,0);
-    if (strcmp(v,"round")==0) d->state.lineJoin = tvg::StrokeJoin::Round;
-    else if (strcmp(v,"bevel")==0) d->state.lineJoin = tvg::StrokeJoin::Bevel;
-    else d->state.lineJoin = tvg::StrokeJoin::Miter; return 0;
+    return JS_NewString(ctx, buf);
 }
 
-static duk_ret_t ctx_get_texture(duk_context *ctx) {
-    auto *d = get_data(ctx);
+static JSValue ctx_set_fillStyle(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    const char *str = JS_ToCString(ctx, argv[0]);
+    if (str) { get_data(ctx, this_val)->state.fillStyle = parse_color(str); JS_FreeCString(ctx, str); }
+    return JS_UNDEFINED;
+}
+
+static JSValue ctx_get_strokeStyle(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    auto *d = get_data(ctx, this_val); char buf[32];
+    snprintf(buf, sizeof(buf), "rgba(%d,%d,%d,%.2f)", d->state.strokeStyle.r, d->state.strokeStyle.g, d->state.strokeStyle.b, d->state.strokeStyle.a/255.0f);
+    return JS_NewString(ctx, buf);
+}
+
+static JSValue ctx_set_strokeStyle(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    const char *str = JS_ToCString(ctx, argv[0]);
+    if (str) { get_data(ctx, this_val)->state.strokeStyle = parse_color(str); JS_FreeCString(ctx, str); }
+    return JS_UNDEFINED;
+}
+
+static JSValue ctx_get_lineWidth(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    return JS_NewFloat64(ctx, get_data(ctx, this_val)->state.lineWidth);
+}
+
+static JSValue ctx_set_lineWidth(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    double v; JS_ToFloat64(ctx, &v, argv[0]);
+    get_data(ctx, this_val)->state.lineWidth = (float)v;
+    return JS_UNDEFINED;
+}
+
+static JSValue ctx_get_globalAlpha(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    return JS_NewFloat64(ctx, get_data(ctx, this_val)->state.globalAlpha);
+}
+
+static JSValue ctx_set_globalAlpha(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    double v; JS_ToFloat64(ctx, &v, argv[0]);
+    get_data(ctx, this_val)->state.globalAlpha = (float)v;
+    return JS_UNDEFINED;
+}
+
+static JSValue ctx_get_font(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    auto *d = get_data(ctx, this_val); char buf[256];
+    snprintf(buf, sizeof(buf), "%.0fpx %s", d->state.fontSize, d->state.fontName.c_str());
+    return JS_NewString(ctx, buf);
+}
+
+static JSValue ctx_set_font(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    auto *d = get_data(ctx, this_val);
+    const char *str = JS_ToCString(ctx, argv[0]);
+    if (!str) return JS_UNDEFINED;
+    float size = 16.0f; char name[256] = "";
+    if (sscanf(str, "%fpx %255[^\n]", &size, name) >= 1) { d->state.fontSize = size; if (name[0]) d->state.fontName = name; }
+    JS_FreeCString(ctx, str);
+    return JS_UNDEFINED;
+}
+
+static JSValue ctx_get_textAlign(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    return JS_NewString(ctx, get_data(ctx, this_val)->state.textAlign.c_str());
+}
+
+static JSValue ctx_set_textAlign(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    const char *str = JS_ToCString(ctx, argv[0]);
+    if (str) { get_data(ctx, this_val)->state.textAlign = str; JS_FreeCString(ctx, str); }
+    return JS_UNDEFINED;
+}
+
+static JSValue ctx_get_lineCap(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    auto *d = get_data(ctx, this_val); const char *v = "butt";
+    if (d->state.lineCap == tvg::StrokeCap::Round) v = "round";
+    else if (d->state.lineCap == tvg::StrokeCap::Square) v = "square";
+    return JS_NewString(ctx, v);
+}
+
+static JSValue ctx_set_lineCap(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    auto *d = get_data(ctx, this_val);
+    const char *v = JS_ToCString(ctx, argv[0]);
+    if (!v) return JS_UNDEFINED;
+    if (strcmp(v,"round")==0) d->state.lineCap = tvg::StrokeCap::Round;
+    else if (strcmp(v,"square")==0) d->state.lineCap = tvg::StrokeCap::Square;
+    else d->state.lineCap = tvg::StrokeCap::Butt;
+    JS_FreeCString(ctx, v);
+    return JS_UNDEFINED;
+}
+
+static JSValue ctx_get_lineJoin(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    auto *d = get_data(ctx, this_val); const char *v = "miter";
+    if (d->state.lineJoin == tvg::StrokeJoin::Round) v = "round";
+    else if (d->state.lineJoin == tvg::StrokeJoin::Bevel) v = "bevel";
+    return JS_NewString(ctx, v);
+}
+
+static JSValue ctx_set_lineJoin(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    auto *d = get_data(ctx, this_val);
+    const char *v = JS_ToCString(ctx, argv[0]);
+    if (!v) return JS_UNDEFINED;
+    if (strcmp(v,"round")==0) d->state.lineJoin = tvg::StrokeJoin::Round;
+    else if (strcmp(v,"bevel")==0) d->state.lineJoin = tvg::StrokeJoin::Bevel;
+    else d->state.lineJoin = tvg::StrokeJoin::Miter;
+    JS_FreeCString(ctx, v);
+    return JS_UNDEFINED;
+}
+
+static JSValue ctx_get_texture(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    auto *d = get_data(ctx, this_val);
     // テクスチャ取得時に蓄積描画 + dirty 領域を自動フラッシュ
     d->flushPaints();
     d->flushDirty();
-    if (d->glTexture == 0) { duk_push_null(ctx); }
-    else { duk_idx_t obj = duk_push_object(ctx); duk_push_uint(ctx, d->glTexture); duk_put_prop_string(ctx, obj, "_id"); }
-    return 1;
+    if (d->glTexture == 0) return JS_NULL;
+    JSValue obj = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, obj, "_id", JS_NewUint32(ctx, d->glTexture));
+    return obj;
 }
 
-// Canvas2D.loadFont(path)
-// Canvas2D.loadFont(path)          — ファイルパスでロード（ThorVG 内部名で登録）
-// Canvas2D.loadFont(path, alias)   — alias 名で登録（メモリロード）
-static duk_ret_t static_loadFont(duk_context *ctx) {
-    const char *path = duk_require_string(ctx, 0);
-    const char *alias = duk_get_top(ctx) > 1 ? duk_get_string(ctx, 1) : nullptr;
+// globalCompositeOperation (ダミー)
+static JSValue ctx_get_globalCompositeOperation(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    return JS_NewString(ctx, "source-over");
+}
+
+static JSValue ctx_set_globalCompositeOperation(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    return JS_UNDEFINED;
+}
+
+// imageSmoothingEnabled (ダミー)
+static JSValue ctx_get_imageSmoothingEnabled(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    return JS_NewBool(ctx, 1);
+}
+
+static JSValue ctx_set_imageSmoothingEnabled(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    return JS_UNDEFINED;
+}
+
+// Canvas2D.loadFont(path) / Canvas2D.loadFont(path, alias)
+static JSValue static_loadFont(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    const char *path = JS_ToCString(ctx, argv[0]);
+    if (!path) return JS_EXCEPTION;
+    const char *alias = nullptr;
+    if (argc > 1) {
+        alias = JS_ToCString(ctx, argv[1]);
+    }
+
     JsEngine *engine = JsEngine::getInstance();
     std::string resolved = engine ? engine->resolvePath(path) : path;
+    JS_FreeCString(ctx, path);
 
     if (alias) {
         // SDL_LoadFile でフォントデータを読み込み、alias 名で ThorVG に登録
         size_t dataSize = 0;
         void *data = SDL_LoadFile(resolved.c_str(), &dataSize);
         if (!data) {
-            return duk_error(ctx, DUK_ERR_ERROR, "Failed to load font file: %s", resolved.c_str());
+            JS_FreeCString(ctx, alias);
+            return JS_ThrowInternalError(ctx, "Failed to load font file: %s", resolved.c_str());
         }
         auto result = tvg::Text::load(alias, (const char*)data, (uint32_t)dataSize, "ttf", true);
         SDL_free(data);
         if (result != tvg::Result::Success) {
-            return duk_error(ctx, DUK_ERR_ERROR, "Failed to register font '%s' from: %s", alias, resolved.c_str());
+            const char *a = alias; // save before free
+            JS_FreeCString(ctx, alias);
+            return JS_ThrowInternalError(ctx, "Failed to register font from: %s", resolved.c_str());
         }
         SDL_Log("Font loaded: %s as '%s'", resolved.c_str(), alias);
+        JS_FreeCString(ctx, alias);
     } else {
         // ファイルパスでロード（ThorVG 内部名で登録）
         auto result = tvg::Text::load(resolved.c_str());
         if (result != tvg::Result::Success) {
-            return duk_error(ctx, DUK_ERR_ERROR, "Failed to load font: %s", resolved.c_str());
+            return JS_ThrowInternalError(ctx, "Failed to load font: %s", resolved.c_str());
         }
         SDL_Log("Font loaded: %s", resolved.c_str());
     }
-    return 0;
+    return JS_UNDEFINED;
 }
 
 // ============================================================
-// ファイナライザ / コンストラクタ
+// コンストラクタ
 // ============================================================
 
-static duk_ret_t ctx_finalizer(duk_context *ctx) {
-    duk_get_prop_string(ctx, 0, "\xff" "data");
-    if (duk_is_pointer(ctx, -1)) delete (Canvas2DData*)duk_get_pointer(ctx, -1);
-    duk_pop(ctx); return 0;
-}
+// getter/setter を定義するヘルパーマクロ
+#define DEFINE_GETSET(obj, name, getter, setter) \
+    do { \
+        JSAtom a_ = JS_NewAtom(ctx, name); \
+        JS_DefinePropertyGetSet(ctx, obj, a_, \
+            JS_NewCFunction(ctx, getter, "get " name, 0), \
+            JS_NewCFunction(ctx, setter, "set " name, 1), \
+            JS_PROP_ENUMERABLE); \
+        JS_FreeAtom(ctx, a_); \
+    } while(0)
 
-static duk_ret_t canvas2d_constructor(duk_context *ctx) {
-    if (!duk_is_constructor_call(ctx)) return DUK_RET_TYPE_ERROR;
+// getter のみ定義するヘルパーマクロ
+#define DEFINE_GETTER(obj, name, getter) \
+    do { \
+        JSAtom a_ = JS_NewAtom(ctx, name); \
+        JS_DefinePropertyGetSet(ctx, obj, a_, \
+            JS_NewCFunction(ctx, getter, "get " name, 0), \
+            JS_UNDEFINED, \
+            JS_PROP_ENUMERABLE); \
+        JS_FreeAtom(ctx, a_); \
+    } while(0)
 
-    uint32_t w = (uint32_t)duk_require_uint(ctx, 0);
-    uint32_t h = (uint32_t)duk_require_uint(ctx, 1);
+static JSValue canvas2d_constructor(JSContext *ctx, JSValueConst new_target, int argc, JSValueConst *argv) {
+    uint32_t w, h;
+    JS_ToUint32(ctx, &w, argv[0]);
+    JS_ToUint32(ctx, &h, argv[1]);
+
+    JSValue proto = JS_GetPropertyStr(ctx, new_target, "prototype");
+    JSValue obj = JS_NewObjectProtoClass(ctx, proto, js_canvas2d_class_id);
+    JS_FreeValue(ctx, proto);
 
     auto *data = new Canvas2DData();
     data->width = w; data->height = h;
     data->pixels.resize(w * h, 0);
     // EngineOption::None で dirty region（部分描画最適化）を無効化する。
-    // Default のままだと draw()/sync() 後に fulldraw フラグが false になり、
-    // 次回の draw() 時に preRender() が変更領域を 0x00000000 でクリアしてから
-    // 再描画するため、描画周辺の背景が黒で塗りつぶされてしまう。
     data->canvas = tvg::SwCanvas::gen(tvg::EngineOption::None);
-    // ARGB8888 (premultiplied) を使用。ABGR8888S は ThorVG の postRender() で
-    // 毎回全バッファ rasterUnpremultiply が走るため 100倍以上遅くなる。
-    // テクスチャアップロード時に dirty rect 分だけ ARGB→RGBA 変換する。
+    // ARGB8888 (premultiplied) を使用
     data->canvas->target(data->pixels.data(), w, w, h, tvg::ColorSpace::ARGB8888);
 
     glGenTextures(1, &data->glTexture);
@@ -936,74 +1115,78 @@ static duk_ret_t canvas2d_constructor(duk_context *ctx) {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glBindTexture(GL_TEXTURE_2D, 0);
 
-    duk_push_this(ctx);
-    duk_idx_t obj = duk_get_top_index(ctx);
+    JS_SetOpaque(obj, data);
 
-    duk_push_pointer(ctx, data); duk_put_prop_string(ctx, obj, "\xff" "data");
-    duk_push_uint(ctx, w); duk_put_prop_string(ctx, obj, "width");
-    duk_push_uint(ctx, h); duk_put_prop_string(ctx, obj, "height");
+    // width / height プロパティ
+    JS_SetPropertyStr(ctx, obj, "width", JS_NewUint32(ctx, w));
+    JS_SetPropertyStr(ctx, obj, "height", JS_NewUint32(ctx, h));
 
-    #define M(name, func, n) duk_push_c_function(ctx, func, n); duk_put_prop_string(ctx, obj, name)
-    M("fillRect", ctx_fillRect, 4); M("strokeRect", ctx_strokeRect, 4); M("clearRect", ctx_clearRect, 4);
-    M("beginPath", ctx_beginPath, 0); M("moveTo", ctx_moveTo, 2); M("lineTo", ctx_lineTo, 2);
-    M("bezierCurveTo", ctx_bezierCurveTo, 6); M("rect", ctx_rect, 4);
-    M("arc", ctx_arc, DUK_VARARGS); M("closePath", ctx_closePath, 0);
-    M("fill", ctx_fill, 0); M("stroke", ctx_stroke, 0);
-    M("fillText", ctx_fillText, 3); M("strokeText", ctx_strokeText, 3); M("measureText", ctx_measureText, 1);
-    M("drawImage", ctx_drawImage, DUK_VARARGS);
-    M("getImageData", ctx_getImageData, 4); M("putImageData", ctx_putImageData, 3);
-    M("save", ctx_save, 0); M("restore", ctx_restore, 0);
-    M("translate", ctx_translate, 2); M("rotate", ctx_rotate, 1); M("scale", ctx_scale, 2);
-    M("setTransform", ctx_setTransform, DUK_VARARGS);
-    M("flush", ctx_flush, 0);
-    M("_getRGBA", ctx_getRGBA, 0);
-    M("_resize", ctx_resize, 2);
-    #undef M
+    // メソッド登録
+    JS_SetPropertyStr(ctx, obj, "fillRect", JS_NewCFunction(ctx, ctx_fillRect, "fillRect", 4));
+    JS_SetPropertyStr(ctx, obj, "strokeRect", JS_NewCFunction(ctx, ctx_strokeRect, "strokeRect", 4));
+    JS_SetPropertyStr(ctx, obj, "clearRect", JS_NewCFunction(ctx, ctx_clearRect, "clearRect", 4));
+    JS_SetPropertyStr(ctx, obj, "beginPath", JS_NewCFunction(ctx, ctx_beginPath, "beginPath", 0));
+    JS_SetPropertyStr(ctx, obj, "moveTo", JS_NewCFunction(ctx, ctx_moveTo, "moveTo", 2));
+    JS_SetPropertyStr(ctx, obj, "lineTo", JS_NewCFunction(ctx, ctx_lineTo, "lineTo", 2));
+    JS_SetPropertyStr(ctx, obj, "bezierCurveTo", JS_NewCFunction(ctx, ctx_bezierCurveTo, "bezierCurveTo", 6));
+    JS_SetPropertyStr(ctx, obj, "rect", JS_NewCFunction(ctx, ctx_rect, "rect", 4));
+    JS_SetPropertyStr(ctx, obj, "arc", JS_NewCFunction(ctx, ctx_arc, "arc", 6));
+    JS_SetPropertyStr(ctx, obj, "closePath", JS_NewCFunction(ctx, ctx_closePath, "closePath", 0));
+    JS_SetPropertyStr(ctx, obj, "fill", JS_NewCFunction(ctx, ctx_fill, "fill", 0));
+    JS_SetPropertyStr(ctx, obj, "stroke", JS_NewCFunction(ctx, ctx_stroke, "stroke", 0));
+    JS_SetPropertyStr(ctx, obj, "fillText", JS_NewCFunction(ctx, ctx_fillText, "fillText", 3));
+    JS_SetPropertyStr(ctx, obj, "strokeText", JS_NewCFunction(ctx, ctx_strokeText, "strokeText", 3));
+    JS_SetPropertyStr(ctx, obj, "measureText", JS_NewCFunction(ctx, ctx_measureText, "measureText", 1));
+    JS_SetPropertyStr(ctx, obj, "drawImage", JS_NewCFunction(ctx, ctx_drawImage, "drawImage", 9));
+    JS_SetPropertyStr(ctx, obj, "getImageData", JS_NewCFunction(ctx, ctx_getImageData, "getImageData", 4));
+    JS_SetPropertyStr(ctx, obj, "putImageData", JS_NewCFunction(ctx, ctx_putImageData, "putImageData", 3));
+    JS_SetPropertyStr(ctx, obj, "save", JS_NewCFunction(ctx, ctx_save, "save", 0));
+    JS_SetPropertyStr(ctx, obj, "restore", JS_NewCFunction(ctx, ctx_restore, "restore", 0));
+    JS_SetPropertyStr(ctx, obj, "translate", JS_NewCFunction(ctx, ctx_translate, "translate", 2));
+    JS_SetPropertyStr(ctx, obj, "rotate", JS_NewCFunction(ctx, ctx_rotate, "rotate", 1));
+    JS_SetPropertyStr(ctx, obj, "scale", JS_NewCFunction(ctx, ctx_scale, "scale", 2));
+    JS_SetPropertyStr(ctx, obj, "setTransform", JS_NewCFunction(ctx, ctx_setTransform, "setTransform", 6));
+    JS_SetPropertyStr(ctx, obj, "flush", JS_NewCFunction(ctx, ctx_flush, "flush", 0));
+    JS_SetPropertyStr(ctx, obj, "_getRGBA", JS_NewCFunction(ctx, ctx_getRGBA, "_getRGBA", 0));
+    JS_SetPropertyStr(ctx, obj, "_resize", JS_NewCFunction(ctx, ctx_resize, "_resize", 2));
 
-    #define P(name, g, s) duk_push_string(ctx, name); duk_push_c_function(ctx, g, 0); duk_push_c_function(ctx, s, 1); \
-        duk_def_prop(ctx, obj, DUK_DEFPROP_HAVE_GETTER|DUK_DEFPROP_HAVE_SETTER|DUK_DEFPROP_SET_ENUMERABLE)
-    P("fillStyle", ctx_get_fillStyle, ctx_set_fillStyle);
-    P("strokeStyle", ctx_get_strokeStyle, ctx_set_strokeStyle);
-    P("lineWidth", ctx_get_lineWidth, ctx_set_lineWidth);
-    P("globalAlpha", ctx_get_globalAlpha, ctx_set_globalAlpha);
-    P("font", ctx_get_font, ctx_set_font);
-    P("textAlign", ctx_get_textAlign, ctx_set_textAlign);
-    P("lineCap", ctx_get_lineCap, ctx_set_lineCap);
-    P("lineJoin", ctx_get_lineJoin, ctx_set_lineJoin);
-    #undef P
+    // getter/setter プロパティ
+    DEFINE_GETSET(obj, "fillStyle", ctx_get_fillStyle, ctx_set_fillStyle);
+    DEFINE_GETSET(obj, "strokeStyle", ctx_get_strokeStyle, ctx_set_strokeStyle);
+    DEFINE_GETSET(obj, "lineWidth", ctx_get_lineWidth, ctx_set_lineWidth);
+    DEFINE_GETSET(obj, "globalAlpha", ctx_get_globalAlpha, ctx_set_globalAlpha);
+    DEFINE_GETSET(obj, "font", ctx_get_font, ctx_set_font);
+    DEFINE_GETSET(obj, "textAlign", ctx_get_textAlign, ctx_set_textAlign);
+    DEFINE_GETSET(obj, "lineCap", ctx_get_lineCap, ctx_set_lineCap);
+    DEFINE_GETSET(obj, "lineJoin", ctx_get_lineJoin, ctx_set_lineJoin);
+    DEFINE_GETSET(obj, "globalCompositeOperation", ctx_get_globalCompositeOperation, ctx_set_globalCompositeOperation);
+    DEFINE_GETSET(obj, "imageSmoothingEnabled", ctx_get_imageSmoothingEnabled, ctx_set_imageSmoothingEnabled);
 
-    // globalCompositeOperation (ダミー)
-    duk_push_string(ctx, "globalCompositeOperation");
-    duk_push_c_function(ctx, [](duk_context*c)->duk_ret_t{ duk_push_string(c,"source-over"); return 1; }, 0);
-    duk_push_c_function(ctx, [](duk_context*)->duk_ret_t{ return 0; }, 1);
-    duk_def_prop(ctx, obj, DUK_DEFPROP_HAVE_GETTER|DUK_DEFPROP_HAVE_SETTER|DUK_DEFPROP_SET_ENUMERABLE);
+    // texture getter (read-only)
+    DEFINE_GETTER(obj, "texture", ctx_get_texture);
 
-    // imageSmoothingEnabled (ダミー)
-    duk_push_string(ctx, "imageSmoothingEnabled");
-    duk_push_c_function(ctx, [](duk_context*c)->duk_ret_t{ duk_push_true(c); return 1; }, 0);
-    duk_push_c_function(ctx, [](duk_context*)->duk_ret_t{ return 0; }, 1);
-    duk_def_prop(ctx, obj, DUK_DEFPROP_HAVE_GETTER|DUK_DEFPROP_HAVE_SETTER|DUK_DEFPROP_SET_ENUMERABLE);
-
-    duk_push_string(ctx, "texture");
-    duk_push_c_function(ctx, ctx_get_texture, 0);
-    duk_def_prop(ctx, obj, DUK_DEFPROP_HAVE_GETTER | DUK_DEFPROP_SET_ENUMERABLE);
-
-    duk_push_c_function(ctx, ctx_finalizer, 1);
-    duk_set_finalizer(ctx, obj);
-
-    duk_pop(ctx);
-    return 0;
+    return obj;
 }
+
+#undef DEFINE_GETSET
+#undef DEFINE_GETTER
 
 // ============================================================
 // バインディング登録
 // ============================================================
 
-void canvas2d_bind(duk_context *ctx) {
-    duk_push_c_function(ctx, canvas2d_constructor, 2);
-    duk_push_object(ctx);
-    duk_put_prop_string(ctx, -2, "prototype");
-    duk_push_c_function(ctx, static_loadFont, DUK_VARARGS);
-    duk_put_prop_string(ctx, -2, "loadFont");
-    duk_put_global_string(ctx, "Canvas2D");
+void canvas2d_bind(JSContext *ctx) {
+    // Canvas2D クラスを登録
+    JS_NewClassID(JS_GetRuntime(ctx), &js_canvas2d_class_id);
+    JS_NewClass(JS_GetRuntime(ctx), js_canvas2d_class_id, &js_canvas2d_class);
+
+    // コンストラクタをグローバルに登録
+    JSValue ctor = JS_NewCFunction2(ctx, canvas2d_constructor, "Canvas2D", 2, JS_CFUNC_constructor, 0);
+
+    // static メソッド: Canvas2D.loadFont(path [, alias])
+    JS_SetPropertyStr(ctx, ctor, "loadFont", JS_NewCFunction(ctx, static_loadFont, "loadFont", 2));
+
+    JSValue global = JS_GetGlobalObject(ctx);
+    JS_SetPropertyStr(ctx, global, "Canvas2D", ctor);
+    JS_FreeValue(ctx, global);
 }
