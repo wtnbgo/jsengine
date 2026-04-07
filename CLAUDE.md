@@ -51,7 +51,7 @@ cmake --build build/x64-windows --config Release
 - `src/jsengine.hpp` / `src/jsengine.cpp` — `JsEngine` class. Manages the duktape heap, JS file loading (via SDL_LoadFile), lifecycle calls (update/render/done), and browser-compatible input event dispatch (addEventListener/removeEventListener).
 - `src/dukwebgl.h` / `src/dukwebgl.cpp` — WebGL 2.0 compatible bindings mapping to GLES 3.0. Registers `gl` global and `WebGL2RenderingContext`.
 - `src/webaudio.h` / `src/webaudio.cpp` — Web Audio API bindings. Uses AudioEngine/AudioStream for playback.
-- `src/canvas2d.h` / `src/canvas2d.cpp` — Canvas 2D API bindings using ThorVG SwCanvas. Renders to offscreen buffer, uploads to GL texture.
+- `src/canvas2d.h` / `src/canvas2d.cpp` — Canvas 2D API bindings using ThorVG SwCanvas. Bitmap-retained mode: each draw op immediately renders to pixel buffer, content persists until clearRect. drawImage uses ThorVG Picture. Uploads to GL texture on flush().
 - `src/audio/` — AudioEngine (miniaudio singleton with sound groups) and AudioStream (file/memory/stream decoding with SDL3 I/O). Supports WAV, MP3, FLAC, and optionally OGG Vorbis/Opus.
 - `glad/` — GLAD loader for OpenGL ES 3.0 (local subdirectory, built as a CMake sub-project).
 
@@ -67,7 +67,7 @@ cmake --build build/x64-windows --config Release
 - The vcpkg duktape package name is `unofficial-duktape` (target: `unofficial::duktape::duktape`).
 - Comments in the codebase are in Japanese.
 - `manual.js` contains the full API reference for the JS environment.
-- pixi.js v5.3.12 動作確認済み（data/lib/ に polyfill.js, browser_shim.js, pixi.min.js）。白テクスチャの手動差し替えが必要。
+- pixi.js v5.3.12 動作確認済み（data/lib/ に polyfill.js, browser_shim.js, pixi.min.js）。白テクスチャの手動差し替えは不要（Canvas2D のビットマップ保持型実装で自然に動作）。
 - pixi.js v4.5.4（RPG Maker MV）は test/ で作業中。OES_vertex_array_object 拡張マッピング、CanvasRenderingContext2D シム等を追加済み。
 - `dukwebgl_get_buffer()` は TypedArray の byteOffset を正しく処理する。
 - `getParameter()` は配列型（VIEWPORT 等）を Int32Array/Float32Array で返す。

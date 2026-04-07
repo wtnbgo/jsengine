@@ -74,10 +74,12 @@ source.start();                        // 再生開始（先頭から）
 source.stop();                         // 再生停止
 
 // ************************************************************
-// Canvas 2D API（ThorVG ベース）
+// Canvas 2D API（ThorVG ベース・ビットマップ保持型）
 // ************************************************************
-// オフスクリーン 2D 描画キャンバス。描画結果は GL テクスチャとして取得可能。
-// ThorVG SwCanvas で描画し、flush() で GL テクスチャにアップロードする。
+// オフスクリーン 2D 描画キャンバス。各描画操作は即座にピクセルバッファに反映される。
+// clearRect で明示的にクリアされるまでバッファ内容を保持する。
+// flush() で GL テクスチャにアップロードし、WebGL から利用可能。
+// browser_shim.js の getContext("2d") が返す 2D コンテキストとしても使用される。
 
 Canvas2D.loadFont("font.ttf");                          // フォントファイル読み込み（ベースパス相対）
 
@@ -93,11 +95,13 @@ ctx.lineWidth = 2.0;
 ctx.globalAlpha = 1.0;                                   // 0.0 ~ 1.0
 ctx.lineCap = "butt";                                    // "butt" | "round" | "square"
 ctx.lineJoin = "miter";                                  // "miter" | "round" | "bevel"
+ctx.globalCompositeOperation = "source-over";            // ダミー（現在固定）
+ctx.imageSmoothingEnabled = true;                        // ダミー（現在固定）
 
-// --- 矩形 ---
+// --- 矩形（即座にバッファに描画） ---
 ctx.fillRect(x, y, w, h);
 ctx.strokeRect(x, y, w, h);
-ctx.clearRect(x, y, w, h);
+ctx.clearRect(x, y, w, h);                              // ピクセルバッファを直接クリア
 
 // --- パス ---
 ctx.beginPath();
@@ -107,7 +111,7 @@ ctx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, x, y);
 ctx.rect(x, y, w, h);
 ctx.arc(cx, cy, r, startAngle, endAngle, counterclockwise);  // 角度はラジアン
 ctx.closePath();
-ctx.fill();
+ctx.fill();                                              // ThorVG Shape で即座に描画
 ctx.stroke();
 
 // --- テキスト ---
@@ -117,15 +121,26 @@ ctx.fillText("Hello", x, y);                             // y はベースライ
 ctx.strokeText("Hello", x, y);
 var m = ctx.measureText("Hello");                        // => { width }
 
+// --- 画像描画（ThorVG Picture ベース） ---
+ctx.drawImage(image, dx, dy);                            // 3引数: 原寸描画
+ctx.drawImage(image, dx, dy, dw, dh);                    // 5引数: リサイズ描画
+ctx.drawImage(image, sx, sy, sw, sh, dx, dy, dw, dh);   // 9引数: 切り出し+リサイズ
+// image: createImageBitmap() の戻り値、または data プロパティを持つオブジェクト
+
+// --- ピクセル操作（C++ 側で直接バッファアクセス） ---
+var imgData = ctx.getImageData(x, y, w, h);              // => { width, height, data (RGBA buffer) }
+ctx.putImageData(imgData, dx, dy);                       // RGBA バッファを直接書き込み
+
 // --- 変換 ---
 ctx.save();
 ctx.translate(x, y);
 ctx.rotate(angle);                                       // ラジアン
 ctx.scale(sx, sy);
+ctx.setTransform(a, b, c, d, e, f);                     // 変換行列を直接設定
 ctx.restore();
 
 // --- 描画確定 ---
-ctx.flush();                                             // ThorVG レンダリング → GL テクスチャ更新
+ctx.flush();                                             // ピクセルバッファ → GL テクスチャアップロード
 // flush 後に ctx.texture を gl.bindTexture で使用可能
 
 // ************************************************************

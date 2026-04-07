@@ -82,7 +82,7 @@ jsengine -quiet             # 警告以上のログのみ
 - **`removeEventListener(type, callback)`** - イベントリスナー解除
 - **`fs`** - File System Access API（`readText`, `writeText`, `getFileHandle`, `getDirectoryHandle`, `exists`, `stat`, `mkdir`, `remove`, `rename`）
 - **`new AudioContext()`** - Web Audio API（`createBufferSource`, マスターボリューム）
-- **`new Canvas2D(w, h)`** - Canvas 2D API（矩形、パス、テキスト、変換、GL テクスチャ出力）
+- **`new Canvas2D(w, h)`** - Canvas 2D API（ビットマップ保持型。矩形、パス、テキスト、drawImage、getImageData/putImageData、変換、GL テクスチャ出力）
 - **`Canvas2D.loadFont(path)`** - ThorVG 用フォントファイル読み込み
 - **`createImageBitmap(path)`** - 画像を RGBA ピクセルデータとして読み込み
 
@@ -107,7 +107,7 @@ jsengine -quiet             # 警告以上のログのみ
 
 ## サンプル
 
-`data/main.js` にキー操作で切り替え可能な4つのデモが含まれています。
+`data/main.js` にキー操作で切り替え可能な6つのデモが含まれています。
 
 | キー | デモ内容 |
 |------|---------|
@@ -115,6 +115,8 @@ jsengine -quiet             # 警告以上のログのみ
 | **2** | Canvas2D 図形描画（矩形、円、ベジェ曲線、半透明） |
 | **3** | Canvas2D テキスト描画（複数フォント・サイズ・色） |
 | **4** | Canvas2D アニメーション（回転図形、軌道円） |
+| **5** | pixi.js v5 テスト（Graphics 描画、アニメーション） |
+| **6** | Canvas2D drawImage / getImageData / putImageData テスト |
 | **Space** | ビープ音再生 |
 | **R** | リセット |
 
