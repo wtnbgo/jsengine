@@ -137,6 +137,9 @@ struct Canvas2DData {
     std::vector<DrawState> stateStack;
 
     ~Canvas2DData() {
+        // 蓄積中の Paint を解放
+        for (auto *p : pendingPaints) p->unref();
+        pendingPaints.clear();
         if (canvas) delete canvas;
         if (glTexture) glDeleteTextures(1, &glTexture);
     }
@@ -195,29 +198,37 @@ struct Canvas2DData {
         hasDirty = false;
     }
 
-    // ThorVG で1つのシェイプを描画してバッファに合成
-    void renderShape(tvg::Shape *shape) {
-        canvas->add(shape);
+    // 蓄積された Paint のリスト（flush 時にまとめて描画）
+    std::vector<tvg::Paint*> pendingPaints;
+    bool hasPending = false;
+
+    // 描画操作を蓄積（即座には描画しない）
+    void addPaint(tvg::Paint *paint) {
+        pendingPaints.push_back(paint);
+        hasPending = true;
+    }
+
+    // 蓄積された描画をまとめてバッファに反映
+    void flushPaints() {
+        if (!hasPending) return;
+        for (auto *p : pendingPaints) {
+            canvas->add(p);
+        }
         canvas->update();
-        canvas->draw(false);
+        canvas->draw(false);  // バッファクリアしない（蓄積描画）
         canvas->sync();
-        canvas->remove(shape);
-        // shape の bounds から dirty 領域を推定（全体を dirty にする簡易版）
+        // 全 paint を除去
+        for (auto *p : pendingPaints) {
+            canvas->remove(p);
+        }
+        pendingPaints.clear();
+        hasPending = false;
         markAllDirty();
     }
 
-    // ThorVG で Text を描画してバッファに合成
-    void renderText(tvg::Text *text) {
-        canvas->add(text);
-        canvas->update();
-        canvas->draw(false);
-        canvas->sync();
-        canvas->remove(text);
-        markAllDirty();
-    }
-
-    // ピクセルバッファの一部を直接クリア
+    // ピクセルバッファの一部を直接クリア（先に蓄積分を反映）
     void clearPixels(int x, int y, int w, int h) {
+        flushPaints();
         int x0 = SDL_max(0, x);
         int y0 = SDL_max(0, y);
         int x1 = SDL_min((int)width, x + w);
@@ -228,11 +239,12 @@ struct Canvas2DData {
         markDirty(x, y, w, h);
     }
 
-    // ピクセルバッファに直接ビットブリット（スケーリング対応）
+    // ピクセルバッファに直接ビットブリット（スケーリング対応、先に蓄積分を反映）
     void blitPixels(const uint8_t *srcRGBA, int srcW, int srcH,
                     int sx, int sy, int sw, int sh,
                     int dx, int dy, int dw, int dh) {
         if (sw <= 0 || sh <= 0 || dw <= 0 || dh <= 0) return;
+        flushPaints();
 
         for (int py = 0; py < dh; py++) {
             int dstY = dy + py;
@@ -336,7 +348,7 @@ static duk_ret_t ctx_fillRect(duk_context *ctx) {
     uint8_t a = (uint8_t)(d->state.fillStyle.a * d->state.globalAlpha);
     shape->fill(d->state.fillStyle.r, d->state.fillStyle.g, d->state.fillStyle.b, a);
     shape->transform(d->state.transform);
-    d->renderShape(shape);
+    d->addPaint(shape);
     return 0;
 }
 
@@ -350,7 +362,7 @@ static duk_ret_t ctx_strokeRect(duk_context *ctx) {
     shape->strokeFill(d->state.strokeStyle.r, d->state.strokeStyle.g, d->state.strokeStyle.b, a);
     shape->strokeWidth(d->state.lineWidth);
     shape->transform(d->state.transform);
-    d->renderShape(shape);
+    d->addPaint(shape);
     return 0;
 }
 
@@ -411,7 +423,7 @@ static duk_ret_t ctx_fill(duk_context *ctx) {
     uint8_t a = (uint8_t)(d->state.fillStyle.a * d->state.globalAlpha);
     shape->fill(d->state.fillStyle.r, d->state.fillStyle.g, d->state.fillStyle.b, a);
     shape->transform(d->state.transform);
-    d->renderShape(shape);
+    d->addPaint(shape);
     return 0;
 }
 static duk_ret_t ctx_stroke(duk_context *ctx) {
@@ -422,7 +434,7 @@ static duk_ret_t ctx_stroke(duk_context *ctx) {
     shape->strokeFill(d->state.strokeStyle.r, d->state.strokeStyle.g, d->state.strokeStyle.b, a);
     shape->strokeWidth(d->state.lineWidth);
     shape->transform(d->state.transform);
-    d->renderShape(shape);
+    d->addPaint(shape);
     return 0;
 }
 
@@ -446,7 +458,7 @@ static duk_ret_t ctx_fillText(duk_context *ctx) {
     text->opacity((uint8_t)(d->state.fillStyle.a * d->state.globalAlpha));
     tvg::Matrix t = {1,0,x, 0,1,y - d->state.fontSize * 0.85f, 0,0,1};
     text->transform(mat_mul(d->state.transform, t));
-    d->renderText(text);
+    d->addPaint(text);
     return 0;
 }
 
@@ -465,7 +477,7 @@ static duk_ret_t ctx_strokeText(duk_context *ctx) {
     text->opacity((uint8_t)(d->state.strokeStyle.a * d->state.globalAlpha));
     tvg::Matrix t = {1,0,x, 0,1,y - d->state.fontSize * 0.85f, 0,0,1};
     text->transform(mat_mul(d->state.transform, t));
-    d->renderText(text);
+    d->addPaint(text);
     return 0;
 }
 
@@ -544,12 +556,7 @@ static void drawImageViaPicture(Canvas2DData *d,
     pic->transform(m);
     pic->opacity((uint8_t)(d->state.globalAlpha * 255));
 
-    d->canvas->add(pic);
-    d->canvas->update();
-    d->canvas->draw(false);
-    d->canvas->sync();
-    d->canvas->remove(pic);
-    d->markDirty(dx, dy, dw, dh);
+    d->addPaint(pic);
 }
 
 static duk_ret_t ctx_drawImage(duk_context *ctx) {
@@ -608,6 +615,7 @@ static duk_ret_t ctx_drawImage(duk_context *ctx) {
 
 static duk_ret_t ctx_getImageData(duk_context *ctx) {
     auto *d = get_data(ctx);
+    d->flushPaints(); // 蓄積分を先にバッファに反映
     int x=(int)duk_get_number(ctx,0), y=(int)duk_get_number(ctx,1);
     int w=(int)duk_get_number(ctx,2), h=(int)duk_get_number(ctx,3);
 
@@ -711,7 +719,8 @@ static duk_ret_t ctx_setTransform(duk_context *ctx) {
 
 static duk_ret_t ctx_flush(duk_context *ctx) {
     auto *d = get_data(ctx);
-    d->flushDirty();
+    d->flushPaints();  // 蓄積描画をバッファに反映
+    d->flushDirty();   // dirty 領域を GL テクスチャにアップロード
     return 0;
 }
 
@@ -775,7 +784,8 @@ static duk_ret_t ctx_set_lineJoin(duk_context *ctx) {
 
 static duk_ret_t ctx_get_texture(duk_context *ctx) {
     auto *d = get_data(ctx);
-    // テクスチャ取得時に dirty 領域を自動フラッシュ
+    // テクスチャ取得時に蓄積描画 + dirty 領域を自動フラッシュ
+    d->flushPaints();
     d->flushDirty();
     if (d->glTexture == 0) { duk_push_null(ctx); }
     else { duk_idx_t obj = duk_push_object(ctx); duk_push_uint(ctx, d->glTexture); duk_put_prop_string(ctx, obj, "_id"); }

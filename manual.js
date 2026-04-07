@@ -141,10 +141,13 @@ ctx.setTransform(a, b, c, d, e, f);                     // 変換行列を直接
 ctx.restore();
 
 // --- 描画確定 ---
-ctx.flush();                                             // dirty 領域のみ GL テクスチャにアップロード
+ctx.flush();                                             // 蓄積描画をバッファに反映 + dirty 領域を GL テクスチャにアップロード
 // flush 後に ctx.texture を gl.bindTexture で使用可能
 // ctx.texture の getter でも自動的に flush される
-// 注: 差分更新により、変更された矩形領域のみ ARGB→RGBA 変換+アップロードされる
+// getImageData も自動的に蓄積描画を反映してからバッファを読み出す
+// 注: 描画操作（fillRect, fill, stroke, fillText, drawImage 等）は蓄積され、
+//     flush / texture取得 / getImageData 時にまとめて ThorVG で描画される（遅延描画）
+//     clearRect / putImageData / blitPixels は先に蓄積分を反映してから実行される
 
 // ************************************************************
 // コンソール

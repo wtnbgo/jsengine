@@ -51,7 +51,7 @@ cmake --build build/x64-windows --config Release
 - `src/jsengine.hpp` / `src/jsengine.cpp` — `JsEngine` class. Manages the duktape heap, JS file loading (via SDL_LoadFile), lifecycle calls (update/render/done), and browser-compatible input event dispatch (addEventListener/removeEventListener).
 - `src/dukwebgl.h` / `src/dukwebgl.cpp` — WebGL 2.0 compatible bindings mapping to GLES 3.0. Registers `gl` global and `WebGL2RenderingContext`.
 - `src/webaudio.h` / `src/webaudio.cpp` — Web Audio API bindings. Uses AudioEngine/AudioStream for playback.
-- `src/canvas2d.h` / `src/canvas2d.cpp` — Canvas 2D API bindings using ThorVG SwCanvas. Bitmap-retained mode: each draw op immediately renders to pixel buffer, content persists until clearRect. drawImage uses ThorVG Picture. Uploads to GL texture on flush().
+- `src/canvas2d.h` / `src/canvas2d.cpp` — Canvas 2D API bindings using ThorVG SwCanvas. Bitmap-retained mode with deferred rendering: draw ops are batched and rendered to pixel buffer on flush/texture access/getImageData. drawImage uses ThorVG Picture. Dirty rect tracking for partial GL texture upload.
 - `src/audio/` — AudioEngine (miniaudio singleton with sound groups) and AudioStream (file/memory/stream decoding with SDL3 I/O). Supports WAV, MP3, FLAC, and optionally OGG Vorbis/Opus.
 - `glad/` — GLAD loader for OpenGL ES 3.0 (local subdirectory, built as a CMake sub-project).
 
