@@ -174,9 +174,15 @@ struct Canvas2DData {
         rgbaCacheDirty = true;
     }
 
+    bool inFlush = false;  // 再入防止
+
     // RGBA キャッシュを更新して返す（dirty 時のみ全変換）
     const uint8_t* getRGBACache() {
-        flushPaints();
+        if (!inFlush) {
+            inFlush = true;
+            flushPaints();
+            inFlush = false;
+        }
         size_t n = width * height;
         if (rgbaCache.size() != n * 4) {
             rgbaCache.resize(n * 4);
@@ -558,21 +564,8 @@ static void drawImageViaPicture(Canvas2DData *d,
         pixelData = clipped.data();
     }
 
-    auto *pic = tvg::Picture::gen();
-    if (pic->load(pixelData, loadW, loadH, tvg::ColorSpace::ABGR8888S, true) != tvg::Result::Success) {
-        // フォールバック: blitPixels
-        d->blitPixels(srcRGBA, srcW, srcH, sx, sy, sw, sh, dx, dy, dw, dh);
-        pic->unref();
-        return;
-    }
-
-    float scaleX = (float)dw / loadW;
-    float scaleY = (float)dh / loadH;
-    tvg::Matrix m = {scaleX, 0, (float)dx, 0, scaleY, (float)dy, 0, 0, 1};
-    pic->transform(m);
-    pic->opacity((uint8_t)(d->state.globalAlpha * 255));
-
-    d->addPaint(pic);
+    // 蓄積描画時は blitPixels にフォールバック（Picture + addPaint の問題回避）
+    d->blitPixels(srcRGBA, srcW, srcH, sx, sy, sw, sh, dx, dy, dw, dh);
 }
 
 static duk_ret_t ctx_drawImage(duk_context *ctx) {

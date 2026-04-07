@@ -47,11 +47,11 @@ function HTMLCanvasElement(width, height) {
 }
 
 // data プロパティ: 2D コンテキストの RGBA ピクセルデータを返す（texImage2D 連携用）
-// Canvas2D._getRGBA() でキャッシュ済み RGBA バッファを高速取得（dirty 時のみ変換）
 Object.defineProperty(HTMLCanvasElement.prototype, "data", {
     get: function() {
-        if (this._ctx2d && typeof this._ctx2d._getRGBA === "function") {
-            return this._ctx2d._getRGBA();
+        if (this._ctx2d && typeof this._ctx2d.getImageData === "function") {
+            var imgData = this._ctx2d.getImageData(0, 0, this.width, this.height);
+            return imgData ? imgData.data : null;
         }
         return null;
     }

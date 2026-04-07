@@ -92,7 +92,12 @@ static void* dukwebgl_get_buffer(duk_context *ctx, duk_idx_t idx, duk_size_t *ou
     return NULL;
 }
 
-static void* dukwebgl_get_pixels(duk_context *ctx, duk_idx_t idx) {
+// ピクセルデータ取得ヘルパー
+// 注意: source.data getter 経由でバッファを取得した場合、戻り値のポインタは
+// スタック上のバッファ参照に依存する。呼び出し側で GL 処理完了後にスタックを整理すること。
+// pushed: duk_get_prop_string で1つ積まれた場合 true を返す
+static void* dukwebgl_get_pixels(duk_context *ctx, duk_idx_t idx, bool *pushed = nullptr) {
+    if (pushed) *pushed = false;
     if (duk_is_buffer_data(ctx, idx)) {
         return duk_get_buffer_data(ctx, idx, NULL);
     }
@@ -100,7 +105,8 @@ static void* dukwebgl_get_pixels(duk_context *ctx, duk_idx_t idx) {
         duk_get_prop_string(ctx, idx, "data");
         if (duk_is_buffer_data(ctx, -1)) {
             void *p = duk_get_buffer_data(ctx, -1, NULL);
-            duk_pop(ctx);
+            // duk_pop しない — ポインタが有効な間バッファをスタックに保持
+            if (pushed) *pushed = true;
             return p;
         }
         duk_pop(ctx);
@@ -524,14 +530,17 @@ static duk_ret_t dukwebgl_texImage2D(duk_context *ctx) {
         GLint border = (GLint)duk_get_int(ctx, 5);
         GLenum format = (GLenum)duk_get_uint(ctx, 6);
         GLenum type = (GLenum)duk_get_uint(ctx, 7);
-        void *pixels = dukwebgl_get_pixels(ctx, 8);
+        bool pushed = false;
+        void *pixels = dukwebgl_get_pixels(ctx, 8, &pushed);
         glTexImage2D(target, level, internalformat, width, height, border, format, type, pixels);
+        if (pushed) duk_pop(ctx);
     } else if (argc >= 6) {
         // texImage2D(target, level, internalformat, format, type, source)
         GLenum format = (GLenum)duk_get_uint(ctx, 3);
         GLenum type = (GLenum)duk_get_uint(ctx, 4);
         GLsizei width = 0, height = 0;
         void *pixels = NULL;
+        bool pushed = false;
         if (duk_is_object(ctx, 5)) {
             if (duk_has_prop_string(ctx, 5, "width")) {
                 duk_get_prop_string(ctx, 5, "width");
@@ -541,9 +550,10 @@ static duk_ret_t dukwebgl_texImage2D(duk_context *ctx) {
                 duk_get_prop_string(ctx, 5, "height");
                 height = (GLsizei)duk_get_int(ctx, -1); duk_pop(ctx);
             }
-            pixels = dukwebgl_get_pixels(ctx, 5);
+            pixels = dukwebgl_get_pixels(ctx, 5, &pushed);
         }
         glTexImage2D(target, level, internalformat, width, height, 0, format, type, pixels);
+        if (pushed) duk_pop(ctx);
     }
     return 0;
 }
@@ -561,14 +571,17 @@ static duk_ret_t dukwebgl_texSubImage2D(duk_context *ctx) {
         GLsizei height = (GLsizei)duk_get_int(ctx, 5);
         GLenum format = (GLenum)duk_get_uint(ctx, 6);
         GLenum type = (GLenum)duk_get_uint(ctx, 7);
-        void *pixels = dukwebgl_get_pixels(ctx, 8);
+        bool pushed = false;
+        void *pixels = dukwebgl_get_pixels(ctx, 8, &pushed);
         glTexSubImage2D(target, level, xoffset, yoffset, width, height, format, type, pixels);
+        if (pushed) duk_pop(ctx);
     } else if (argc >= 7) {
         // texSubImage2D(target, level, xoffset, yoffset, format, type, source)
         GLenum format = (GLenum)duk_get_uint(ctx, 4);
         GLenum type = (GLenum)duk_get_uint(ctx, 5);
         GLsizei width = 0, height = 0;
         void *pixels = NULL;
+        bool pushed = false;
         if (duk_is_object(ctx, 6)) {
             if (duk_has_prop_string(ctx, 6, "width")) {
                 duk_get_prop_string(ctx, 6, "width");
@@ -578,11 +591,12 @@ static duk_ret_t dukwebgl_texSubImage2D(duk_context *ctx) {
                 duk_get_prop_string(ctx, 6, "height");
                 height = (GLsizei)duk_get_int(ctx, -1); duk_pop(ctx);
             }
-            pixels = dukwebgl_get_pixels(ctx, 6);
+            pixels = dukwebgl_get_pixels(ctx, 6, &pushed);
         }
         if (width > 0 && height > 0 && pixels) {
             glTexSubImage2D(target, level, xoffset, yoffset, width, height, format, type, pixels);
         }
+        if (pushed) duk_pop(ctx);
     }
     return 0;
 }
