@@ -96,7 +96,10 @@ struct Canvas2DData {
     std::vector<uint32_t> pixels;  // ARGB8888 ビットマップバッファ（保持型）
     tvg::SwCanvas *canvas = nullptr;
     GLuint glTexture = 0;
-    bool texDirty = true;
+
+    // dirty rect 追跡（更新領域の矩形）
+    int dirtyX0 = 0, dirtyY0 = 0, dirtyX1 = 0, dirtyY1 = 0;
+    bool hasDirty = false;
 
     std::vector<PathCmd> pathCmds;
     DrawState state;
@@ -107,6 +110,64 @@ struct Canvas2DData {
         if (glTexture) glDeleteTextures(1, &glTexture);
     }
 
+    // dirty rect を拡張（描画操作のたびに呼ぶ）
+    void markDirty(int x, int y, int w, int h) {
+        int nx0 = SDL_max(0, x);
+        int ny0 = SDL_max(0, y);
+        int nx1 = SDL_min((int)width, x + w);
+        int ny1 = SDL_min((int)height, y + h);
+        if (nx0 >= nx1 || ny0 >= ny1) return;
+        if (!hasDirty) {
+            dirtyX0 = nx0; dirtyY0 = ny0;
+            dirtyX1 = nx1; dirtyY1 = ny1;
+            hasDirty = true;
+        } else {
+            if (nx0 < dirtyX0) dirtyX0 = nx0;
+            if (ny0 < dirtyY0) dirtyY0 = ny0;
+            if (nx1 > dirtyX1) dirtyX1 = nx1;
+            if (ny1 > dirtyY1) dirtyY1 = ny1;
+        }
+    }
+
+    // 全体を dirty にする
+    void markAllDirty() {
+        dirtyX0 = 0; dirtyY0 = 0;
+        dirtyX1 = (int)width; dirtyY1 = (int)height;
+        hasDirty = true;
+    }
+
+    // dirty 領域のみ GL テクスチャにアップロード
+    void flushDirty() {
+        if (!hasDirty) return;
+        int dx = dirtyX0, dy = dirtyY0;
+        int dw = dirtyX1 - dirtyX0, dh = dirtyY1 - dirtyY0;
+        if (dw <= 0 || dh <= 0) { hasDirty = false; return; }
+
+        // dirty 領域のピクセルを ARGB → RGBA 変換
+        std::vector<uint32_t> rgba(dw * dh);
+        for (int py = 0; py < dh; py++) {
+            for (int px = 0; px < dw; px++) {
+                uint32_t argb = pixels[(dy + py) * width + (dx + px)];
+                uint8_t a = (argb >> 24) & 0xFF;
+                uint8_t r = (argb >> 16) & 0xFF;
+                uint8_t g = (argb >> 8) & 0xFF;
+                uint8_t b = argb & 0xFF;
+                rgba[py * dw + px] = r | (g << 8) | (b << 16) | (a << 24);
+            }
+        }
+
+        glBindTexture(GL_TEXTURE_2D, glTexture);
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+        // 部分アップロード時の行ピッチ指定（GLES3）
+        glPixelStorei(GL_UNPACK_ROW_LENGTH, dw);
+        glTexSubImage2D(GL_TEXTURE_2D, 0, dx, dy, dw, dh,
+                        GL_RGBA, GL_UNSIGNED_BYTE, rgba.data());
+        glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+        glBindTexture(GL_TEXTURE_2D, 0);
+
+        hasDirty = false;
+    }
+
     // ThorVG で1つのシェイプを描画してバッファに合成
     void renderShape(tvg::Shape *shape) {
         canvas->add(shape);
@@ -114,7 +175,8 @@ struct Canvas2DData {
         canvas->draw(false);
         canvas->sync();
         canvas->remove(shape);
-        texDirty = true;
+        // shape の bounds から dirty 領域を推定（全体を dirty にする簡易版）
+        markAllDirty();
     }
 
     // ThorVG で Text を描画してバッファに合成
@@ -124,7 +186,7 @@ struct Canvas2DData {
         canvas->draw(false);
         canvas->sync();
         canvas->remove(text);
-        texDirty = true;
+        markAllDirty();
     }
 
     // ピクセルバッファの一部を直接クリア
@@ -136,7 +198,7 @@ struct Canvas2DData {
         for (int py = y0; py < y1; py++) {
             memset(&pixels[py * width + x0], 0, (x1 - x0) * sizeof(uint32_t));
         }
-        texDirty = true;
+        markDirty(x, y, w, h);
     }
 
     // ピクセルバッファに直接ビットブリット（スケーリング対応）
@@ -179,7 +241,7 @@ struct Canvas2DData {
                 }
             }
         }
-        texDirty = true;
+        markDirty(dx, dy, dw, dh);
     }
 };
 
@@ -459,7 +521,7 @@ static void drawImageViaPicture(Canvas2DData *d,
     d->canvas->draw(false);
     d->canvas->sync();
     d->canvas->remove(pic);
-    d->texDirty = true;
+    d->markDirty(dx, dy, dw, dh);
 }
 
 static duk_ret_t ctx_drawImage(duk_context *ctx) {
@@ -571,7 +633,7 @@ static duk_ret_t ctx_putImageData(duk_context *ctx) {
             d->pixels[dstY * d->width + dstX] = argb;
         }
     }
-    d->texDirty = true;
+    d->markDirty(dx, dy, w, h);
     return 0;
 }
 
@@ -621,24 +683,7 @@ static duk_ret_t ctx_setTransform(duk_context *ctx) {
 
 static duk_ret_t ctx_flush(duk_context *ctx) {
     auto *d = get_data(ctx);
-    if (!d->texDirty) return 0;
-
-    // ARGB8888 → RGBA8888 変換
-    size_t n = d->width * d->height;
-    std::vector<uint32_t> rgba(n);
-    for (size_t i = 0; i < n; i++) {
-        uint32_t argb = d->pixels[i];
-        uint8_t a = (argb >> 24) & 0xFF;
-        uint8_t r = (argb >> 16) & 0xFF;
-        uint8_t g = (argb >> 8) & 0xFF;
-        uint8_t b = argb & 0xFF;
-        rgba[i] = r | (g << 8) | (b << 16) | (a << 24);
-    }
-
-    glBindTexture(GL_TEXTURE_2D, d->glTexture);
-    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, d->width, d->height, GL_RGBA, GL_UNSIGNED_BYTE, rgba.data());
-    glBindTexture(GL_TEXTURE_2D, 0);
-    d->texDirty = false;
+    d->flushDirty();
     return 0;
 }
 
@@ -702,6 +747,8 @@ static duk_ret_t ctx_set_lineJoin(duk_context *ctx) {
 
 static duk_ret_t ctx_get_texture(duk_context *ctx) {
     auto *d = get_data(ctx);
+    // テクスチャ取得時に dirty 領域を自動フラッシュ
+    d->flushDirty();
     if (d->glTexture == 0) { duk_push_null(ctx); }
     else { duk_idx_t obj = duk_push_object(ctx); duk_push_uint(ctx, d->glTexture); duk_put_prop_string(ctx, obj, "_id"); }
     return 1;

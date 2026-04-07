@@ -117,6 +117,7 @@ jsengine -quiet             # 警告以上のログのみ
 | **4** | Canvas2D アニメーション（回転図形、軌道円） |
 | **5** | pixi.js v5 テスト（Graphics 描画、アニメーション） |
 | **6** | Canvas2D drawImage / getImageData / putImageData テスト |
+| **7** | Canvas2D dirty rect 差分更新テスト |
 | **Space** | ビープ音再生 |
 | **R** | リセット |
 

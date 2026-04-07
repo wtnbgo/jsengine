@@ -1,11 +1,12 @@
 // main.js - デモスクリプト
-// 数字キー 1～6 でデモ切り替え
+// 数字キー 1～7 でデモ切り替え
 //   1: 頂点カラー三角形（WASD移動、ホイール透明度）
 //   2: Canvas2D 図形描画（矩形、円、パス）
 //   3: Canvas2D テキスト描画（要フォントファイル）
 //   4: Canvas2D アニメーション（回転する図形）
 //   5: pixi.js v5 テスト
 //   6: Canvas2D drawImage / getImageData / putImageData テスト
+//   7: Canvas2D dirty rect 差分更新テスト
 // Space: ビープ音再生  R: リセット
 
 // ============================================================
@@ -614,6 +615,84 @@ function renderDemo6() {
 }
 
 // ============================================================
+// デモ7: Canvas2D dirty rect 差分更新テスト
+// ============================================================
+// 大きなキャンバスに一度だけ背景を描画し、毎フレーム小さな領域だけ更新する。
+// flush() / texture 取得時に dirty 領域だけが GL テクスチャにアップロードされる。
+
+var canvas2d_demo7 = null;
+var demo7Inited = false;
+
+function renderDemo7() {
+    if (!canvas2d_demo7) {
+        canvas2d_demo7 = new Canvas2D(640, 480);
+    }
+    var c = canvas2d_demo7;
+
+    // 初回のみ: 背景を描画（大きな描画は一度だけ）
+    if (!demo7Inited) {
+        // 背景グラデーション風
+        for (var y = 0; y < 480; y += 4) {
+            var r = Math.floor(y * 255 / 480);
+            c.fillStyle = "rgba(" + r + ",50," + (255-r) + ",1)";
+            c.fillRect(0, y, 640, 4);
+        }
+        // グリッド線
+        c.strokeStyle = "rgba(255,255,255,0.2)";
+        c.lineWidth = 1;
+        for (var gx = 0; gx < 640; gx += 40) {
+            c.beginPath(); c.moveTo(gx, 0); c.lineTo(gx, 480); c.stroke();
+        }
+        for (var gy = 0; gy < 480; gy += 40) {
+            c.beginPath(); c.moveTo(0, gy); c.lineTo(640, gy); c.stroke();
+        }
+        // タイトル
+        c.font = "20px OpenSans-Bold";
+        c.fillStyle = "white";
+        c.fillText("Demo 7: Dirty Rect Update", 10, 30);
+        c.font = "14px OpenSans-Regular";
+        c.fillText("Background drawn once, only moving rect updates each frame", 10, 55);
+
+        demo7Inited = true;
+    }
+
+    // 毎フレーム: 前フレームの矩形をクリアして新位置に描画
+    // 小さな領域だけ更新される → dirty rect で効率的にテクスチャ反映
+    var t = time * 0.001;
+    var bx = 300 + Math.cos(t) * 200;
+    var by = 240 + Math.sin(t * 1.3) * 150;
+    var bw = 60, bh = 60;
+
+    // 前回位置のクリア（前フレームの位置を保存）
+    if (c._prevX !== undefined) {
+        c.clearRect(c._prevX - 2, c._prevY - 2, bw + 4, bh + 4);
+        // 背景の再描画（クリアした部分のみ）
+        var cx0 = Math.floor(c._prevX - 2);
+        var cy0 = Math.floor(c._prevY - 2);
+        for (var ry = cy0; ry < cy0 + bh + 4 && ry < 480; ry += 4) {
+            if (ry < 0) continue;
+            var rr = Math.floor(ry * 255 / 480);
+            c.fillStyle = "rgba(" + rr + ",50," + (255-rr) + ",1)";
+            c.fillRect(cx0, ry, bw + 4, Math.min(4, cy0 + bh + 4 - ry));
+        }
+    }
+
+    // 新位置に描画
+    c.fillStyle = "rgba(255,255,0,0.9)";
+    c.fillRect(bx, by, bw, bh);
+    c.strokeStyle = "white";
+    c.lineWidth = 2;
+    c.strokeRect(bx, by, bw, bh);
+
+    // 位置保存
+    c._prevX = bx;
+    c._prevY = by;
+
+    // flush は drawCanvas2DAt 内の texture getter で自動実行
+    // dirty 領域のみテクスチャに反映される
+}
+
+// ============================================================
 // 初期化
 // ============================================================
 
@@ -676,6 +755,7 @@ addEventListener("keydown", function(e) {
     if (e.key === "4") { demoMode = 4; console.log("Demo 4: Canvas2D Animation"); }
     if (e.key === "5") { demoMode = 5; initDemo5(); console.log("Demo 5: pixi.js"); }
     if (e.key === "6") { demoMode = 6; console.log("Demo 6: drawImage/ImageData"); }
+    if (e.key === "7") { demoMode = 7; demo7Inited = false; console.log("Demo 7: Dirty Rect"); }
 
     if (e.key === "r" || e.key === "R") {
         offsetX = 0.0; offsetY = 0.0; alpha = 1.0;
@@ -742,6 +822,9 @@ function render() {
     } else if (demoMode === 6) {
         renderDemo6();
         drawCanvas2DAt(canvas2d_demo6);
+    } else if (demoMode === 7) {
+        renderDemo7();
+        drawCanvas2DAt(canvas2d_demo7);
     }
 }
 

@@ -141,8 +141,10 @@ ctx.setTransform(a, b, c, d, e, f);                     // 変換行列を直接
 ctx.restore();
 
 // --- 描画確定 ---
-ctx.flush();                                             // ピクセルバッファ → GL テクスチャアップロード
+ctx.flush();                                             // dirty 領域のみ GL テクスチャにアップロード
 // flush 後に ctx.texture を gl.bindTexture で使用可能
+// ctx.texture の getter でも自動的に flush される
+// 注: 差分更新により、変更された矩形領域のみ ARGB→RGBA 変換+アップロードされる
 
 // ************************************************************
 // コンソール
