@@ -109,10 +109,9 @@ struct Canvas2DData {
 
     // ThorVG で1つのシェイプを描画してバッファに合成
     void renderShape(tvg::Shape *shape) {
-        // canvas に追加 → update → draw(false: バッファクリアしない) → sync → 除去
         canvas->add(shape);
         canvas->update();
-        canvas->draw(false);  // false = バッファをクリアしない（蓄積描画）
+        canvas->draw(false);
         canvas->sync();
         canvas->remove(shape);
         texDirty = true;
@@ -346,7 +345,11 @@ static duk_ret_t ctx_fillText(duk_context *ctx) {
     const char *str = duk_require_string(ctx, 0);
     float x = (float)duk_get_number(ctx, 1), y = (float)duk_get_number(ctx, 2);
     auto *text = tvg::Text::gen();
-    text->font(d->state.fontName.c_str());
+    // フォント未ロード時はスキップ（ThorVG ハング回避）
+    if (text->font(d->state.fontName.c_str()) != tvg::Result::Success) {
+        text->unref();
+        return 0;
+    }
     text->size(d->state.fontSize);
     text->text(str);
     text->fill(d->state.fillStyle.r, d->state.fillStyle.g, d->state.fillStyle.b);
@@ -362,7 +365,10 @@ static duk_ret_t ctx_strokeText(duk_context *ctx) {
     const char *str = duk_require_string(ctx, 0);
     float x = (float)duk_get_number(ctx, 1), y = (float)duk_get_number(ctx, 2);
     auto *text = tvg::Text::gen();
-    text->font(d->state.fontName.c_str());
+    if (text->font(d->state.fontName.c_str()) != tvg::Result::Success) {
+        text->unref();
+        return 0;
+    }
     text->size(d->state.fontSize);
     text->text(str);
     text->outline(d->state.lineWidth, d->state.strokeStyle.r, d->state.strokeStyle.g, d->state.strokeStyle.b);
@@ -702,14 +708,35 @@ static duk_ret_t ctx_get_texture(duk_context *ctx) {
 }
 
 // Canvas2D.loadFont(path)
+// Canvas2D.loadFont(path)          — ファイルパスでロード（ThorVG 内部名で登録）
+// Canvas2D.loadFont(path, alias)   — alias 名で登録（メモリロード）
 static duk_ret_t static_loadFont(duk_context *ctx) {
     const char *path = duk_require_string(ctx, 0);
+    const char *alias = duk_get_top(ctx) > 1 ? duk_get_string(ctx, 1) : nullptr;
     JsEngine *engine = JsEngine::getInstance();
     std::string resolved = engine ? engine->resolvePath(path) : path;
-    auto result = tvg::Text::load(resolved.c_str());
-    if (result != tvg::Result::Success)
-        return duk_error(ctx, DUK_ERR_ERROR, "Failed to load font: %s", resolved.c_str());
-    SDL_Log("Font loaded: %s", resolved.c_str());
+
+    if (alias) {
+        // SDL_LoadFile でフォントデータを読み込み、alias 名で ThorVG に登録
+        size_t dataSize = 0;
+        void *data = SDL_LoadFile(resolved.c_str(), &dataSize);
+        if (!data) {
+            return duk_error(ctx, DUK_ERR_ERROR, "Failed to load font file: %s", resolved.c_str());
+        }
+        auto result = tvg::Text::load(alias, (const char*)data, (uint32_t)dataSize, "ttf", true);
+        SDL_free(data);
+        if (result != tvg::Result::Success) {
+            return duk_error(ctx, DUK_ERR_ERROR, "Failed to register font '%s' from: %s", alias, resolved.c_str());
+        }
+        SDL_Log("Font loaded: %s as '%s'", resolved.c_str(), alias);
+    } else {
+        // ファイルパスでロード（ThorVG 内部名で登録）
+        auto result = tvg::Text::load(resolved.c_str());
+        if (result != tvg::Result::Success) {
+            return duk_error(ctx, DUK_ERR_ERROR, "Failed to load font: %s", resolved.c_str());
+        }
+        SDL_Log("Font loaded: %s", resolved.c_str());
+    }
     return 0;
 }
 
@@ -813,7 +840,7 @@ void canvas2d_bind(duk_context *ctx) {
     duk_push_c_function(ctx, canvas2d_constructor, 2);
     duk_push_object(ctx);
     duk_put_prop_string(ctx, -2, "prototype");
-    duk_push_c_function(ctx, static_loadFont, 1);
+    duk_push_c_function(ctx, static_loadFont, DUK_VARARGS);
     duk_put_prop_string(ctx, -2, "loadFont");
     duk_put_global_string(ctx, "Canvas2D");
 }

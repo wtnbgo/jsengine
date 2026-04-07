@@ -81,7 +81,8 @@ source.stop();                         // 再生停止
 // flush() で GL テクスチャにアップロードし、WebGL から利用可能。
 // browser_shim.js の getContext("2d") が返す 2D コンテキストとしても使用される。
 
-Canvas2D.loadFont("font.ttf");                          // フォントファイル読み込み（ベースパス相対）
+Canvas2D.loadFont("font.ttf");                          // フォントファイル読み込み（ThorVG 内部名で登録）
+Canvas2D.loadFont("font.ttf", "MyFont");                // alias 名で登録（任意のフォント名で使用可能）
 
 var ctx = new Canvas2D(512, 512);                        // オフスクリーンキャンバス作成
 ctx.width;                                               // 読み取り専用
