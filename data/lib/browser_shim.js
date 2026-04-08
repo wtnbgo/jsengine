@@ -144,6 +144,29 @@ if (typeof HTMLImageElement === "undefined") {
     window.HTMLImageElement = HTMLImageElement;
 }
 
+// --- Intl シム (pixi.js v8 等で必要) ---
+if (typeof Intl === "undefined") {
+    var Intl = {};
+    Intl.Segmenter = function(locale, options) {
+        this.segment = function(str) {
+            var segments = [];
+            for (var i = 0; i < str.length; i++) {
+                segments.push({ segment: str[i], index: i });
+            }
+            segments[Symbol.iterator] = function() {
+                var idx = 0;
+                return { next: function() {
+                    return idx < segments.length
+                        ? { value: segments[idx++], done: false }
+                        : { done: true };
+                }};
+            };
+            return segments;
+        };
+    };
+    window.Intl = Intl;
+}
+
 // --- WebGLRenderingContext / WebGL2RenderingContext ---
 // pixi.js が window.WebGLRenderingContext の存在をチェックする
 if (typeof WebGLRenderingContext === "undefined") {
@@ -353,8 +376,9 @@ document.querySelectorAll = function() { return []; };
 document.documentElement = { style: {} };
 document.body = {
     style: {},
-    appendChild: function() {},
-    removeChild: function() {},
+    appendChild: function(el) { return el; },
+    removeChild: function(el) { return el; },
+    contains: function() { return true; },
     addEventListener: function() {},
     removeEventListener: function() {}
 };

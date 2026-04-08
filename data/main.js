@@ -235,7 +235,7 @@ function renderDemo1HUD() {
             "2 : Canvas2D Shapes",
             "3 : Canvas2D Text",
             "4 : Canvas2D Animation",
-            "5 : pixi.js v6",
+            "5 : pixi.js v7",
             "6 : drawImage / ImageData",
             "7 : Dirty Rect Update",
             "8 : three.js r128",
@@ -490,7 +490,7 @@ function renderDemo4() {
 }
 
 // ============================================================
-// デモ5: pixi.js v6
+// デモ5: pixi.js v7
 // ============================================================
 
 var pixiApp = null;
@@ -514,17 +514,9 @@ function initDemo5() {
         backgroundAlpha: 1,
         resolution: 1,
         antialias: false,
-        transparent: false,
-        clearBeforeRender: true,
-        preserveDrawingBuffer: false
     });
 
-    var view = pixiApp.renderer.view || pixiApp.view;
-    if (view) {
-        console.log("pixi view: " + view.width + "x" + view.height);
-    }
     console.log("pixi screen: " + pixiApp.screen.width + "x" + pixiApp.screen.height);
-    console.log("pixi renderer size: " + pixiApp.renderer.width + "x" + pixiApp.renderer.height);
 
     var g = new PIXI.Graphics();
 

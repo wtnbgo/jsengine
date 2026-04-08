@@ -199,21 +199,90 @@ static JSValue native_loadModule(JSContext *ctx, JSValueConst this_val, int argc
     JSModuleDef *m = (JSModuleDef *)JS_VALUE_GET_PTR(func_val);
 
     // モジュールを評価（func_val の所有権は EvalFunction に移る）
+    // TLA (Top-Level Await) モジュールの場合 Promise が返る
     JSValue result = JS_EvalFunction(ctx, func_val);
     if (JS_IsException(result)) {
         log_exception(ctx, "Module eval error");
         return JS_EXCEPTION;
     }
 
-    // モジュール評価のペンディングジョブを全て処理
-    // （TLA 非使用モジュールでも ES2023 仕様で Promise が返る場合がある）
-    JSContext *ctx2;
-    while (JS_ExecutePendingJob(JS_GetRuntime(ctx), &ctx2) > 0) {}
+    // TLA 対応: result が Promise の場合、ペンディングジョブを処理して解決を待つ
+    if (JS_IsPromise(result)) {
+        JSRuntime *rt = JS_GetRuntime(ctx);
+        // Promise が settled (fulfilled/rejected) になるまでジョブを実行
+        int max_iterations = 1000000; // 無限ループ防止
+        while (max_iterations-- > 0) {
+            JSPromiseStateEnum state = JS_PromiseState(ctx, result);
+            if (state == JS_PROMISE_FULFILLED) break;
+            if (state == JS_PROMISE_REJECTED) {
+                JSValue reason = JS_PromiseResult(ctx, result);
+                const char *msg = JS_ToCString(ctx, reason);
+                SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                    "Module evaluation rejected: %s", msg ? msg : "unknown");
+                if (msg) JS_FreeCString(ctx, msg);
+                JS_FreeValue(ctx, reason);
+                JS_FreeValue(ctx, result);
+                return JS_ThrowInternalError(ctx, "Module evaluation rejected: %s", resolved.c_str());
+            }
+            // PENDING — ペンディングジョブを1つ実行
+            JSContext *ctx2;
+            int ret = JS_ExecutePendingJob(rt, &ctx2);
+            if (ret < 0) {
+                log_exception(ctx2 ? ctx2 : ctx, "Pending job error");
+                break;
+            }
+            if (ret == 0) {
+                // ジョブがなくなったが Promise がまだ pending
+                // 外部非同期操作待ちの可能性 — これ以上待てない
+                SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                    "Module Promise still pending with no jobs left: %s", resolved.c_str());
+                break;
+            }
+        }
+    } else {
+        // 非 Promise（TLA なしモジュール）— ペンディングジョブを念のため処理
+        JSContext *ctx2;
+        while (JS_ExecutePendingJob(JS_GetRuntime(ctx), &ctx2) > 0) {}
+    }
 
     JS_FreeValue(ctx, result);
 
     // モジュール名前空間（全 export を含むオブジェクト）を返す
     return JS_GetModuleNamespace(ctx, m);
+}
+
+// awaitPromise(promise) — Promise をペンディングジョブ処理で同期的に解決し、結果を返す
+static JSValue native_awaitPromise(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    (void)this_val;
+    if (argc < 1) return JS_UNDEFINED;
+    JSValue promise = argv[0];
+
+    // Promise でなければそのまま返す
+    if (!JS_IsPromise(promise)) return JS_DupValue(ctx, promise);
+
+    JSRuntime *rt = JS_GetRuntime(ctx);
+    int max_iterations = 1000000;
+    while (max_iterations-- > 0) {
+        JSPromiseStateEnum state = JS_PromiseState(ctx, promise);
+        if (state == JS_PROMISE_FULFILLED) {
+            return JS_PromiseResult(ctx, promise);
+        }
+        if (state == JS_PROMISE_REJECTED) {
+            JSValue reason = JS_PromiseResult(ctx, promise);
+            JSValue err = JS_Throw(ctx, reason);
+            return err;
+        }
+        JSContext *ctx2;
+        int ret = JS_ExecutePendingJob(rt, &ctx2);
+        if (ret < 0) {
+            log_exception(ctx2 ? ctx2 : ctx, "awaitPromise job error");
+            return JS_EXCEPTION;
+        }
+        if (ret == 0) break; // ジョブ枯渇
+    }
+    // まだ pending の場合は undefined を返す（外部 async 待ち）
+    SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "awaitPromise: promise still pending");
+    return JS_UNDEFINED;
 }
 
 // ============================================================
@@ -1528,9 +1597,10 @@ bool JsEngine::init(int argc, char **argv) {
     JS_SetPropertyStr(ctx_, console, "error", JS_NewCFunction(ctx_, native_console_error, "error", 0));
     JS_SetPropertyStr(ctx_, global, "console", console);
 
-    // loadScript / loadModule バインディング登録
+    // loadScript / loadModule / awaitPromise バインディング登録
     JS_SetPropertyStr(ctx_, global, "loadScript", JS_NewCFunction(ctx_, native_load_script, "loadScript", 1));
     JS_SetPropertyStr(ctx_, global, "loadModule", JS_NewCFunction(ctx_, native_loadModule, "loadModule", 1));
+    JS_SetPropertyStr(ctx_, global, "awaitPromise", JS_NewCFunction(ctx_, native_awaitPromise, "awaitPromise", 1));
 
     // createImageBitmap 登録
     JS_SetPropertyStr(ctx_, global, "createImageBitmap", JS_NewCFunction(ctx_, native_createImageBitmap, "createImageBitmap", 1));
