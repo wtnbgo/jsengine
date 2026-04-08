@@ -160,6 +160,11 @@ target_include_directories(${PROJECT_NAME} PRIVATE
 	"${thorvg_SOURCE_DIR}/inc"
 )
 
+# OS スレッドスタックサイズを増やす（GLTFLoader の再帰的ノード読み込みに必要）
+if(MSVC)
+	target_link_options(${PROJECT_NAME} PRIVATE /STACK:16777216) # 16MB
+endif()
+
 target_link_libraries(${PROJECT_NAME} PRIVATE
 	SDL3::SDL3
 	SDL3_image::SDL3_image

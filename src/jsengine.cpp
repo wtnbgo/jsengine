@@ -127,12 +127,32 @@ static char *js_module_normalize(JSContext *ctx, const char *base_name,
         if (!p) p = strrchr(base_name, '\\');
         size_t dir_len = p ? (size_t)(p - base_name + 1) : 0;
         size_t name_len = strlen(name);
-        char *result = (char*)js_malloc(ctx, dir_len + name_len + 1);
-        if (!result) return nullptr;
-        memcpy(result, base_name, dir_len);
-        memcpy(result + dir_len, name, name_len + 1);
-        return result;
+        // 結合してから ../ を正規化
+        std::string combined;
+        combined.append(base_name, dir_len);
+        combined.append(name, name_len);
+        // ../ の解決
+        size_t pos;
+        while ((pos = combined.find("/../")) != std::string::npos) {
+            if (pos == 0) break;
+            size_t parent = combined.rfind('/', pos - 1);
+            if (parent == std::string::npos) parent = 0;
+            combined.erase(parent, pos + 3 - parent);
+        }
+        // ./ の除去
+        while ((pos = combined.find("/./")) != std::string::npos) {
+            combined.erase(pos, 2);
+        }
+        return js_strdup(ctx, combined.c_str());
     }
+    // ベアスペシファイア（パッケージ名）のマッピング
+    // "three" → lib/three.module.min.js
+    JsEngine *engine = JsEngine::getInstance();
+    if (strcmp(name, "three") == 0 && engine) {
+        std::string resolved = engine->resolvePath("lib/three.module.min.js");
+        return js_strdup(ctx, resolved.c_str());
+    }
+
     // そのまま使えるか（既に解決済みパス）をチェック
     {
         SDL_PathInfo info;
@@ -141,7 +161,6 @@ static char *js_module_normalize(JSContext *ctx, const char *base_name,
         }
     }
     // ベアスペシファイア — ベースパスからの解決を試行
-    JsEngine *engine = JsEngine::getInstance();
     if (engine) {
         std::string resolved = engine->resolvePath(name);
         return js_strdup(ctx, resolved.c_str());
@@ -437,6 +456,58 @@ static JSValue native_createImageBitmap(JSContext *ctx, JSValueConst this_val, i
         JSValue ab = JS_NewArrayBufferCopy(ctx, buf, dataSize);
         SDL_free(buf);
         JS_SetPropertyStr(ctx, obj, "data", ab);
+    }
+
+    SDL_DestroySurface(rgba);
+    return obj;
+}
+
+// decodeImageBuffer(arrayBuffer) => { width, height, data (ArrayBuffer, RGBA) }
+// メモリ上の PNG/JPEG データをデコードして RGBA ピクセルデータを返す
+static JSValue native_decodeImageBuffer(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    (void)this_val;
+    if (argc < 1) return JS_ThrowInternalError(ctx, "decodeImageBuffer requires an ArrayBuffer argument");
+
+    size_t bufSize = 0;
+    uint8_t *bufData = JS_GetArrayBuffer(ctx, &bufSize, argv[0]);
+    if (!bufData || bufSize == 0) {
+        return JS_ThrowInternalError(ctx, "decodeImageBuffer: invalid ArrayBuffer");
+    }
+
+    // SDL_image でメモリから画像読み込み
+    SDL_IOStream *io = SDL_IOFromConstMem(bufData, bufSize);
+    if (!io) {
+        return JS_ThrowInternalError(ctx, "decodeImageBuffer: SDL_IOFromConstMem failed");
+    }
+    SDL_Surface *surface = IMG_Load_IO(io, 1); // 1 = close IO
+    if (!surface) {
+        return JS_ThrowInternalError(ctx, "decodeImageBuffer: image decode failed: %s", SDL_GetError());
+    }
+
+    // RGBA8888 に変換
+    SDL_Surface *rgba = SDL_ConvertSurface(surface, SDL_PIXELFORMAT_RGBA32);
+    SDL_DestroySurface(surface);
+    if (!rgba) {
+        return JS_ThrowInternalError(ctx, "decodeImageBuffer: RGBA conversion failed");
+    }
+
+    int w = rgba->w;
+    int h = rgba->h;
+    size_t dataSize = (size_t)w * h * 4;
+
+    JSValue obj = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, obj, "width", JS_NewInt32(ctx, w));
+    JS_SetPropertyStr(ctx, obj, "height", JS_NewInt32(ctx, h));
+
+    if (rgba->pitch == w * 4) {
+        JS_SetPropertyStr(ctx, obj, "data", JS_NewArrayBufferCopy(ctx, (const uint8_t*)rgba->pixels, dataSize));
+    } else {
+        uint8_t *tmp = (uint8_t*)SDL_malloc(dataSize);
+        for (int y = 0; y < h; y++) {
+            memcpy(tmp + y * w * 4, (char*)rgba->pixels + y * rgba->pitch, w * 4);
+        }
+        JS_SetPropertyStr(ctx, obj, "data", JS_NewArrayBufferCopy(ctx, tmp, dataSize));
+        SDL_free(tmp);
     }
 
     SDL_DestroySurface(rgba);
@@ -1250,6 +1321,22 @@ static JSValue fs_readText(JSContext *ctx, JSValueConst this_val, int argc, JSVa
     return s;
 }
 
+// fs.readBinary(path) => ArrayBuffer
+static JSValue fs_readBinary(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    (void)this_val;
+    if (argc < 1) return JS_ThrowInternalError(ctx, "readBinary requires a path argument");
+    const char *pathStr = JS_ToCString(ctx, argv[0]);
+    if (!pathStr) return JS_EXCEPTION;
+    std::string rpath = resolve_path(pathStr);
+    JS_FreeCString(ctx, pathStr);
+    size_t sz = 0;
+    void *data = SDL_LoadFile(rpath.c_str(), &sz);
+    if (!data) return JS_ThrowInternalError(ctx, "Cannot read file: %s", rpath.c_str());
+    JSValue ab = JS_NewArrayBufferCopy(ctx, (const uint8_t*)data, sz);
+    SDL_free(data);
+    return ab;
+}
+
 // fs.writeText(path, text)
 static JSValue fs_writeText(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     (void)this_val;
@@ -1280,6 +1367,7 @@ static void fs_register(JSContext *ctx) {
     JS_SetPropertyStr(ctx, obj, "remove", JS_NewCFunction(ctx, fs_remove, "remove", 1));
     JS_SetPropertyStr(ctx, obj, "rename", JS_NewCFunction(ctx, fs_rename, "rename", 2));
     JS_SetPropertyStr(ctx, obj, "readText", JS_NewCFunction(ctx, fs_readText, "readText", 1));
+    JS_SetPropertyStr(ctx, obj, "readBinary", JS_NewCFunction(ctx, fs_readBinary, "readBinary", 1));
     JS_SetPropertyStr(ctx, obj, "writeText", JS_NewCFunction(ctx, fs_writeText, "writeText", 2));
 
     // fs.basePath を設定
@@ -1566,6 +1654,9 @@ bool JsEngine::init(int argc, char **argv) {
         return false;
     }
 
+    // JS スタックサイズ制限
+    JS_SetMaxStackSize(rt_, 8 * 1024 * 1024); // 8MB
+
     // ES Module ローダーを登録
     JS_SetModuleLoaderFunc(rt_, js_module_normalize, js_module_loader, this);
 
@@ -1602,8 +1693,9 @@ bool JsEngine::init(int argc, char **argv) {
     JS_SetPropertyStr(ctx_, global, "loadModule", JS_NewCFunction(ctx_, native_loadModule, "loadModule", 1));
     JS_SetPropertyStr(ctx_, global, "awaitPromise", JS_NewCFunction(ctx_, native_awaitPromise, "awaitPromise", 1));
 
-    // createImageBitmap 登録
+    // createImageBitmap / decodeImageBuffer 登録
     JS_SetPropertyStr(ctx_, global, "createImageBitmap", JS_NewCFunction(ctx_, native_createImageBitmap, "createImageBitmap", 1));
+    JS_SetPropertyStr(ctx_, global, "decodeImageBuffer", JS_NewCFunction(ctx_, native_decodeImageBuffer, "decodeImageBuffer", 1));
 
     // addEventListener / removeEventListener 登録
     JS_SetPropertyStr(ctx_, global, "addEventListener", JS_NewCFunction(ctx_, native_addEventListener, "addEventListener", 2));
@@ -1772,6 +1864,30 @@ void JsEngine::update(uint32_t delta) {
 
     processTimers();
     processRAF();
+
+    // ペンディングジョブを全て処理
+    {
+        JSContext *pctx;
+        int ret;
+        while ((ret = JS_ExecutePendingJob(JS_GetRuntime(ctx_), &pctx)) > 0) {}
+        if (ret < 0) {
+            // pending job でエラーが発生 — スタックトレースを出力
+            JSValue exc = JS_GetException(pctx ? pctx : ctx_);
+            const char *str = JS_ToCString(ctx_, exc);
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "PendingJob exception: %s", str ? str : "unknown");
+            if (str) JS_FreeCString(ctx_, str);
+            JSValue stack = JS_GetPropertyStr(ctx_, exc, "stack");
+            if (!JS_IsUndefined(stack)) {
+                const char *stackStr = JS_ToCString(ctx_, stack);
+                if (stackStr) {
+                    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "PendingJob stack:\n%s", stackStr);
+                    JS_FreeCString(ctx_, stackStr);
+                }
+            }
+            JS_FreeValue(ctx_, stack);
+            JS_FreeValue(ctx_, exc);
+        }
+    }
 
     // グローバルに update 関数があれば呼び出す
     JSValue global = JS_GetGlobalObject(ctx_);

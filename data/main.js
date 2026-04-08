@@ -1,13 +1,14 @@
 // main.js - デモスクリプト
-// 数字キー 1～8 でデモ切り替え
+// 数字キー 1～9 でデモ切り替え
 //   1: 頂点カラー三角形（WASD移動、ホイール透明度）
 //   2: Canvas2D 図形描画（矩形、円、パス）
 //   3: Canvas2D テキスト描画（要フォントファイル）
 //   4: Canvas2D アニメーション（回転する図形）
-//   5: pixi.js v6 テスト
+//   5: pixi.js v7 テスト
 //   6: Canvas2D drawImage / getImageData / putImageData テスト
 //   7: Canvas2D dirty rect 差分更新テスト
-//   8: three.js r128 テスト
+//   8: three.js r176 テスト
+//   9: three-vrm テスト（VRM アバター表示）
 // Space: ビープ音再生  R: リセット
 // 起動オプション: -demo N で初期デモモード指定
 
@@ -238,7 +239,8 @@ function renderDemo1HUD() {
             "5 : pixi.js v7",
             "6 : drawImage / ImageData",
             "7 : Dirty Rect Update",
-            "8 : three.js r128",
+            "8 : three.js r176",
+            "9 : three-vrm (VRM avatar)",
             "",
             "--- System Info ---",
             "GL: " + (gl.getParameter(gl.RENDERER) || "?"),
@@ -982,6 +984,155 @@ function renderDemo8() {
 }
 
 // ============================================================
+// デモ9: three-vrm（VRM アバター表示）
+// ============================================================
+
+var vrmScene = null;
+var vrmCamera = null;
+var vrmRenderer = null;
+var vrmModel = null;
+var vrmInited = false;
+var vrmCamAngle = 0;       // 水平回転角（ラジアン）
+var vrmCamPitch = 0.2;     // 垂直角
+var vrmCamDist = 3.0;      // カメラ距離
+var vrmDragging = false;
+var vrmLastX = 0;
+var vrmLastY = 0;
+
+function initDemo9() {
+    if (vrmInited) return;
+    vrmInited = true;
+
+    // シム読み込み
+    loadScript("lib/polyfill.js");
+    loadScript("lib/browser_shim.js");
+
+    // three.js ESM 読み込み
+    var THREE = loadModule("lib/three.module.min.js");
+    globalThis.THREE = THREE;
+    console.log("THREE loaded: r" + THREE.REVISION);
+
+    // GLTFLoader ESM 読み込み
+    var GLTFModule = loadModule("lib/GLTFLoader.js");
+    var GLTFLoader = GLTFModule.GLTFLoader;
+    console.log("GLTFLoader loaded");
+
+    // three-vrm ESM 読み込み
+    var VRM = loadModule("lib/three-vrm.module.min.js");
+    console.log("three-vrm loaded");
+
+    // シーン構築
+    var canvas = new HTMLCanvasElement(1280, 720);
+    canvas.width = 1280;
+    canvas.height = 720;
+
+    gl.canvas = canvas;
+    vrmRenderer = new THREE.WebGLRenderer({ canvas: canvas, context: gl, antialias: false });
+    vrmRenderer.setSize(1280, 720, false);
+    vrmRenderer.outputColorSpace = THREE.SRGBColorSpace;
+
+    vrmScene = new THREE.Scene();
+    vrmScene.background = new THREE.Color(0x2a2a3a);
+
+    vrmCamera = new THREE.PerspectiveCamera(30, 1280 / 720, 0.1, 100);
+    vrmCamera.position.set(0, 1.2, 3.0);
+    vrmCamera.lookAt(0, 1.0, 0);
+
+    // ライティング（強め）
+    var dirLight = new THREE.DirectionalLight(0xffffff, 2.0);
+    dirLight.position.set(1, 2, 3);
+    vrmScene.add(dirLight);
+    var dirLight2 = new THREE.DirectionalLight(0xffffff, 1.0);
+    dirLight2.position.set(-1, 1, -2);
+    vrmScene.add(dirLight2);
+    vrmScene.add(new THREE.AmbientLight(0xffffff, 1.0));
+
+    // グリッド
+    var grid = new THREE.GridHelper(10, 10, 0x555555, 0x333333);
+    vrmScene.add(grid);
+
+    // VRM モデル読み込み — GLTFLoader 版（スタック問題調査用）
+    console.log("Loading VRM model...");
+    try {
+        var loader = new GLTFLoader();
+        loader.register(function(parser) { return new VRM.VRMLoaderPlugin(parser); });
+
+        var vrmData = fs.readBinary("models/AvatarSample_A.vrm");
+        console.log("VRM file loaded: " + vrmData.byteLength + " bytes");
+
+        loader.parse(vrmData, "", function(gltf) {
+            console.log("VRM parse complete");
+            vrmModel = gltf.userData.vrm;
+            if (vrmModel) {
+                VRM.VRMUtils.removeUnnecessaryVertices(gltf.scene);
+                VRM.VRMUtils.combineSkeletons(gltf.scene);
+                // MToon ShaderMaterial → MeshStandardMaterial に差し替え
+                // （MToon カスタムシェーダーが現環境で動作しないため）
+                // SkinnedMesh → 通常 Mesh 変換（ワールド変換を焼き込み）
+                vrmModel.scene.updateMatrixWorld(true);
+                var meshGroup = new THREE.Group();
+                var meshList = [];
+                vrmModel.scene.traverse(function(child) {
+                    if (child.isMesh && child.geometry) meshList.push(child);
+                });
+                for (var i = 0; i < meshList.length; i++) {
+                    var child = meshList[i];
+                    var mat = new THREE.MeshBasicMaterial({
+                        color: 0xffccaa,
+                        side: THREE.DoubleSide,
+                    });
+                    var newMesh = new THREE.Mesh(child.geometry, mat);
+                    newMesh.matrixAutoUpdate = false;
+                    newMesh.matrix.copy(child.matrixWorld);
+                    newMesh.frustumCulled = false;
+                    meshGroup.add(newMesh);
+                }
+                meshGroup.rotation.y = Math.PI;
+                vrmScene.add(meshGroup);
+                console.log("Created " + meshGroup.children.length + " regular meshes from VRM");
+            } else {
+                vrmScene.add(gltf.scene);
+                console.log("GLTF scene added (no VRM data)");
+            }
+        }, function(err) {
+            console.error("VRM parse error: " + err);
+            if (err && err.stack) console.error("Stack: " + err.stack);
+            if (err && err.message) console.error("Message: " + err.message);
+        });
+    } catch(e) {
+        console.error("VRM load failed: " + e);
+        if (e.stack) console.error(e.stack);
+    }
+
+    console.log("Demo 9 (three-vrm) initialized");
+}
+
+function renderDemo9() {
+    if (!vrmRenderer || !vrmScene || !vrmCamera) return;
+
+    // VRM モデル更新（SpringBone 等）
+    if (vrmModel) {
+        vrmModel.update(1.0 / 60.0);
+    }
+
+    // カメラ位置をマウス操作で制御
+    var cy = 1.0 + Math.sin(vrmCamPitch) * vrmCamDist * 0.5;
+    var hDist = Math.cos(vrmCamPitch) * vrmCamDist;
+    vrmCamera.position.set(Math.sin(vrmCamAngle) * hDist, cy, Math.cos(vrmCamAngle) * hDist);
+    vrmCamera.lookAt(0, 1.0, 0);
+
+    try {
+        vrmRenderer.resetState();
+        vrmRenderer.render(vrmScene, vrmCamera);
+    } catch(e) {
+        if (time < 200) {
+            console.error("VRM render: " + e);
+            if (e.stack) console.error(e.stack);
+        }
+    }
+}
+
+// ============================================================
 // 初期化
 // ============================================================
 
@@ -1032,6 +1183,7 @@ if (initialDemo > 0) {
     console.log("Initial demo mode: " + demoMode);
     if (demoMode === 5) initDemo5();
     if (demoMode === 8) initDemo8();
+    if (demoMode === 9) initDemo9();
 }
 
 // ============================================================
@@ -1056,6 +1208,7 @@ addEventListener("keydown", function(e) {
     if (e.key === "6") { demoMode = 6; console.log("Demo 6: drawImage/ImageData"); }
     if (e.key === "7") { demoMode = 7; demo7Inited = false; console.log("Demo 7: Dirty Rect"); }
     if (e.key === "8") { demoMode = 8; initDemo8(); console.log("Demo 8: three.js"); }
+    if (e.key === "9") { demoMode = 9; initDemo9(); console.log("Demo 9: three-vrm"); }
 
     if (e.key === "r" || e.key === "R") {
         offsetX = 0.0; offsetY = 0.0; alpha = 1.0;
@@ -1067,22 +1220,39 @@ addEventListener("keyup", function(e) {
 });
 
 addEventListener("mousedown", function(e) {
-    if (e.button === 0) { mouseDown = true; mouseX = e.clientX; mouseY = e.clientY; }
+    if (e.button === 0) {
+        mouseDown = true; mouseX = e.clientX; mouseY = e.clientY;
+        if (demoMode === 9) { vrmDragging = true; vrmLastX = e.clientX; vrmLastY = e.clientY; }
+    }
 });
 addEventListener("mouseup", function(e) {
-    if (e.button === 0) { mouseDown = false; }
+    if (e.button === 0) { mouseDown = false; vrmDragging = false; }
 });
 addEventListener("mousemove", function(e) {
     if (mouseDown) {
-        offsetX += (e.clientX - mouseX) / 640.0;
-        offsetY -= (e.clientY - mouseY) / 360.0;
-        mouseX = e.clientX; mouseY = e.clientY;
+        if (demoMode === 9 && vrmDragging) {
+            vrmCamAngle -= (e.clientX - vrmLastX) * 0.005;
+            vrmCamPitch += (e.clientY - vrmLastY) * 0.005;
+            if (vrmCamPitch < -1.2) vrmCamPitch = -1.2;
+            if (vrmCamPitch > 1.2) vrmCamPitch = 1.2;
+            vrmLastX = e.clientX; vrmLastY = e.clientY;
+        } else {
+            offsetX += (e.clientX - mouseX) / 640.0;
+            offsetY -= (e.clientY - mouseY) / 360.0;
+            mouseX = e.clientX; mouseY = e.clientY;
+        }
     }
 });
 addEventListener("wheel", function(e) {
-    alpha += e.deltaY * 0.001;
-    if (alpha < 0.05) alpha = 0.05;
-    if (alpha > 1.0) alpha = 1.0;
+    if (demoMode === 9) {
+        vrmCamDist += e.deltaY * 0.005;
+        if (vrmCamDist < 1.0) vrmCamDist = 1.0;
+        if (vrmCamDist > 10.0) vrmCamDist = 10.0;
+    } else {
+        alpha += e.deltaY * 0.001;
+        if (alpha < 0.05) alpha = 0.05;
+        if (alpha > 1.0) alpha = 1.0;
+    }
 });
 
 // ============================================================
@@ -1127,6 +1297,8 @@ function render() {
         drawCanvas2DAt(canvas2d_demo7);
     } else if (demoMode === 8) {
         renderDemo8();
+    } else if (demoMode === 9) {
+        renderDemo9();
     }
 }
 

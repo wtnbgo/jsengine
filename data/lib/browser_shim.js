@@ -167,6 +167,17 @@ if (typeof Intl === "undefined") {
     window.Intl = Intl;
 }
 
+// --- Request シム (three.js FileLoader 用) ---
+if (typeof Request === "undefined") {
+    function Request(url, options) {
+        this.url = url;
+        this.method = (options && options.method) || "GET";
+        this.headers = (options && options.headers) || {};
+        this.signal = (options && options.signal) || null;
+    }
+    window.Request = Request;
+}
+
 // --- WebGLRenderingContext / WebGL2RenderingContext ---
 // pixi.js が window.WebGLRenderingContext の存在をチェックする
 if (typeof WebGLRenderingContext === "undefined") {
@@ -306,12 +317,14 @@ if (typeof TextDecoder === "undefined") {
     };
     TextDecoder.prototype.decode = function(input) {
         if (!input) return "";
-        var bytes = new Uint8Array(input.buffer || input);
-        var result = "";
-        for (var i = 0; i < bytes.length; i++) {
-            result += String.fromCharCode(bytes[i]);
+        var bytes = input instanceof Uint8Array ? input : new Uint8Array(input.buffer || input);
+        // チャンク化して String.fromCharCode.apply で高速変換
+        var chunks = [];
+        var CHUNK = 4096;
+        for (var i = 0; i < bytes.length; i += CHUNK) {
+            chunks.push(String.fromCharCode.apply(null, bytes.subarray(i, Math.min(i + CHUNK, bytes.length))));
         }
-        return result;
+        return chunks.join("");
     };
     window.TextDecoder = TextDecoder;
 }
@@ -339,6 +352,25 @@ if (typeof Blob === "undefined") {
             else if (p.byteLength !== undefined) total += p.byteLength;
         }
         this.size = total;
+    };
+    Blob.prototype.arrayBuffer = function() {
+        var total = this.size;
+        var buf = new ArrayBuffer(total);
+        var out = new Uint8Array(buf);
+        var offset = 0;
+        for (var i = 0; i < this.parts.length; i++) {
+            var p = this.parts[i];
+            if (typeof p === "string") {
+                for (var j = 0; j < p.length; j++) out[offset++] = p.charCodeAt(j);
+            } else if (p instanceof ArrayBuffer) {
+                out.set(new Uint8Array(p), offset);
+                offset += p.byteLength;
+            } else if (p.buffer) { // TypedArray
+                out.set(new Uint8Array(p.buffer, p.byteOffset, p.byteLength), offset);
+                offset += p.byteLength;
+            }
+        }
+        return Promise.resolve(buf);
     };
     window.Blob = Blob;
 }
@@ -420,10 +452,21 @@ Object.defineProperty(Image.prototype, "src", {
             // URL からクエリパラメータを除去
             var cleanUrl = url.split("?")[0];
             if (!cleanUrl || cleanUrl.length === 0) {
-                // 空URLは無視
                 return;
             }
-            var bitmap = createImageBitmap(cleanUrl);
+            var bitmap;
+            if (cleanUrl.startsWith("blob:") && globalThis.__blobStore) {
+                // blob URL → ストアからデータ取得 → decodeImageBuffer でデコード
+                var blob = globalThis.__blobStore[cleanUrl];
+                if (blob) {
+                    var ab = awaitPromise(blob.arrayBuffer());
+                    bitmap = decodeImageBuffer(ab);
+                } else {
+                    throw new Error("blob not found: " + cleanUrl);
+                }
+            } else {
+                bitmap = createImageBitmap(cleanUrl);
+            }
             self.width = bitmap.width;
             self.height = bitmap.height;
             self._data = bitmap.data;
@@ -457,9 +500,35 @@ window.HTMLImageElement = Image;
 if (typeof URL === "undefined") {
     var URL = {};
 }
-URL.createObjectURL = function() { return "blob:dummy"; };
-URL.revokeObjectURL = function() {};
+var __blobStore = {};
+var __blobCounter = 0;
+URL.createObjectURL = function(blob) {
+    var id = "blob:jsengine/" + (__blobCounter++);
+    __blobStore[id] = blob;
+    return id;
+};
+URL.revokeObjectURL = function(url) {
+    delete __blobStore[url];
+};
 window.URL = URL;
+globalThis.__blobStore = __blobStore;
+
+// --- createImageBitmap ラッパー（Blob / ArrayBuffer 対応） ---
+// ネイティブ版はファイルパスのみ対応。Blob/ArrayBuffer を受けた場合は decodeImageBuffer で処理。
+var _nativeCreateImageBitmap = createImageBitmap;
+globalThis.createImageBitmap = function(source) {
+    if (source instanceof Blob) {
+        var ab = awaitPromise(source.arrayBuffer());
+        return Promise.resolve(decodeImageBuffer(ab));
+    }
+    if (source instanceof ArrayBuffer) {
+        return Promise.resolve(decodeImageBuffer(source));
+    }
+    if (typeof source === "string") {
+        return Promise.resolve(_nativeCreateImageBitmap(source));
+    }
+    return Promise.reject(new Error("createImageBitmap: unsupported source type"));
+};
 
 // --- XMLHttpRequest (最小シム) ---
 function XMLHttpRequest() {
@@ -508,20 +577,51 @@ XMLHttpRequest.prototype.send = function() {
 };
 window.XMLHttpRequest = XMLHttpRequest;
 
-// --- fetch (最小シム) ---
+// --- fetch (ローカルファイルシム) ---
 window.fetch = function(url, options) {
     return new Promise(function(resolve, reject) {
         try {
-            var data = fs.readText(url);
+            // URL パスの正規化（先頭の ./ を除去）
+            var path = (typeof url === "object" && url.url) ? url.url : url;
+            if (typeof path === "string") {
+                if (path.startsWith("./")) path = path.substring(2);
+                // blob: URL — ストアから取得
+                if (path.startsWith("blob:")) {
+                    var blob = __blobStore[path];
+                    if (!blob) { reject(new Error("fetch: blob not found: " + path)); return; }
+                    resolve({
+                        ok: true, status: 200, url: path,
+                        headers: { get: function() { return blob.type || null; } },
+                        arrayBuffer: function() { return blob.arrayBuffer(); },
+                        blob: function() { return Promise.resolve(blob); },
+                        json: function() { return blob.arrayBuffer().then(function(ab) { return JSON.parse(new TextDecoder().decode(new Uint8Array(ab))); }); },
+                        text: function() { return blob.arrayBuffer().then(function(ab) { return new TextDecoder().decode(new Uint8Array(ab)); }); }
+                    });
+                    return;
+                }
+                if (path.startsWith("http:") || path.startsWith("https:")) {
+                    reject(new Error("fetch: unsupported URL: " + path));
+                    return;
+                }
+            }
             resolve({
                 ok: true,
                 status: 200,
-                json: function() { return Promise.resolve(JSON.parse(data)); },
-                text: function() { return Promise.resolve(data); },
+                url: url,
+                headers: { get: function() { return null; } },
+                json: function() {
+                    var data = fs.readText(path);
+                    return Promise.resolve(JSON.parse(data));
+                },
+                text: function() {
+                    return Promise.resolve(fs.readText(path));
+                },
                 arrayBuffer: function() {
-                    var buf = new Uint8Array(data.length);
-                    for (var i = 0; i < data.length; i++) buf[i] = data.charCodeAt(i);
-                    return Promise.resolve(buf.buffer);
+                    return Promise.resolve(fs.readBinary(path));
+                },
+                blob: function() {
+                    var buf = fs.readBinary(path);
+                    return Promise.resolve({ arrayBuffer: function() { return Promise.resolve(buf); }, size: buf.byteLength, type: "" });
                 }
             });
         } catch(e) {
@@ -529,6 +629,7 @@ window.fetch = function(url, options) {
         }
     });
 };
+globalThis.fetch = window.fetch;
 
 // --- Event / CustomEvent ---
 function Event(type, options) {
