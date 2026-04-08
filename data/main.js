@@ -1144,3 +1144,11 @@ function done() {
     if (texProgram) gl.deleteProgram(texProgram);
     console.log("done");
 }
+
+// ============================================================
+// モジュールモード対応: ライフサイクル関数を globalThis に登録
+// （ES Module のスコープはグローバルと分離されるため明示登録が必要）
+// ============================================================
+globalThis.update = update;
+globalThis.render = render;
+globalThis.done = done;

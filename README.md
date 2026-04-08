@@ -63,21 +63,36 @@ jsengine -quiet             # Warnings and errors only
 
 ### JavaScript Lifecycle
 
-At startup, `main.js` is loaded and executed from the base path (default: `data/`). The base path can be changed with the `-data` option. All relative paths in `loadScript()` and `fs.*` APIs are resolved from this base path.
+At startup, `main.js` is loaded as an **ES Module** from the base path (default: `data/`). The base path can be changed with the `-data` option. All relative paths in `loadScript()` and `fs.*` APIs are resolved from this base path.
 
-Define the following global functions to receive callbacks from the C++ side:
+Since `main.js` runs as a module, **top-level `await` is supported**. You can use `await import(...)` or `await` any Promise directly at the top level.
+
+**Important:** ES Modules have their own scope — functions and variables declared at the top level are NOT automatically visible to the C++ engine. Lifecycle functions must be explicitly registered on `globalThis`:
+
+```js
+function update(dt) { /* ... */ }
+function render() { /* ... */ }
+function done() { /* ... */ }
+
+// Register lifecycle functions for C++ callbacks
+globalThis.update = update;
+globalThis.render = render;
+globalThis.done = done;
+```
 
 | Function | Timing | Arguments |
 |----------|--------|-----------|
-| `update(dt)` | Every frame | Elapsed milliseconds since last frame |
-| `render()` | Every frame (after update) | None |
-| `done()` | On app quit | None |
+| `globalThis.update(dt)` | Every frame | Elapsed milliseconds since last frame |
+| `globalThis.render()` | Every frame (after update) | None |
+| `globalThis.done()` | On app quit | None |
 
 ### Available JS APIs
 
 - **`gl`** — WebGL2RenderingContext compatible object (global)
 - **`console.log()` / `console.error()`** — Output to SDL log
-- **`loadScript(path)`** — Load and execute additional JS files
+- **`loadScript(path)`** — Load and execute additional JS files (global scope)
+- **`loadModule(path)`** — Load an ES Module and return its namespace (exports)
+- **`awaitPromise(promise)`** — Synchronously resolve a Promise (for use in non-module context)
 - **`addEventListener(type, callback)`** — Register browser-compatible event listeners
 - **`removeEventListener(type, callback)`** — Remove event listeners
 - **`fs`** — File System Access API (`readText`, `writeText`, `getFileHandle`, `getDirectoryHandle`, `exists`, `stat`, `mkdir`, `remove`, `rename`)

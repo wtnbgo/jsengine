@@ -1659,13 +1659,36 @@ bool JsEngine::loadFile(const char *path) {
     char *source = load_file_sdl(resolved.c_str(), &size);
     if (!source) return false;
 
-    JSValue result = JS_Eval(ctx_, source, size, path, JS_EVAL_TYPE_GLOBAL);
+    // main.js をモジュールモードで評価（top-level await が使用可能）
+    JSValue result = JS_Eval(ctx_, source, size, resolved.c_str(), JS_EVAL_TYPE_MODULE);
     SDL_free(source);
 
     if (JS_IsException(result)) {
         log_exception(ctx_, resolved.c_str());
         return false;
     }
+
+    // TLA: モジュール評価が Promise を返す場合、解決まで待つ
+    if (JS_IsPromise(result)) {
+        JSRuntime *rt = JS_GetRuntime(ctx_);
+        int max_iter = 10000000;
+        while (max_iter-- > 0) {
+            JSPromiseStateEnum state = JS_PromiseState(ctx_, result);
+            if (state == JS_PROMISE_FULFILLED) break;
+            if (state == JS_PROMISE_REJECTED) {
+                JSValue reason = JS_PromiseResult(ctx_, result);
+                log_exception(ctx_, "Module evaluation rejected");
+                JS_FreeValue(ctx_, reason);
+                JS_FreeValue(ctx_, result);
+                return false;
+            }
+            JSContext *ctx2;
+            int ret = JS_ExecutePendingJob(rt, &ctx2);
+            if (ret < 0) { log_exception(ctx2 ? ctx2 : ctx_, "Pending job error"); break; }
+            if (ret == 0) break;
+        }
+    }
+
     JS_FreeValue(ctx_, result);
     SDL_Log("Loaded JS: %s", resolved.c_str());
     return true;

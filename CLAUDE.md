@@ -62,7 +62,7 @@ cmake --build build/x64-windows --config Release
 - SDL3 shared libraries are copied to the build output directory as a post-build step.
 - On mobile platforms (iOS/Android), the window is created fullscreen; on desktop, it's resizable.
 - JS files are loaded from the base path (default: `data/`, changeable via `-data <path>` CLI option). All relative paths in `loadScript()` and `fs.*` APIs resolve from this base path.
-- JS lifecycle: `data/main.js` loaded at init → `update(dt)` and `render()` called each frame → `done()` at quit.
+- JS lifecycle: `data/main.js` は ES Module として読み込まれる（top-level await 対応）。`update(dt)` / `render()` / `done()` は `globalThis` に明示登録が必要（モジュールスコープのため）。
 - Input events (keyboard, mouse, touch, wheel) are converted from SDL3 to browser-compatible event objects and dispatched via `addEventListener`.
 - QuickJS-ng is installed via vcpkg (`quickjs-ng`). CMake target: `qjs`.
 - Comments in the codebase are in Japanese.
