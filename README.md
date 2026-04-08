@@ -42,11 +42,8 @@ jsengine -quiet             # Warnings and errors only
 | SDL3_image | FetchContent | Image loading (BMP, JPG, PNG) |
 | GLAD | Local (glad/) | OpenGL ES 3.0 loader |
 | QuickJS-ng | vcpkg | JavaScript engine (ES2023) |
-| glm | vcpkg | Math library |
 | miniaudio 0.11.25 | Local (src/audio/) | Audio engine (WAV, MP3, FLAC, OGG) |
 | ThorVG | FetchContent | 2D vector graphics (Canvas 2D API) |
-| FreeType | vcpkg | Font rasterization |
-| HarfBuzz | FetchContent | Text shaping |
 | libvorbis / libopus | vcpkg (optional) | OGG Vorbis / Opus audio decoding |
 
 ## Architecture
@@ -157,9 +154,6 @@ This project is licensed under the [MIT License](LICENSE).
 | [GLAD](https://github.com/Dav1dde/glad) | MIT License / Public Domain | OpenGL ES 3.0 loader (bundled in glad/) |
 | [miniaudio](https://miniaud.io/) | MIT-0 / Public Domain | Audio engine (bundled in src/audio/) |
 | [ThorVG](https://www.thorvg.org/) | MIT License | 2D vector graphics |
-| [glm](https://github.com/g-truc/glm) | MIT License | Math library |
-| [FreeType](https://freetype.org/) | FreeType License (BSD-style) | Font rasterization |
-| [HarfBuzz](https://harfbuzz.github.io/) | MIT License | Text shaping |
 | [libvorbis](https://xiph.org/vorbis/) | BSD License | Vorbis audio decoding (optional) |
 | [libogg](https://xiph.org/ogg/) | BSD License | Ogg container format (optional) |
 | [opusfile](https://opus-codec.org/) | BSD License | Opus audio decoding (optional) |

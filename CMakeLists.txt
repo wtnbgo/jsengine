@@ -94,32 +94,32 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(thorvg)
 
-# --- FreeType (vcpkg) ---
-find_package(freetype CONFIG REQUIRED)
+# --- FreeType (vcpkg) --- 現在未使用
+# find_package(freetype CONFIG REQUIRED)
 
-# --- HarfBuzz 13.1.1 (FetchContent, ICU なし) ---
-set(HB_HAVE_FREETYPE ON CACHE BOOL "Enable freetype interop helpers" FORCE)
-set(HB_HAVE_ICU OFF CACHE BOOL "Disable ICU" FORCE)
-set(HB_BUILD_SUBSET OFF CACHE BOOL "" FORCE)
-set(HB_BUILD_UTILS OFF CACHE BOOL "" FORCE)
-set(SKIP_INSTALL_ALL ON CACHE BOOL "" FORCE)
-set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
-
-FetchContent_Declare(
-	harfbuzz_source
-	GIT_REPOSITORY https://github.com/harfbuzz/harfbuzz.git
-	GIT_TAG 13.1.1
-	GIT_SHALLOW TRUE
-)
-FetchContent_MakeAvailable(harfbuzz_source)
+# --- HarfBuzz (FetchContent) --- 現在未使用
+# set(HB_HAVE_FREETYPE ON CACHE BOOL "Enable freetype interop helpers" FORCE)
+# set(HB_HAVE_ICU OFF CACHE BOOL "Disable ICU" FORCE)
+# set(HB_BUILD_SUBSET OFF CACHE BOOL "" FORCE)
+# set(HB_BUILD_UTILS OFF CACHE BOOL "" FORCE)
+# set(SKIP_INSTALL_ALL ON CACHE BOOL "" FORCE)
+# set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+#
+# FetchContent_Declare(
+# 	harfbuzz_source
+# 	GIT_REPOSITORY https://github.com/harfbuzz/harfbuzz.git
+# 	GIT_TAG 13.1.1
+# 	GIT_SHALLOW TRUE
+# )
+# FetchContent_MakeAvailable(harfbuzz_source)
 
 
 # ----------------------------------------------------
 # other libraries
 # ----------------------------------------------------
 
-# vcpkg でインストールされた glm を見つける
-find_package(glm CONFIG REQUIRED)
+# vcpkg でインストールされた glm — 現在未使用
+# find_package(glm CONFIG REQUIRED)
 
 # vorbis / opus (オプション)
 find_package(Vorbis CONFIG QUIET)
@@ -163,11 +163,11 @@ target_include_directories(${PROJECT_NAME} PRIVATE
 target_link_libraries(${PROJECT_NAME} PRIVATE
 	SDL3::SDL3
 	SDL3_image::SDL3_image
-	glm::glm
+	# glm::glm   # 現在未使用
 	glad
 	thorvg
-	freetype
-	harfbuzz
+	# freetype    # 現在未使用
+	# harfbuzz    # 現在未使用
 	qjs
 )
 

@@ -2,15 +2,10 @@
   "name": "jsengine",
   "version": "1.0.0",
   "dependencies": [
-    "glm",
     "quickjs-ng",
     "libvorbis",
     "libogg",
-    "opusfile",
-    {
-      "name": "freetype",
-      "features": ["png", "zlib"]
-    }
+    "opusfile"
   ],
   "vcpkg-configuration": {
     "registries": [

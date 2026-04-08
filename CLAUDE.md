@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Build System
 
-CMake with presets + Ninja Multi-Config generator. Dependencies are managed via vcpkg (glm, quickjs-ng, freetype, miniaudio, libvorbis, libopus) and FetchContent (SDL3, SDL3_image, ThorVG, HarfBuzz).
+CMake with presets + Ninja Multi-Config generator. Dependencies are managed via vcpkg (quickjs-ng, miniaudio, libvorbis, libopus) and FetchContent (SDL3, SDL3_image, ThorVG).
 
 **Prerequisites:** vcpkg installed with `VCPKG_ROOT` environment variable set.
 
