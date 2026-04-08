@@ -114,6 +114,109 @@ static JSValue native_load_script(JSContext *ctx, JSValueConst this_val, int arg
 }
 
 // ============================================================
+// ES Module ローダー
+// ============================================================
+
+// モジュール名の正規化（相対パス解決）
+static char *js_module_normalize(JSContext *ctx, const char *base_name,
+                                  const char *name, void *opaque) {
+    (void)opaque;
+    // 相対パス（./ or ../）の場合、base_name のディレクトリからの相対パスに解決
+    if (name[0] == '.') {
+        const char *p = strrchr(base_name, '/');
+        if (!p) p = strrchr(base_name, '\\');
+        size_t dir_len = p ? (size_t)(p - base_name + 1) : 0;
+        size_t name_len = strlen(name);
+        char *result = (char*)js_malloc(ctx, dir_len + name_len + 1);
+        if (!result) return nullptr;
+        memcpy(result, base_name, dir_len);
+        memcpy(result + dir_len, name, name_len + 1);
+        return result;
+    }
+    // そのまま使えるか（既に解決済みパス）をチェック
+    {
+        SDL_PathInfo info;
+        if (SDL_GetPathInfo(name, &info) && info.type == SDL_PATHTYPE_FILE) {
+            return js_strdup(ctx, name);
+        }
+    }
+    // ベアスペシファイア — ベースパスからの解決を試行
+    JsEngine *engine = JsEngine::getInstance();
+    if (engine) {
+        std::string resolved = engine->resolvePath(name);
+        return js_strdup(ctx, resolved.c_str());
+    }
+    return js_strdup(ctx, name);
+}
+
+// モジュールファイルの読み込み・コンパイル
+static JSModuleDef *js_module_loader(JSContext *ctx, const char *module_name,
+                                      void *opaque) {
+    (void)opaque;
+    size_t buf_len = 0;
+    char *buf = (char*)SDL_LoadFile(module_name, &buf_len);
+    if (!buf) {
+        JS_ThrowReferenceError(ctx, "could not load module '%s': %s", module_name, SDL_GetError());
+        return nullptr;
+    }
+    // モジュールとしてコンパイル
+    JSValue func_val = JS_Eval(ctx, buf, buf_len, module_name,
+                               JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY);
+    SDL_free(buf);
+    if (JS_IsException(func_val))
+        return nullptr;
+    // コンパイル済みモジュールから JSModuleDef を取得
+    JSModuleDef *m = (JSModuleDef *)JS_VALUE_GET_PTR(func_val);
+    JS_FreeValue(ctx, func_val);
+    return m;
+}
+
+// loadModule(path) — ESM ファイルを読み込み、export された名前空間オブジェクトを返す
+static JSValue native_loadModule(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    (void)this_val;
+    if (argc < 1) return JS_ThrowInternalError(ctx, "loadModule requires a path argument");
+    const char *path = JS_ToCString(ctx, argv[0]);
+    if (!path) return JS_EXCEPTION;
+    std::string resolved = resolve_path(path);
+    JS_FreeCString(ctx, path);
+
+    size_t size = 0;
+    char *source = load_file_sdl(resolved.c_str(), &size);
+    if (!source) {
+        return JS_ThrowInternalError(ctx, "Cannot load module: %s", resolved.c_str());
+    }
+
+    // モジュールとしてコンパイル
+    JSValue func_val = JS_Eval(ctx, source, size, resolved.c_str(),
+                               JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY);
+    SDL_free(source);
+    if (JS_IsException(func_val)) {
+        log_exception(ctx, "Module compile error");
+        return JS_EXCEPTION;
+    }
+
+    // JSModuleDef を取得（EvalFunction で消費される前に）
+    JSModuleDef *m = (JSModuleDef *)JS_VALUE_GET_PTR(func_val);
+
+    // モジュールを評価（func_val の所有権は EvalFunction に移る）
+    JSValue result = JS_EvalFunction(ctx, func_val);
+    if (JS_IsException(result)) {
+        log_exception(ctx, "Module eval error");
+        return JS_EXCEPTION;
+    }
+
+    // モジュール評価のペンディングジョブを全て処理
+    // （TLA 非使用モジュールでも ES2023 仕様で Promise が返る場合がある）
+    JSContext *ctx2;
+    while (JS_ExecutePendingJob(JS_GetRuntime(ctx), &ctx2) > 0) {}
+
+    JS_FreeValue(ctx, result);
+
+    // モジュール名前空間（全 export を含むオブジェクト）を返す
+    return JS_GetModuleNamespace(ctx, m);
+}
+
+// ============================================================
 // setTimeout / setInterval / requestAnimationFrame
 // ============================================================
 
@@ -1394,6 +1497,9 @@ bool JsEngine::init(int argc, char **argv) {
         return false;
     }
 
+    // ES Module ローダーを登録
+    JS_SetModuleLoaderFunc(rt_, js_module_normalize, js_module_loader, this);
+
     ctx_ = JS_NewContext(rt_);
     if (!ctx_) {
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to create QuickJS context");
@@ -1422,8 +1528,9 @@ bool JsEngine::init(int argc, char **argv) {
     JS_SetPropertyStr(ctx_, console, "error", JS_NewCFunction(ctx_, native_console_error, "error", 0));
     JS_SetPropertyStr(ctx_, global, "console", console);
 
-    // loadScript バインディング登録
+    // loadScript / loadModule バインディング登録
     JS_SetPropertyStr(ctx_, global, "loadScript", JS_NewCFunction(ctx_, native_load_script, "loadScript", 1));
+    JS_SetPropertyStr(ctx_, global, "loadModule", JS_NewCFunction(ctx_, native_loadModule, "loadModule", 1));
 
     // createImageBitmap 登録
     JS_SetPropertyStr(ctx_, global, "createImageBitmap", JS_NewCFunction(ctx_, native_createImageBitmap, "createImageBitmap", 1));

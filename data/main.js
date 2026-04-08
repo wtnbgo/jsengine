@@ -519,7 +519,6 @@ function initDemo5() {
         preserveDrawingBuffer: false
     });
 
-    // デバッグ: canvas サイズと GL 状態を確認
     var view = pixiApp.renderer.view || pixiApp.view;
     if (view) {
         console.log("pixi view: " + view.width + "x" + view.height);
@@ -582,7 +581,6 @@ function renderDemo5() {
         pixiBox.x = 640 + Math.cos(time * 0.001) * 200;
         pixiBox.y = 360 + Math.sin(time * 0.0015) * 100;
     }
-    // 他のデモで GL ステートが変更されている可能性があるのでリセット
     pixiApp.renderer.reset();
     pixiApp.renderer.render(pixiApp.stage);
 }
@@ -853,10 +851,12 @@ function initDemo8() {
     if (typeof Map === "undefined") loadScript("lib/polyfill.js");
     if (typeof window === "undefined" || !window.HTMLCanvasElement) loadScript("lib/browser_shim.js");
 
-    // three.js 読み込み（QuickJS は ES2023 対応なので ES6 版を直接使用）
+    // three.js ESM 版を読み込み（loadModule で ESM の export を取得）
     console.log("Loading three.js...");
     try {
-        loadScript("lib/three.min.js");
+        var THREE = loadModule("lib/three.module.min.js");
+        // グローバルに設定（他のスクリプトからアクセスできるように）
+        globalThis.THREE = THREE;
         console.log("THREE loaded: r" + THREE.REVISION);
     } catch(e) {
         console.error("three.js load failed: " + e);

@@ -117,10 +117,10 @@ Demo 1 displays a HUD overlay showing controls, demo list, and system informatio
 | **2** | Canvas2D shapes (rectangles, circles, Bezier curves, transparency) |
 | **3** | Canvas2D text (multiple fonts, sizes, colors) |
 | **4** | Canvas2D animation (rotating shapes, orbital circles) |
-| **5** | pixi.js v6 test (Graphics drawing, animation) |
+| **5** | pixi.js v6.5.10 test (Graphics drawing, animation) |
 | **6** | Canvas2D drawImage / getImageData / putImageData test |
 | **7** | Canvas2D dirty rect partial update test |
-| **8** | three.js r128 test (cube, sphere, floor plane) |
+| **8** | three.js r176 test (cube, sphere, floor plane, ESM) |
 | **Space** | Play beep sound |
 | **R** | Reset |
 
@@ -149,6 +149,6 @@ This project is licensed under the [MIT License](LICENSE).
 | [libogg](https://xiph.org/ogg/) | BSD License | Ogg container format (optional) |
 | [opusfile](https://opus-codec.org/) | BSD License | Opus audio decoding (optional) |
 | [pixi.js](https://pixijs.com/) v6.5.10 | MIT License | 2D renderer (bundled in data/lib/) |
-| [three.js](https://threejs.org/) r128 | MIT License | 3D graphics (bundled in data/lib/) |
+| [three.js](https://threejs.org/) r176 | MIT License | 3D graphics (ESM, bundled in data/lib/) |
 
 EGL/KHR headers are provided by The Khronos Group under the Apache-2.0 License.
