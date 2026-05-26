@@ -516,6 +516,11 @@ function initDemo5() {
         backgroundAlpha: 1,
         resolution: 1,
         antialias: false,
+        // 内部 Ticker (RAF) を無効化。renderDemo5 が明示的に renderer.render() を呼ぶ。
+        // 自動 ticker が動き続けると、Demo 切替後に他デモが GL state を変更したとき
+        // pixi の StateSystem キャッシュが不整合になり GL_INVALID_OPERATION が大量発生する。
+        autoStart: false,
+        sharedTicker: false,
     });
 
     console.log("pixi screen: " + pixiApp.screen.width + "x" + pixiApp.screen.height);
