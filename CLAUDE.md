@@ -75,4 +75,9 @@ cmake --build build/x64-windows --config Release
 - `qjs_get_buffer()` は TypedArray の byteOffset を正しく処理する。
 - `getParameter()` は配列型（VIEWPORT 等）を JS Array で返す。
 - `getExtension()` は GLES3 標準拡張に対して機能オブジェクトを返す（VAO 拡張メソッド含む）。
+- WebGL2 関数として `texStorage2D(target, levels, internalformat, w, h)` / `texStorage3D` をサポート（three.js r176 のボーンテクスチャ作成に必須）。
+- WebGL 固有 enum（`UNPACK_FLIP_Y_WEBGL` 0x9240, `UNPACK_PREMULTIPLY_ALPHA_WEBGL` 0x9241, `UNPACK_COLORSPACE_CONVERSION_WEBGL` 0x9243, `BROWSER_DEFAULT_WEBGL` 0x9244）は `gl` オブジェクトに定数登録済み。`pixelStorei` ではこれらをスキップ。
+- `texImage2D` は WebGL2 の unsized internalformat (`RGBA + FLOAT` 等) を `fixInternalFormat()` で GLES3 の sized format (`RGBA32F` 等) に自動変換する。
+- デバッグビルドでは `KHR_debug` 拡張が利用可能な場合 `glDebugMessageCallbackKHR` を有効化し、GL エラーを同期的にログ出力する（app.cpp）。
 - Demo 1 に Canvas2D ベースの HUD オーバーレイ（操作説明・デモ一覧・システム情報）を表示。
+- Demo 9: three-vrm v3 による VRM アバター表示。GLTFLoader.parse でバイナリ VRM パース、MToon シェーダー + SkinnedMesh によるフルカラー描画動作。

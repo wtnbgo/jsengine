@@ -1066,30 +1066,28 @@ function initDemo9() {
             if (vrmModel) {
                 VRM.VRMUtils.removeUnnecessaryVertices(gltf.scene);
                 VRM.VRMUtils.combineSkeletons(gltf.scene);
-                // MToon ShaderMaterial → MeshStandardMaterial に差し替え
-                // （MToon カスタムシェーダーが現環境で動作しないため）
-                // SkinnedMesh → 通常 Mesh 変換（ワールド変換を焼き込み）
-                vrmModel.scene.updateMatrixWorld(true);
-                var meshGroup = new THREE.Group();
-                var meshList = [];
+                // MToon テクスチャの .matrix 初期化 + frustumCulled 無効化
+                var meshCount = 0, skinnedCount = 0;
                 vrmModel.scene.traverse(function(child) {
-                    if (child.isMesh && child.geometry) meshList.push(child);
+                    if (child.isMesh) {
+                        child.frustumCulled = false;
+                        meshCount++;
+                        if (child.isSkinnedMesh) skinnedCount++;
+                        if (child.material && child.material.uniforms) {
+                            var uniforms = child.material.uniforms;
+                            for (var key in uniforms) {
+                                var u = uniforms[key];
+                                if (u && u.value && u.value.isTexture && !u.value.matrix) {
+                                    u.value.matrix = new THREE.Matrix3();
+                                }
+                            }
+                        }
+                    }
                 });
-                for (var i = 0; i < meshList.length; i++) {
-                    var child = meshList[i];
-                    var mat = new THREE.MeshBasicMaterial({
-                        color: 0xffccaa,
-                        side: THREE.DoubleSide,
-                    });
-                    var newMesh = new THREE.Mesh(child.geometry, mat);
-                    newMesh.matrixAutoUpdate = false;
-                    newMesh.matrix.copy(child.matrixWorld);
-                    newMesh.frustumCulled = false;
-                    meshGroup.add(newMesh);
-                }
-                meshGroup.rotation.y = Math.PI;
-                vrmScene.add(meshGroup);
-                console.log("Created " + meshGroup.children.length + " regular meshes from VRM");
+                console.log("Meshes: " + meshCount + " (skinned: " + skinnedCount + ")");
+                vrmScene.add(vrmModel.scene);
+                vrmModel.scene.rotation.y = Math.PI;
+                console.log("VRM model added to scene");
             } else {
                 vrmScene.add(gltf.scene);
                 console.log("GLTF scene added (no VRM data)");
@@ -1123,9 +1121,44 @@ function renderDemo9() {
 
     try {
         vrmRenderer.resetState();
+        // レンダリング前に GL エラーをクリア
+        while (gl.getError() !== gl.NO_ERROR) {}
         vrmRenderer.render(vrmScene, vrmCamera);
+        if (!renderDemo9._glChecked && vrmModel) {
+            renderDemo9._glChecked = true;
+            var err = gl.getError();
+            if (err !== gl.NO_ERROR) console.error("GL error after VRM render: 0x" + err.toString(16));
+            else console.log("GL: no errors after VRM render");
+            // ピクセル色サンプリング（中央付近）
+            var px = new Uint8Array(4);
+            gl.readPixels(640, 360, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+            console.log("Center pixel(640,360): rgba=("+px[0]+","+px[1]+","+px[2]+","+px[3]+")");
+            gl.readPixels(500, 400, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+            console.log("Pixel(500,400): rgba=("+px[0]+","+px[1]+","+px[2]+","+px[3]+")");
+            gl.readPixels(640, 200, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+            console.log("Pixel(640,200): rgba=("+px[0]+","+px[1]+","+px[2]+","+px[3]+")");
+            // ボーンテクスチャ情報
+            vrmModel.scene.traverse(function(child) {
+                if (child.isSkinnedMesh && child.skeleton && !renderDemo9._boneLogged) {
+                    renderDemo9._boneLogged = true;
+                    var skel = child.skeleton;
+                    console.log("Skeleton: bones=" + skel.bones.length +
+                        " boneTexture=" + !!skel.boneTexture +
+                        " boneMatrices.length=" + (skel.boneMatrices ? skel.boneMatrices.length : "N/A"));
+                    if (skel.boneMatrices && skel.boneMatrices.length >= 16) {
+                        // 最初のボーン行列の値
+                        var m = skel.boneMatrices;
+                        console.log("Bone0 matrix: [" + m[0].toFixed(3)+","+m[1].toFixed(3)+","+m[2].toFixed(3)+","+m[3].toFixed(3)+","
+                            +m[4].toFixed(3)+","+m[5].toFixed(3)+","+m[6].toFixed(3)+","+m[7].toFixed(3)+","
+                            +m[8].toFixed(3)+","+m[9].toFixed(3)+","+m[10].toFixed(3)+","+m[11].toFixed(3)+","
+                            +m[12].toFixed(3)+","+m[13].toFixed(3)+","+m[14].toFixed(3)+","+m[15].toFixed(3)+"]");
+                    }
+                }
+            });
+        }
     } catch(e) {
-        if (time < 200) {
+        if (!renderDemo9._errCount) renderDemo9._errCount = 0;
+        if (renderDemo9._errCount++ < 3) {
             console.error("VRM render: " + e);
             if (e.stack) console.error(e.stack);
         }

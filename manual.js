@@ -349,6 +349,7 @@ addEventListener("touchcancel", function(e) {
 //     createTexture, deleteTexture, isTexture, bindTexture,
 //     activeTexture, texParameteri, texParameterf,
 //     texImage2D, texSubImage2D, texImage3D,
+//     texStorage2D, texStorage3D,
 //     copyTexImage2D, copyTexSubImage2D,
 //     generateMipmap, pixelStorei, readPixels
 //

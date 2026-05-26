@@ -53,6 +53,22 @@ bool App::init(int argc, char *argv[])
     SDL_Log("Loaded GLES %d.%d.\n",
            GLAD_VERSION_MAJOR(gles_version), GLAD_VERSION_MINOR(gles_version));
 
+    // KHR_debug が使える場合は GL エラーの詳細メッセージを取得（デバッグ用）
+    if (GLAD_GL_KHR_debug && glad_glDebugMessageCallbackKHR) {
+        glEnable(GL_DEBUG_OUTPUT_KHR);
+        glEnable(GL_DEBUG_OUTPUT_SYNCHRONOUS_KHR);
+        glad_glDebugMessageCallbackKHR(
+            [](GLenum source, GLenum type, GLuint id, GLenum severity,
+               GLsizei length, const GLchar *message, const void *userParam) {
+                // NOTIFICATION（severity=0x826B）は無視
+                if (severity == 0x826B) return;
+                SDL_Log("GL_DEBUG: src=0x%X type=0x%X id=%u sev=0x%X: %s",
+                        source, type, id, severity, message);
+            },
+            nullptr);
+        SDL_Log("GL KHR_debug callback enabled");
+    }
+
     SDL_GL_SetSwapInterval(1); // 1: VSYNC
 
     // データパス決定（デフォルト: data、-data オプションで変更可）

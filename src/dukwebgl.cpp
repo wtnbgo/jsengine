@@ -141,7 +141,9 @@ static JSValue js_getExtension(JSContext *ctx, JSValueConst this_val, int argc, 
             strcmp(name, "OES_element_index_uint") == 0 ||
             strcmp(name, "OES_vertex_array_object") == 0 ||
             strcmp(name, "OES_texture_float") == 0 ||
+            strcmp(name, "OES_texture_float_linear") == 0 ||
             strcmp(name, "OES_texture_half_float") == 0 ||
+            strcmp(name, "OES_texture_half_float_linear") == 0 ||
             strcmp(name, "ANGLE_instanced_arrays") == 0 ||
             strcmp(name, "EXT_blend_minmax") == 0 ||
             strcmp(name, "EXT_frag_depth") == 0 ||
@@ -490,6 +492,29 @@ static JSValue js_generateMipmap(JSContext *ctx, JSValueConst this_val, int argc
     return JS_UNDEFINED;
 }
 
+// WebGL 2.0 → GLES 3.0 内部フォーマット自動変換
+// WebGL 2.0 では internalformat に GL_RGBA 等の unsized format を type=FLOAT で渡せるが、
+// GLES 3.0 では sized format (GL_RGBA32F 等) が必要
+static GLint fixInternalFormat(GLint internalformat, GLenum type) {
+    GLint fixed = internalformat;
+    if (type == GL_FLOAT) {
+        switch (internalformat) {
+        case GL_RGBA: fixed = GL_RGBA32F; break;
+        case GL_RGB:  fixed = GL_RGB32F; break;
+        case GL_RG:   fixed = GL_RG32F; break;
+        case GL_RED:  fixed = GL_R32F; break;
+        }
+    } else if (type == GL_HALF_FLOAT) {
+        switch (internalformat) {
+        case GL_RGBA: fixed = GL_RGBA16F; break;
+        case GL_RGB:  fixed = GL_RGB16F; break;
+        case GL_RG:   fixed = GL_RG16F; break;
+        case GL_RED:  fixed = GL_R16F; break;
+        }
+    }
+    return fixed;
+}
+
 static JSValue js_texImage2D(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     GLenum target = (GLenum)arg_uint(ctx, argv[0]);
     GLint level = (GLint)arg_int(ctx, argv[1]);
@@ -503,6 +528,7 @@ static JSValue js_texImage2D(JSContext *ctx, JSValueConst this_val, int argc, JS
         GLenum format = (GLenum)arg_uint(ctx, argv[6]);
         GLenum type = (GLenum)arg_uint(ctx, argv[7]);
         void *pixels = qjs_get_pixels(ctx, argv[8]);
+        internalformat = fixInternalFormat(internalformat, type);
         glTexImage2D(target, level, internalformat, width, height, border, format, type, pixels);
     } else if (argc >= 6) {
         // texImage2D(target, level, internalformat, format, type, source)
@@ -519,6 +545,7 @@ static JSValue js_texImage2D(JSContext *ctx, JSValueConst this_val, int argc, JS
             JS_FreeValue(ctx, hv);
             pixels = qjs_get_pixels(ctx, argv[5]);
         }
+        internalformat = fixInternalFormat(internalformat, type);
         glTexImage2D(target, level, internalformat, width, height, 0, format, type, pixels);
     }
     return JS_UNDEFINED;
@@ -557,6 +584,27 @@ static JSValue js_texSubImage2D(JSContext *ctx, JSValueConst this_val, int argc,
             glTexSubImage2D(target, level, xoffset, yoffset, width, height, format, type, pixels);
         }
     }
+    return JS_UNDEFINED;
+}
+
+static JSValue js_texStorage2D(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    glTexStorage2D(
+        (GLenum)arg_uint(ctx, argv[0]),
+        (GLsizei)arg_int(ctx, argv[1]),
+        (GLenum)arg_uint(ctx, argv[2]),
+        (GLsizei)arg_int(ctx, argv[3]),
+        (GLsizei)arg_int(ctx, argv[4]));
+    return JS_UNDEFINED;
+}
+
+static JSValue js_texStorage3D(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    glTexStorage3D(
+        (GLenum)arg_uint(ctx, argv[0]),
+        (GLsizei)arg_int(ctx, argv[1]),
+        (GLenum)arg_uint(ctx, argv[2]),
+        (GLsizei)arg_int(ctx, argv[3]),
+        (GLsizei)arg_int(ctx, argv[4]),
+        (GLsizei)arg_int(ctx, argv[5]));
     return JS_UNDEFINED;
 }
 
@@ -599,7 +647,8 @@ static JSValue js_pixelStorei(JSContext *ctx, JSValueConst this_val, int argc, J
     GLint param = (GLint)arg_int(ctx, argv[1]);
     // WebGL 固有パラメータ（GLES3 にはない）はスキップ
     // UNPACK_FLIP_Y_WEBGL (0x9240), UNPACK_PREMULTIPLY_ALPHA_WEBGL (0x9241)
-    if (pname == 0x9240 || pname == 0x9241) return JS_UNDEFINED;
+    // UNPACK_COLORSPACE_CONVERSION_WEBGL (0x9243)
+    if (pname == 0x9240 || pname == 0x9241 || pname == 0x9243) return JS_UNDEFINED;
     glPixelStorei(pname, param);
     return JS_UNDEFINED;
 }
@@ -1878,6 +1927,8 @@ static void bind_constants(JSContext *ctx, JSValue gl) {
     // WebGL 固有定数（GLES ヘッダに無い）
     JS_SetPropertyStr(ctx, gl, "UNPACK_FLIP_Y_WEBGL", JS_NewUint32(ctx, 0x9240));
     JS_SetPropertyStr(ctx, gl, "UNPACK_PREMULTIPLY_ALPHA_WEBGL", JS_NewUint32(ctx, 0x9241));
+    JS_SetPropertyStr(ctx, gl, "UNPACK_COLORSPACE_CONVERSION_WEBGL", JS_NewUint32(ctx, 0x9243));
+    JS_SetPropertyStr(ctx, gl, "BROWSER_DEFAULT_WEBGL", JS_NewUint32(ctx, 0x9244));
 
     // OES_element_index_uint (UNSIGNED_INT は既に上で登録済み)
 
@@ -1960,6 +2011,8 @@ void dukwebgl_bind(JSContext *ctx) {
     BIND_FUNC(gl, texImage2D, js_texImage2D, 10);
     BIND_FUNC(gl, texSubImage2D, js_texSubImage2D, 10);
     BIND_FUNC(gl, texImage3D, js_texImage3D, 10);
+    BIND_FUNC(gl, texStorage2D, js_texStorage2D, 5);
+    BIND_FUNC(gl, texStorage3D, js_texStorage3D, 6);
     BIND_FUNC(gl, copyTexImage2D, js_copyTexImage2D, 8);
     BIND_FUNC(gl, copyTexSubImage2D, js_copyTexSubImage2D, 8);
     BIND_FUNC(gl, pixelStorei, js_pixelStorei, 2);
