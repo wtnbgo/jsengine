@@ -5,7 +5,7 @@
  * Adapted for GLES 3.0 (via glad/gles2.h)
  */
 
-#include "dukwebgl.h"
+#include "webgl.h"
 #include "glad/gles2.h"
 #include <quickjs.h>
 #include <SDL3/SDL.h>
@@ -1943,13 +1943,13 @@ static void bind_constants(JSContext *ctx, JSValue gl) {
 }
 
 // ============================================================
-// バインド登録: dukwebgl_bind
+// バインド登録: webgl_bind
 // ============================================================
 
 #define BIND_FUNC(gl, jsName, cFunc, nargs) \
     JS_SetPropertyStr(ctx, gl, #jsName, JS_NewCFunction(ctx, cFunc, #jsName, nargs))
 
-void dukwebgl_bind(JSContext *ctx) {
+void webgl_bind(JSContext *ctx) {
     // gl オブジェクトを直接作成
     JSValue gl = JS_NewObject(ctx);
 

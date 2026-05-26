@@ -54,8 +54,8 @@ jsengine -quiet             # Warnings and errors only
 
 - `src/main.cpp` — SDL3 callback entry point (SDL_AppInit / SDL_AppIterate / SDL_AppEvent / SDL_AppQuit). Routes input events to JsEngine via App.
 - `src/app.hpp / app.cpp` — `App` singleton. Manages the SDL window, GL context, and owns JsEngine.
-- `src/jsengine.hpp / jsengine.cpp` — `JsEngine` class. Manages the duktape heap, JS file loading/execution, and event dispatch.
-- `src/dukwebgl.h / dukwebgl.cpp` — WebGL 2.0 compatible bindings (based on GLES 3.0).
+- `src/jsengine.hpp / jsengine.cpp` — `JsEngine` class. Manages the QuickJS runtime/context, JS file loading/execution, and event dispatch.
+- `src/webgl.h / webgl.cpp` — WebGL 2.0 compatible bindings (based on GLES 3.0).
 - `src/webaudio.h / webaudio.cpp` — Web Audio API bindings.
 - `src/canvas2d.h / canvas2d.cpp` — Canvas 2D API bindings (ThorVG-based).
 - `src/audio/` — AudioEngine / AudioStream (miniaudio + SDL3 audio).

@@ -126,7 +126,7 @@ find_package(OpusFile CONFIG QUIET)
 set(SOURCES
 	src/app.cpp
 	src/jsengine.cpp
-	src/dukwebgl.cpp
+	src/webgl.cpp
 	src/webaudio.cpp
 	src/canvas2d.cpp
 	src/audio/AudioEngine.cpp

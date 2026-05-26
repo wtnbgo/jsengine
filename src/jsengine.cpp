@@ -1,5 +1,5 @@
 #include "jsengine.hpp"
-#include "dukwebgl.h"
+#include "webgl.h"
 #include "webaudio.h"
 #include "canvas2d.h"
 #include <quickjs.h>
@@ -1738,7 +1738,7 @@ bool JsEngine::init(int argc, char **argv) {
     storage_register(ctx_);
 
     // WebGL バインディング登録
-    dukwebgl_bind(ctx_);
+    webgl_bind(ctx_);
 
     // Web Audio API バインディング登録
     webaudio_bind(ctx_);

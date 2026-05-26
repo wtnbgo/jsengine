@@ -187,7 +187,7 @@ if (typeof WebGLRenderingContext === "undefined") {
     var WebGLRenderingContext = function() {};
     window.WebGLRenderingContext = WebGLRenderingContext;
 }
-// WebGL2RenderingContext は既に dukwebgl で登録済みだが window にも設定
+// WebGL2RenderingContext は既に WebGL バインディングで登録済みだが window にも設定
 window.WebGL2RenderingContext = WebGL2RenderingContext;
 
 // gl オブジェクトに pixi.js が必要とするメソッドを追加

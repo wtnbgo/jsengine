@@ -386,7 +386,7 @@ function renderDemo3() {
     // OpenSans Regular サブタイトル
     c.font = "32px OpenSans-Regular";
     c.fillStyle = "#f0f6fc";
-    c.fillText("ThorVG + duktape", 30, 140);
+    c.fillText("ThorVG + QuickJS", 30, 140);
 
     // Roboto Regular
     c.font = "24px Roboto-Regular";
@@ -924,8 +924,9 @@ function initDemo8() {
 
         console.log("three.js scene created");
 
-        // three.js のシェーダプリプロセスを正規表現なしの実装にオーバーライド
-        // duktape の regexp エンジンで特定パターンがハングする問題の回避
+        // three.js のシェーダ #include 展開を indexOf ベースの事前解決に差し替える。
+        // 過去の JS エンジン (duktape) で regexp ハングが出た互換コードだが、
+        // 現在の QuickJS-ng でも事前解決によりレンダ毎の正規表現実行を回避できるので保持。
         (function() {
             // resolveIncludes を文字列操作ベースに差し替え
             var origResolve = THREE.WebGLProgram ? null : null;
@@ -970,8 +971,6 @@ function initDemo8() {
             }
         })();
 
-        // 正規表現テスト（duktape バグ検証用、QuickJS では不要）
-        // try { loadScript("test_regexp.js"); } catch(e) { console.error("regexp test: " + e); }
     } catch(e) {
         console.error("three.js init error: " + e);
         if (e.stack) console.error(e.stack);

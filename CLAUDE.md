@@ -49,7 +49,7 @@ cmake --build build/x64-windows --config Release
 - `src/main.cpp` — SDL3 callback entry point. Manages the App lifecycle, delta-time calculation, and routes SDL events to App. Supports `-debug` and `-quiet` CLI flags for log level.
 - `src/app.hpp` / `src/app.cpp` — `App` singleton class owning the SDL window, OpenGL ES context, and JsEngine. Provides `init()`, `update(delta)`, `render()`, and `handleEvent()` methods.
 - `src/jsengine.hpp` / `src/jsengine.cpp` — `JsEngine` class. Manages the QuickJS runtime/context, JS file loading (via SDL_LoadFile), lifecycle calls (update/render/done), and browser-compatible input event dispatch (addEventListener/removeEventListener).
-- `src/dukwebgl.h` / `src/dukwebgl.cpp` — WebGL 2.0 compatible bindings mapping to GLES 3.0. Registers `gl` global and `WebGL2RenderingContext`.
+- `src/webgl.h` / `src/webgl.cpp` — WebGL 2.0 compatible bindings mapping to GLES 3.0. Registers `gl` global and `WebGL2RenderingContext`.
 - `src/webaudio.h` / `src/webaudio.cpp` — Web Audio API bindings. Uses AudioEngine/AudioStream for playback.
 - `src/canvas2d.h` / `src/canvas2d.cpp` — Canvas 2D API bindings using ThorVG SwCanvas. Bitmap-retained mode with deferred rendering: draw ops are batched and rendered to pixel buffer on flush/texture access/getImageData. drawImage uses ThorVG Picture. Dirty rect tracking for partial GL texture upload. テキスト描画は ThorVG の **FreeType + HarfBuzz (FT) ローダー** 経由（`TVG_LOADER_FT=ON`、`TVG_LOADER_TTF=OFF`）で、合字・複雑文字・CJK・多言語フォールバックに対応。
 - `src/audio/` — AudioEngine (miniaudio singleton with sound groups) and AudioStream (file/memory/stream decoding with SDL3 I/O). Supports WAV, MP3, FLAC, and optionally OGG Vorbis/Opus.
@@ -67,7 +67,7 @@ cmake --build build/x64-windows --config Release
 - QuickJS-ng is installed via vcpkg (`quickjs-ng`). CMake target: `qjs`.
 - Comments in the codebase are in Japanese.
 - `manual.js` contains the full API reference for the JS environment.
-- QuickJS-ng は ES2023 対応。duktape 時代に必要だった ES6 ポリフィル（Promise, Map, Set, WeakMap 等）は不要。polyfill.js は最小限のみ。
+- QuickJS-ng は ES2023 対応のため、ES6 ポリフィル（Promise, Map, Set, WeakMap 等）は不要。polyfill.js は最小限のみ。
 - ESM (ES Modules) 対応: `loadModule(path)` で ESM ファイルを読み込み、export された名前空間オブジェクトを返す。`JS_SetModuleLoaderFunc` によりモジュール間の `import` も動作する。TLA (Top-Level Await) 使用モジュールは未対応（課題）。
 - three.js r176 は ESM 版（three.module.min.js + three.core.min.js）を `loadModule()` で読み込み。Babel トランスパイル不要。
 - pixi.js v7.4.3 動作確認済み（UMD 版、data/lib/ に polyfill.js, browser_shim.js, pixi.min.js）。pixi.js v8 は ESM+TLA で読み込み可能だがバッチレンダラーのジオメトリ更新に問題あり（課題）。
