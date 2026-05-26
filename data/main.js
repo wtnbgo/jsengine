@@ -164,6 +164,15 @@ function drawCanvas2DAt(c2d) {
         x0, y1,  0, 1
     ]);
 
+    // 直前にバインドされていた GL state を保存して、終了時に復元する。
+    // pixi.js のような StateSystem キャッシュを持つレンダラが現プログラムを
+    // 認識したまま動作するため、drawCanvas2DAt を非侵襲にする必要がある。
+    var prevProgram = gl.getParameter(gl.CURRENT_PROGRAM);
+    var prevTex = gl.getParameter(gl.TEXTURE_BINDING_2D);
+    var prevArrayBuf = gl.getParameter(gl.ARRAY_BUFFER_BINDING);
+    var prevVao = gl.getParameter(gl.VERTEX_ARRAY_BINDING);
+    var prevActiveTex = gl.getParameter(gl.ACTIVE_TEXTURE);
+
     gl.useProgram(texProgram);
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, c2d.texture);
@@ -171,7 +180,12 @@ function drawCanvas2DAt(c2d) {
     gl.bindBuffer(gl.ARRAY_BUFFER, texVbo);
     gl.bufferSubData(gl.ARRAY_BUFFER, 0, verts);
     gl.drawElements(gl.TRIANGLES, 6, gl.UNSIGNED_SHORT, 0);
-    gl.bindVertexArray(null);
+
+    gl.bindVertexArray(prevVao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, prevArrayBuf);
+    gl.bindTexture(gl.TEXTURE_2D, prevTex);
+    gl.activeTexture(prevActiveTex);
+    gl.useProgram(prevProgram);
 }
 
 // ============================================================
