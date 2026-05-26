@@ -52,6 +52,11 @@ FetchContent_Declare(
 	GIT_TAG release-3.4.0
 )
 
+# SDL3_image が vendored zlib/libpng を使わないように、システム（vcpkg）を先に検出
+find_package(ZLIB REQUIRED)
+find_package(PNG REQUIRED)
+set(SDLIMAGE_VENDORED OFF CACHE BOOL "Use vendored third-party libraries" FORCE)
+
 FetchContent_MakeAvailable(SDL3)
 FetchContent_MakeAvailable(SDL3_image)
 
@@ -71,19 +76,27 @@ find_package(qjs CONFIG REQUIRED)
 # thorvg + (freetype vcpkg) + harfbuzz 
 # ----------------------------------------------------
 
-# ThorVG loader options (shared by both paths)
-option(TVG_BUILD_SHARED "Build shared library" OFF)
-option(TVG_LOADER_SVG "Enable SVG Loader" OFF)
-option(TVG_LOADER_PNG "Enable PNG Loader" OFF)
-option(TVG_LOADER_JPG "Enable JPG Loader" OFF)
-option(TVG_LOADER_LOTTIE "Enable Lottie Loader" OFF)
-option(TVG_LOADER_TTF "Enable TTF Loader" ON)
-option(TVG_LOADER_WEBP "Enable WebP Loader" OFF)
-option(TVG_LOG "Enable log message" OFF)
-option(TVG_FILE_IO "Enable File IO calls" ON)
+# ThorVG loader options (FORCE で既存キャッシュを上書き)
+set(TVG_BUILD_SHARED OFF CACHE BOOL "Build shared library" FORCE)
+set(TVG_LOADER_SVG OFF CACHE BOOL "Enable SVG Loader" FORCE)
+set(TVG_LOADER_PNG OFF CACHE BOOL "Enable PNG Loader" FORCE)
+set(TVG_LOADER_JPG OFF CACHE BOOL "Enable JPG Loader" FORCE)
+set(TVG_LOADER_LOTTIE OFF CACHE BOOL "Enable Lottie Loader" FORCE)
+# TTF と FT は排他的: FT (FreeType + HarfBuzz) を有効にして多言語テキストレンダリングを使用
+set(TVG_LOADER_TTF OFF CACHE BOOL "Enable TTF Loader" FORCE)
+set(TVG_LOADER_FT ON CACHE BOOL "Enable FreeType+HarfBuzz multilingual text loader" FORCE)
+set(TVG_LOADER_WEBP OFF CACHE BOOL "Enable WebP Loader" FORCE)
+set(TVG_LOG OFF CACHE BOOL "Enable log message" FORCE)
+set(TVG_FILE_IO ON CACHE BOOL "Enable File IO calls" FORCE)
 
-option(TVG_ENGINE_SW "Enable Software Rasterizer Engine" ON)
-option(TVG_ENGINE_GL "Enable OpenGL Rasterizer Engine" ON)
+set(TVG_ENGINE_SW ON CACHE BOOL "Enable Software Rasterizer Engine" FORCE)
+set(TVG_ENGINE_GL ON CACHE BOOL "Enable OpenGL Rasterizer Engine" FORCE)
+
+# --- FreeType (vcpkg) ---
+find_package(Freetype CONFIG REQUIRED)
+
+# --- HarfBuzz (vcpkg) ---
+find_package(harfbuzz CONFIG REQUIRED)
 
 # --- ThorVG ---
 FetchContent_Declare(
@@ -93,25 +106,6 @@ FetchContent_Declare(
 	GIT_TAG cmake
 )
 FetchContent_MakeAvailable(thorvg)
-
-# --- FreeType (vcpkg) --- 現在未使用
-# find_package(freetype CONFIG REQUIRED)
-
-# --- HarfBuzz (FetchContent) --- 現在未使用
-# set(HB_HAVE_FREETYPE ON CACHE BOOL "Enable freetype interop helpers" FORCE)
-# set(HB_HAVE_ICU OFF CACHE BOOL "Disable ICU" FORCE)
-# set(HB_BUILD_SUBSET OFF CACHE BOOL "" FORCE)
-# set(HB_BUILD_UTILS OFF CACHE BOOL "" FORCE)
-# set(SKIP_INSTALL_ALL ON CACHE BOOL "" FORCE)
-# set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
-#
-# FetchContent_Declare(
-# 	harfbuzz_source
-# 	GIT_REPOSITORY https://github.com/harfbuzz/harfbuzz.git
-# 	GIT_TAG 13.1.1
-# 	GIT_SHALLOW TRUE
-# )
-# FetchContent_MakeAvailable(harfbuzz_source)
 
 
 # ----------------------------------------------------
@@ -171,8 +165,8 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
 	# glm::glm   # 現在未使用
 	glad
 	thorvg
-	# freetype    # 現在未使用
-	# harfbuzz    # 現在未使用
+	freetype
+	harfbuzz::harfbuzz
 	qjs
 )
 

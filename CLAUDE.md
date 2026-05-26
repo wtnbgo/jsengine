@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Build System
 
-CMake with presets + Ninja Multi-Config generator. Dependencies are managed via vcpkg (quickjs-ng, miniaudio, libvorbis, libopus) and FetchContent (SDL3, SDL3_image, ThorVG).
+CMake with presets + Ninja Multi-Config generator. Dependencies are managed via vcpkg (quickjs-ng, miniaudio, libvorbis, libopus, zlib, libpng, freetype, harfbuzz) and FetchContent (SDL3, SDL3_image, ThorVG).
 
 **Prerequisites:** vcpkg installed with `VCPKG_ROOT` environment variable set.
 
@@ -51,7 +51,7 @@ cmake --build build/x64-windows --config Release
 - `src/jsengine.hpp` / `src/jsengine.cpp` — `JsEngine` class. Manages the QuickJS runtime/context, JS file loading (via SDL_LoadFile), lifecycle calls (update/render/done), and browser-compatible input event dispatch (addEventListener/removeEventListener).
 - `src/dukwebgl.h` / `src/dukwebgl.cpp` — WebGL 2.0 compatible bindings mapping to GLES 3.0. Registers `gl` global and `WebGL2RenderingContext`.
 - `src/webaudio.h` / `src/webaudio.cpp` — Web Audio API bindings. Uses AudioEngine/AudioStream for playback.
-- `src/canvas2d.h` / `src/canvas2d.cpp` — Canvas 2D API bindings using ThorVG SwCanvas. Bitmap-retained mode with deferred rendering: draw ops are batched and rendered to pixel buffer on flush/texture access/getImageData. drawImage uses ThorVG Picture. Dirty rect tracking for partial GL texture upload.
+- `src/canvas2d.h` / `src/canvas2d.cpp` — Canvas 2D API bindings using ThorVG SwCanvas. Bitmap-retained mode with deferred rendering: draw ops are batched and rendered to pixel buffer on flush/texture access/getImageData. drawImage uses ThorVG Picture. Dirty rect tracking for partial GL texture upload. テキスト描画は ThorVG の **FreeType + HarfBuzz (FT) ローダー** 経由（`TVG_LOADER_FT=ON`、`TVG_LOADER_TTF=OFF`）で、合字・複雑文字・CJK・多言語フォールバックに対応。
 - `src/audio/` — AudioEngine (miniaudio singleton with sound groups) and AudioStream (file/memory/stream decoding with SDL3 I/O). Supports WAV, MP3, FLAC, and optionally OGG Vorbis/Opus.
 - `glad/` — GLAD loader for OpenGL ES 3.0 (local subdirectory, built as a CMake sub-project).
 

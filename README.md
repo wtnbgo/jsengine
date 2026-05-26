@@ -44,6 +44,8 @@ jsengine -quiet             # Warnings and errors only
 | QuickJS-ng | vcpkg | JavaScript engine (ES2023) |
 | miniaudio 0.11.25 | Local (src/audio/) | Audio engine (WAV, MP3, FLAC, OGG) |
 | ThorVG | FetchContent | 2D vector graphics (Canvas 2D API) |
+| FreeType / HarfBuzz | vcpkg | Multilingual text shaping (ThorVG FT loader) |
+| zlib / libpng | vcpkg | Shared between SDL3_image and FreeType to avoid vendored conflicts |
 | libvorbis / libopus | vcpkg (optional) | OGG Vorbis / Opus audio decoding |
 
 ## Architecture

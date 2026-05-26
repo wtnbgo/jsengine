@@ -5,7 +5,15 @@
     "quickjs-ng",
     "libvorbis",
     "libogg",
-    "opusfile"
+    "opusfile",
+    "zlib",
+    "libpng",
+    {
+      "name": "freetype",
+      "default-features": false,
+      "features": ["png", "zlib"]
+    },
+    "harfbuzz"
   ],
   "vcpkg-configuration": {
     "registries": [

@@ -519,7 +519,7 @@ static JSValue ctx_fillText(JSContext *ctx, JSValueConst this_val, int argc, JSV
     double x, y;
     JS_ToFloat64(ctx, &x, argv[1]); JS_ToFloat64(ctx, &y, argv[2]);
     auto *text = tvg::Text::gen();
-    // フォント未ロード時はスキップ（ThorVG ハング回避）
+    // フォント未ロード時はスキップ
     if (text->font(d->state.fontName.c_str()) != tvg::Result::Success) {
         text->unref();
         JS_FreeCString(ctx, str);
