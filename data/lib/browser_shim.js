@@ -2,6 +2,9 @@
 // ブラウザ API シム (pixi.js 動作用)
 // ============================================================
 // polyfill.js の後に読み込むこと
+// 多重読み込みガード: gl.getExtension のラップ等が再帰になるのを防ぐ
+if (!globalThis.__browser_shim_loaded) {
+globalThis.__browser_shim_loaded = true;
 
 // --- window ---
 if (typeof window === "undefined") {
@@ -675,3 +678,4 @@ if (typeof globalThis === "undefined") {
 }
 
 console.log("browser_shim.js loaded");
+} // end of __browser_shim_loaded guard
