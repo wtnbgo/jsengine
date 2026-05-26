@@ -78,6 +78,7 @@ cmake --build build/x64-windows --config Release
 - WebGL2 関数として `texStorage2D(target, levels, internalformat, w, h)` / `texStorage3D` をサポート（three.js r176 のボーンテクスチャ作成に必須）。
 - WebGL 固有 enum（`UNPACK_FLIP_Y_WEBGL` 0x9240, `UNPACK_PREMULTIPLY_ALPHA_WEBGL` 0x9241, `UNPACK_COLORSPACE_CONVERSION_WEBGL` 0x9243, `BROWSER_DEFAULT_WEBGL` 0x9244）は `gl` オブジェクトに定数登録済み。`pixelStorei` ではこれらをスキップ。
 - `texImage2D` は WebGL2 の unsized internalformat (`RGBA + FLOAT` 等) を `fixInternalFormat()` で GLES3 の sized format (`RGBA32F` 等) に自動変換する。
-- デバッグビルドでは `KHR_debug` 拡張が利用可能な場合 `glDebugMessageCallbackKHR` を有効化し、GL エラーを同期的にログ出力する（app.cpp）。
+- デバッグビルドでは `KHR_debug` 拡張が利用可能な場合 `glDebugMessageCallbackKHR` を有効化し、GL エラーを同期的にログ出力する（app.cpp）。Release ビルド（`NDEBUG` 定義時）では `#ifndef NDEBUG` で無効化。
+- `globalThis.__DEBUG__` フラグ: jsengine.cpp が `NDEBUG` の有無で `true`/`false` を JS に渡す。Demo 9 のレンダ結果ピクセル検証など、本番では出したくないログを `if (globalThis.__DEBUG__) { ... }` でガードする。
 - Demo 1 に Canvas2D ベースの HUD オーバーレイ（操作説明・デモ一覧・システム情報）を表示。
 - Demo 9: three-vrm v3 による VRM アバター表示。GLTFLoader.parse でバイナリ VRM パース、MToon シェーダー + SkinnedMesh によるフルカラー描画動作。

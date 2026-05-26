@@ -1140,15 +1140,13 @@ function renderDemo9() {
 
     try {
         vrmRenderer.resetState();
-        // レンダリング前に GL エラーをクリア
-        while (gl.getError() !== gl.NO_ERROR) {}
         vrmRenderer.render(vrmScene, vrmCamera);
-        if (!renderDemo9._glChecked && vrmModel) {
+        // Debug ビルドのみ: 初回レンダ結果を検証してログ出力
+        if (globalThis.__DEBUG__ && !renderDemo9._glChecked && vrmModel) {
             renderDemo9._glChecked = true;
             var err = gl.getError();
             if (err !== gl.NO_ERROR) console.error("GL error after VRM render: 0x" + err.toString(16));
             else console.log("GL: no errors after VRM render");
-            // ピクセル色サンプリング（中央付近）
             var px = new Uint8Array(4);
             gl.readPixels(640, 360, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
             console.log("Center pixel(640,360): rgba=("+px[0]+","+px[1]+","+px[2]+","+px[3]+")");
@@ -1156,7 +1154,6 @@ function renderDemo9() {
             console.log("Pixel(500,400): rgba=("+px[0]+","+px[1]+","+px[2]+","+px[3]+")");
             gl.readPixels(640, 200, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
             console.log("Pixel(640,200): rgba=("+px[0]+","+px[1]+","+px[2]+","+px[3]+")");
-            // ボーンテクスチャ情報
             vrmModel.scene.traverse(function(child) {
                 if (child.isSkinnedMesh && child.skeleton && !renderDemo9._boneLogged) {
                     renderDemo9._boneLogged = true;
@@ -1165,7 +1162,6 @@ function renderDemo9() {
                         " boneTexture=" + !!skel.boneTexture +
                         " boneMatrices.length=" + (skel.boneMatrices ? skel.boneMatrices.length : "N/A"));
                     if (skel.boneMatrices && skel.boneMatrices.length >= 16) {
-                        // 最初のボーン行列の値
                         var m = skel.boneMatrices;
                         console.log("Bone0 matrix: [" + m[0].toFixed(3)+","+m[1].toFixed(3)+","+m[2].toFixed(3)+","+m[3].toFixed(3)+","
                             +m[4].toFixed(3)+","+m[5].toFixed(3)+","+m[6].toFixed(3)+","+m[7].toFixed(3)+","

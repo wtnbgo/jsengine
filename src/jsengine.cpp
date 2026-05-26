@@ -1722,6 +1722,13 @@ bool JsEngine::init(int argc, char **argv) {
     JS_SetPropertyStr(ctx_, perf, "now", JS_NewCFunction(ctx_, native_performance_now, "now", 0));
     JS_SetPropertyStr(ctx_, global, "performance", perf);
 
+    // ビルド種別フラグ: Debug ビルドでのみ JS 側のデバッグ用検証コードが動く
+#ifdef NDEBUG
+    JS_SetPropertyStr(ctx_, global, "__DEBUG__", JS_FALSE);
+#else
+    JS_SetPropertyStr(ctx_, global, "__DEBUG__", JS_TRUE);
+#endif
+
     JS_FreeValue(ctx_, global);
 
     // File System Access API 登録

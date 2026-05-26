@@ -53,7 +53,8 @@ bool App::init(int argc, char *argv[])
     SDL_Log("Loaded GLES %d.%d.\n",
            GLAD_VERSION_MAJOR(gles_version), GLAD_VERSION_MINOR(gles_version));
 
-    // KHR_debug が使える場合は GL エラーの詳細メッセージを取得（デバッグ用）
+#ifndef NDEBUG
+    // KHR_debug が使える場合は GL エラーの詳細メッセージを取得（Debug ビルドのみ）
     if (GLAD_GL_KHR_debug && glad_glDebugMessageCallbackKHR) {
         glEnable(GL_DEBUG_OUTPUT_KHR);
         glEnable(GL_DEBUG_OUTPUT_SYNCHRONOUS_KHR);
@@ -68,6 +69,7 @@ bool App::init(int argc, char *argv[])
             nullptr);
         SDL_Log("GL KHR_debug callback enabled");
     }
+#endif
 
     SDL_GL_SetSwapInterval(1); // 1: VSYNC
 
