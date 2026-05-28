@@ -85,6 +85,7 @@ cmake --build build/x64-windows --config Release
 - デバッグビルドでは `KHR_debug` 拡張が利用可能な場合 `glDebugMessageCallbackKHR` を有効化し、GL エラーを同期的にログ出力する（app.cpp）。Release ビルド（`NDEBUG` 定義時）では `#ifndef NDEBUG` で無効化。
 - `globalThis.__DEBUG__` フラグ: jsengine.cpp が `NDEBUG` の有無で `true`/`false` を JS に渡す。Demo 9 のレンダ結果ピクセル検証など、本番では出したくないログを `if (globalThis.__DEBUG__) { ... }` でガードする。
 - Canvas2D テキストの座標系: ThorVG `Text` の anchor は ascender top（≒ `TextMetrics.ascent` 分だけベースラインより上）。CSS Canvas 仕様の `textBaseline` は em-square 基準なので、`ascent + descent`（hhea 由来で em より大きい）を em の比率で按分してから anchor を計算する。CSS px → ThorVG size は `* 72/96`、`TextMetrics`/`GlyphMetrics` の戻り値は CSS px と同じスケールで扱う。
+- Canvas2D フォント解決: ThorVG 側 (FT loader) を拡張し `Text::load()` 時に FT_Face から family/style 名を取り込む。`LoaderMgr::font()` の name マッチングが「ロード時 name / family / "family Style"」のいずれにも対応するので、`ctx.font = "24px Open Sans"` のような CSS 風指定がそのまま動く。`ctx.font` パーサは引用符なしの family 名でも空白を含む文字列をカンマまで取り込む。`Canvas2D.fontInfo(name)` で `{family, style}` を取得可能。
 - Demo 1 に Canvas2D ベースの HUD オーバーレイ（操作説明・デモ一覧・システム情報）を表示。
 - Demo 3: Canvas2D テキスト機能の総合検証サンプル。1280×720 全画面 5 ページ（`[`/`]` で切替）。Page1=font family/size, Page2=textAlign/textBaseline, Page3=measureText 可視化, Page4=多言語+textLocale, Page5=stroke/transform/getImageData。`docs/demo3_text_verification.md` に期待挙動、`docs/demo3_reference.html` にブラウザ参照ページ。
 - Demo 9: three-vrm v3 による VRM アバター表示。GLTFLoader.parse でバイナリ VRM パース、MToon シェーダー + SkinnedMesh によるフルカラー描画動作。

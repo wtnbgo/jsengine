@@ -412,12 +412,13 @@ function _demo3Page1(c) {
     _demo3Header(c, "Font family / size");
     var W = c.width;
     var families = [
-        { name: "OpenSans-Regular",    color: "#f0f6fc", text:"AaBb 0123 jpqg — Latin baseline" },
-        { name: "OpenSans-Bold",       color: "#3fb950", text:"AaBb 0123 jpqg — Bold" },
-        { name: "Roboto-Regular",      color: "#58a6ff", text:"Roboto 0123 () [] {}" },
+        { name: "OpenSans-Regular",    color: "#f0f6fc", text:"AaBb 0123 jpqg — file name key" },
+        { name: "Open Sans",           color: "#f0f6fc", text:"AaBb 0123 jpqg — family name (CSS-like)" },
+        { name: "Open Sans Bold",      color: "#3fb950", text:"AaBb 0123 jpqg — \"family Style\"" },
+        { name: "Roboto",              color: "#58a6ff", text:"Roboto 0123 () [] {} — family name" },
         { name: "RobotoMono-VariableFont_wght", color: "#d29922", text:"mono = code(); /* x */" },
-        { name: "NotoSansJP-Regular",  color: "#79c0ff", text:"日本語フォント あいうえお 漢字 0123" },
-        { name: "NotoEmoji-Regular",   color: "#ffb3b3", text:"\u{1F600}\u{1F44D}\u{1F31F}\u{2764}\u{1F389}\u{1F525}" }
+        { name: "Noto Sans JP",        color: "#79c0ff", text:"日本語フォント あいうえお 漢字 0123 — family name" },
+        { name: "Noto Emoji",          color: "#ffb3b3", text:"\u{1F600}\u{1F44D}\u{1F31F}\u{2764}\u{1F389}\u{1F525} — family name" }
     ];
     var y = 130;
     c.textBaseline = "alphabetic";
@@ -426,7 +427,16 @@ function _demo3Page1(c) {
         c.font = "30px " + families[i].name;
         c.fillStyle = families[i].color;
         c.fillText(families[i].name + "  " + families[i].text, 24, y);
-        y += 48;
+        // Canvas2D.fontInfo() で取得した family/style を末尾に表示
+        var info = Canvas2D.fontInfo(families[i].name);
+        c.save();
+        c.font = "14px OpenSans-Regular";
+        c.fillStyle = "#6e7681";
+        var infoStr = info ? ("→ family='" + info.family + "' style='" + info.style + "'")
+                           : "→ (fontInfo: not found)";
+        c.fillText(infoStr, 24, y + 16);
+        c.restore();
+        y += 56;
     }
     // サイズスケール: 10〜96 px
     c.fillStyle = "#30363d";

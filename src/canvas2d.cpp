@@ -1098,7 +1098,10 @@ static JSValue ctx_set_font(JSContext *ctx, JSValueConst this_val, int argc, JSV
             if (quote) {
                 if (*q == quoteCh) break;
             } else {
-                if (*q == ',' || *q == ' ' || *q == '\t') break;
+                //引用符なしでも空白を含む family 名を許可する。
+                //("30px Open Sans" / "30px Noto Sans JP" 等)。
+                //フォールバック区切りのカンマで切り、末尾空白は後段で trim する。
+                if (*q == ',') break;
             }
             nm[n++] = *q++;
         }
@@ -1249,6 +1252,24 @@ static JSValue static_loadFont(JSContext *ctx, JSValueConst this_val, int argc, 
     return JS_UNDEFINED;
 }
 
+// Canvas2D.fontInfo(name) -> { family, style } | null
+// name はロード時のキー (ファイル名拡張子なし / 明示 alias) でも、フォント
+// 内部の family 名 / "family Style" でも引ける (ThorVG 側 matchFontName)。
+static JSValue static_fontInfo(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    const char *key = JS_ToCString(ctx, argv[0]);
+    if (!key) return JS_EXCEPTION;
+    tvg::TextInfo info{};
+    auto result = tvg::Text::info(key, info);
+    JS_FreeCString(ctx, key);
+    if (result != tvg::Result::Success) return JS_NULL;
+    JSValue obj = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, obj, "family",
+        info.family ? JS_NewString(ctx, info.family) : JS_NULL);
+    JS_SetPropertyStr(ctx, obj, "style",
+        info.style  ? JS_NewString(ctx, info.style)  : JS_NULL);
+    return obj;
+}
+
 // ============================================================
 // コンストラクタ
 // ============================================================
@@ -1373,6 +1394,8 @@ void canvas2d_bind(JSContext *ctx) {
 
     // static メソッド: Canvas2D.loadFont(path [, alias])
     JS_SetPropertyStr(ctx, ctor, "loadFont", JS_NewCFunction(ctx, static_loadFont, "loadFont", 2));
+    // static メソッド: Canvas2D.fontInfo(name) -> { family, style } | null
+    JS_SetPropertyStr(ctx, ctor, "fontInfo", JS_NewCFunction(ctx, static_fontInfo, "fontInfo", 1));
 
     JSValue global = JS_GetGlobalObject(ctx);
     JS_SetPropertyStr(ctx, global, "Canvas2D", ctor);

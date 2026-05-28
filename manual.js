@@ -96,8 +96,12 @@ source.stop();                         // 再生停止
 // flush() で GL テクスチャにアップロードし、WebGL から利用可能。
 // browser_shim.js の getContext("2d") が返す 2D コンテキストとしても使用される。
 
-Canvas2D.loadFont("font.ttf");                          // フォントファイル読み込み（ThorVG 内部名で登録）
+Canvas2D.loadFont("font.ttf");                          // フォントファイル読み込み（ファイル名 / family / "family Style" で参照可能）
 Canvas2D.loadFont("font.ttf", "MyFont");                // alias 名で登録（任意のフォント名で使用可能）
+
+// ロード済みフォントの内部 family / style 名を取得 (見つからなければ null)
+var info = Canvas2D.fontInfo("NotoSansJP-Regular");      // => { family: "Noto Sans JP", style: "Regular" }
+// ctx.font は "サイズpx ファイル名" / "サイズpx 'family 名'" / 'サイズpx "family Style"' のいずれでも指定可
 
 var ctx = new Canvas2D(512, 512);                        // オフスクリーンキャンバス作成
 ctx.width;                                               // 読み取り専用
