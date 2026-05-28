@@ -25,6 +25,15 @@ make run
 
 The preset is auto-selected based on the OS (`x64-windows` / `x64-linux` / `x64-macos`).
 
+### Developer Options
+
+```bash
+# Build using a local ../thorvg checkout instead of the FetchContent fork
+cmake --preset x64-windows -DUSE_LOCAL_THORVG=ON
+```
+
+`USE_LOCAL_THORVG=ON` uses `../thorvg/CMakeLists.txt` via `add_subdirectory`, intended for iterating on ThorVG patches without a push/tag-bump round-trip. Default OFF retains the FetchContent fetch from `wtnbgo/thorvg` (branch `cmake`).
+
 ### Launch Options
 
 ```bash

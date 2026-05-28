@@ -99,13 +99,28 @@ find_package(Freetype CONFIG REQUIRED)
 find_package(harfbuzz CONFIG REQUIRED)
 
 # --- ThorVG ---
-FetchContent_Declare(
-	thorvg
-	EXCLUDE_FROM_ALL
-	GIT_REPOSITORY https://github.com/wtnbgo/thorvg.git
-	GIT_TAG cmake
-)
-FetchContent_MakeAvailable(thorvg)
+# 開発用: USE_LOCAL_THORVG=ON で ../thorvg のローカルチェックアウトを直接使う。
+# 既存ユーザー / CI 向けには従来通り wtnbgo/thorvg (branch: cmake) を FetchContent。
+option(USE_LOCAL_THORVG "Use ../thorvg local checkout instead of FetchContent" OFF)
+if(USE_LOCAL_THORVG)
+	set(_THORVG_LOCAL_DIR "${CMAKE_SOURCE_DIR}/../thorvg")
+	if(NOT EXISTS "${_THORVG_LOCAL_DIR}/CMakeLists.txt")
+		message(FATAL_ERROR
+			"USE_LOCAL_THORVG=ON but ${_THORVG_LOCAL_DIR}/CMakeLists.txt not found")
+	endif()
+	message(STATUS "Using local ThorVG at ${_THORVG_LOCAL_DIR}")
+	add_subdirectory("${_THORVG_LOCAL_DIR}" thorvg_build EXCLUDE_FROM_ALL)
+	# 下流の target_include_directories で参照する変数を FetchContent と合わせる
+	set(thorvg_SOURCE_DIR "${_THORVG_LOCAL_DIR}")
+else()
+	FetchContent_Declare(
+		thorvg
+		EXCLUDE_FROM_ALL
+		GIT_REPOSITORY https://github.com/wtnbgo/thorvg.git
+		GIT_TAG cmake
+	)
+	FetchContent_MakeAvailable(thorvg)
+endif()
 
 
 # ----------------------------------------------------

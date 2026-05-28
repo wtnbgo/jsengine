@@ -37,6 +37,10 @@ The Makefile auto-selects the preset based on OS: `x64-windows`, `x64-linux`, or
 - `x64-linux` — Linux desktop
 - `arm64-android` / `x64-android` — Android builds (shared SDL3)
 
+### Developer options
+
+- `-D USE_LOCAL_THORVG=ON` — build with `../thorvg/CMakeLists.txt` (via `add_subdirectory`) instead of FetchContent. For iterating on ThorVG patches locally. Default OFF uses FetchContent (`wtnbgo/thorvg` branch `cmake`).
+
 ### Direct CMake Usage
 
 ```bash
