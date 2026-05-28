@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>Demo 3 Canvas2D Reference (browser-side ground truth)</title>
+<style>
+  @font-face { font-family: "OpenSans-Regular";    src: url("../data/fonts/OpenSans-Regular.ttf"); }
+  @font-face { font-family: "OpenSans-Bold";       src: url("../data/fonts/OpenSans-Bold.ttf"); }
+  @font-face { font-family: "Roboto-Regular";      src: url("../data/fonts/Roboto-Regular.ttf"); }
+  @font-face { font-family: "Roboto-Bold";         src: url("../data/fonts/Roboto-Bold.ttf"); }
+  @font-face { font-family: "RobotoMono-VariableFont_wght"; src: url("../data/fonts/RobotoMono-VariableFont_wght.ttf"); }
+  @font-face { font-family: "NotoSansJP-Regular";  src: url("../data/fonts/NotoSansJP-Regular.otf"); }
+  @font-face { font-family: "NotoSansSC-Regular";  src: url("../data/fonts/NotoSansSC-Regular.otf"); }
+  @font-face { font-family: "NotoSansTC-Regular";  src: url("../data/fonts/NotoSansTC-Regular.otf"); }
+  @font-face { font-family: "NotoEmoji-Regular";   src: url("../data/fonts/NotoEmoji-Regular.ttf"); }
+
+  html, body { margin: 0; padding: 0; background: #161b22; color: #c9d1d9;
+               font-family: "OpenSans-Regular", "NotoSansJP-Regular", sans-serif; }
+  .wrap { max-width: 1280px; margin: 0 auto; padding: 16px; }
+  h1 { font-size: 18px; margin: 6px 0 12px; color: #79c0ff; }
+  .nav { margin-bottom: 12px; }
+  .nav button { background:#21262d; color:#c9d1d9; border:1px solid #30363d;
+                padding:4px 10px; font-size:14px; cursor:pointer; margin-right:4px; }
+  .nav button.active { background:#1f6feb; border-color:#1f6feb; color:#fff; }
+  canvas { display:block; background:#0d1117; box-shadow: 0 0 12px #000; }
+  .note { font-size: 12px; color: #8b949e; margin-top: 8px; }
+  .legend { font-size: 12px; margin-top: 8px; color:#8b949e; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Demo 3 Canvas2D Reference — ブラウザ側で見る「正解」レンダリング</h1>
+  <div class="nav" id="nav"></div>
+  <canvas id="c" width="1280" height="720"></canvas>
+  <div class="note">
+    ← / → / 数字キー (1〜5) でページ切替。<a href="#" id="dump">[ピクセル検査ログを表示]</a>
+  </div>
+  <div class="legend">
+    このページは <code>data/fonts/</code> の同じ TTF/OTF を @font-face で読み込み、
+    jsengine の Demo 3 と同じ描画コードを Canvas 2D API で実行します。
+    ローカル file:// で開いた場合、ブラウザによっては font 読み込みがブロックされます。
+    その場合は <code>python -m http.server</code> 等で <code>D:/test/jsengine/</code> を配信し、
+    <code>http://localhost:8000/docs/demo3_reference.html</code> で開いてください。
+    <br>
+    <b>jsengine 側との差異:</b>
+    <ul>
+      <li><code>textLocale</code> はブラウザ標準ではないので無視されます（FT loader 用の言語ヒント）。CJK 表示はブラウザ自身の font fallback に任せる形になります。</li>
+      <li>絵文字: ブラウザはシステム標準のカラー絵文字を使う場合あり。jsengine は NotoEmoji-Regular のモノクロ字形を使うので塗りつぶしの形になります。</li>
+      <li>NotoEmoji-Regular だけを指定した行で、ブラウザがシステムフォントに fallback して立体絵文字を表示することがあります。これは jsengine 側の見え方とは異なるが、各文字が「出ている」こと自体は両方で確認できます。</li>
+    </ul>
+  </div>
+</div>
+
+<script>
+// ============================================================
+// jsengine の data/main.js から Demo 3 部分をそのまま移植
+// (textLocale プロパティだけ Canvas2D に追加して no-op にする)
+// ============================================================
+
+(function () {
+  const canvas = document.getElementById("c");
+  const ctx = canvas.getContext("2d");
+  const screenW = canvas.width, screenH = canvas.height;
+  // textLocale を無視可能なプロパティとしてセット可能に
+  let _locale = "";
+  Object.defineProperty(ctx, "textLocale", { get() { return _locale; }, set(v) { _locale = v || ""; } });
+
+  let demo3Page = 1;
+  const demo3PageMax = 5;
+  let demo3LastPixelCheck = "";
+
+  function _demo3Header(c, title) {
+    const W = c.canvas.width;
+    c.fillStyle = "#0d1117";
+    c.fillRect(0, 0, W, c.canvas.height);
+    c.font = "32px OpenSans-Bold";
+    c.fillStyle = "#58a6ff";
+    c.textAlign = "left";
+    c.textBaseline = "alphabetic";
+    c.fillText("Demo 3: Canvas2D Text", 24, 44);
+    c.font = "18px OpenSans-Regular";
+    c.fillStyle = "#8b949e";
+    c.fillText("Page " + demo3Page + "/" + demo3PageMax + "  (← / → to switch)  — " + title, 24, 72);
+    c.fillStyle = "#30363d";
+    c.fillRect(0, 86, W, 1);
+  }
+
+  function _demo3Page1(c) {
+    _demo3Header(c, "Font family / size");
+    const W = c.canvas.width;
+    const families = [
+      { name: "OpenSans-Regular",    color: "#f0f6fc", text: "AaBb 0123 jpqg — Latin baseline" },
+      { name: "OpenSans-Bold",       color: "#3fb950", text: "AaBb 0123 jpqg — Bold" },
+      { name: "Roboto-Regular",      color: "#58a6ff", text: "Roboto 0123 () [] {}" },
+      { name: "RobotoMono-VariableFont_wght", color: "#d29922", text: "mono = code(); /* x */" },
+      { name: "NotoSansJP-Regular",  color: "#79c0ff", text: "日本語フォント あいうえお 漢字 0123" },
+      { name: "NotoEmoji-Regular",   color: "#ffb3b3", text: "\u{1F600}\u{1F44D}\u{1F31F}\u{2764}\u{1F389}\u{1F525}" }
+    ];
+    let y = 130;
+    c.textBaseline = "alphabetic"; c.textAlign = "left";
+    for (const f of families) {
+      c.font = "30px " + f.name;
+      c.fillStyle = f.color;
+      c.fillText(f.name + "  " + f.text, 24, y);
+      y += 48;
+    }
+    c.fillStyle = "#30363d";
+    c.fillRect(0, y + 10, W, 1);
+    y += 36;
+    const sizes = [10, 14, 18, 24, 32, 48, 64, 96];
+    let sx = 24;
+    for (const s of sizes) {
+      c.font = s + "px OpenSans-Regular";
+      c.fillStyle = "#79c0ff";
+      const label = String(s);
+      c.fillText(label, sx, y + s);
+      const m = c.measureText(label);
+      c.fillStyle = "#21262d";
+      c.fillRect(sx, y + s + 4, m.width, 1);
+      sx += m.width + 24;
+      if (sx > W - 100) break;
+    }
+    c.fillStyle = "#8b949e";
+    c.font = "16px OpenSans-Regular";
+    c.fillText("10 / 14 / 18 / 24 / 32 / 48 / 64 / 96 px  (横線は measureText().width)",
+               24, y + 140);
+  }
+
+  function _demo3Page2(c) {
+    _demo3Header(c, "textAlign / textBaseline");
+    const W = c.canvas.width;
+    const cx = W * 0.5;
+    c.font = "26px OpenSans-Regular";
+    c.fillStyle = "#8b949e";
+    c.textAlign = "left"; c.textBaseline = "alphabetic";
+    c.fillText("textAlign  (vertical guide at center)", 24, 130);
+    c.fillStyle = "#30363d";
+    c.fillRect(cx, 140, 1, 200);
+
+    const ay = 180;
+    const aligns = [
+      { v: "left",   c: "#3fb950", t: "left ← テキスト揃え" },
+      { v: "center", c: "#58a6ff", t: "center  中央揃え 🎯" },
+      { v: "right",  c: "#bc8cff", t: "右揃え right →" }
+    ];
+    c.textBaseline = "alphabetic";
+    for (let i = 0; i < aligns.length; i++) {
+      c.font = "32px NotoSansJP-Regular";
+      c.textAlign = aligns[i].v;
+      c.fillStyle = aligns[i].c;
+      c.fillText(aligns[i].t, cx, ay + i * 48);
+    }
+
+    c.textAlign = "left";
+    c.fillStyle = "#8b949e";
+    c.font = "26px OpenSans-Regular";
+    c.fillText("textBaseline  (horizontal guide for each)", 24, 400);
+
+    const baselines = [
+      { v: "top",        c: "#3fb950" },
+      { v: "hanging",    c: "#56d364" },
+      { v: "middle",     c: "#58a6ff" },
+      { v: "alphabetic", c: "#bc8cff" },
+      { v: "ideographic",c: "#a8a3f7" },
+      { v: "bottom",     c: "#d29922" }
+    ];
+    const bx = 32;
+    for (let j = 0; j < baselines.length; j++) {
+      const by = 450 + j * 44;
+      c.fillStyle = "#30363d";
+      c.fillRect(bx, by, W - bx * 2, 1);
+      c.font = "32px OpenSans-Regular";
+      c.textBaseline = baselines[j].v;
+      c.fillStyle = baselines[j].c;
+      c.fillText(baselines[j].v + " — Apgy0 漢字", bx + 8, by);
+    }
+    c.textBaseline = "alphabetic";
+  }
+
+  function _demo3Page3(c) {
+    _demo3Header(c, "measureText() visualization");
+    const W = c.canvas.width;
+    c.textAlign = "left"; c.textBaseline = "alphabetic";
+    const samples = [
+      { font: "22px OpenSans-Regular",     text: "The quick brown fox jumps over the lazy dog" },
+      { font: "30px OpenSans-Bold",        text: "Bold variation 太字" },
+      { font: "32px Roboto-Regular",       text: "Roboto sample 0123 () [] {}" },
+      { font: "36px RobotoMono-VariableFont_wght", text: "mono = code()" },
+      { font: "30px NotoSansJP-Regular",   text: "日本語の文字列の幅を測ります" },
+      { font: "30px NotoSansSC-Regular",   text: "中文字符串宽度测试" },
+      { font: "40px NotoEmoji-Regular",    text: "\u{1F600}\u{1F44D}\u{2764}\u{1F525}\u{1F389}" },
+      { font: "48px OpenSans-Bold",        text: "BIG 大きい" }
+    ];
+    let y = 150;
+    for (const s of samples) {
+      c.font = s.font;
+      const m = c.measureText(s.text);
+      const x0 = 32;
+      const top = y - (m.actualBoundingBoxAscent || m.fontBoundingBoxAscent || 0);
+      const bot = y + (m.actualBoundingBoxDescent || m.fontBoundingBoxDescent || 0);
+      c.fillStyle = "#16313d"; c.fillRect(x0, top, m.width, bot - top);
+      c.fillStyle = "#30363d"; c.fillRect(x0, y, m.width, 1);
+      c.fillStyle = "#f0f6fc"; c.fillText(s.text, x0, y);
+      c.font = "14px OpenSans-Regular";
+      c.fillStyle = "#8b949e";
+      c.fillText("w=" + m.width.toFixed(1) +
+                 " a=" + (m.actualBoundingBoxAscent || 0).toFixed(1) +
+                 " d=" + (m.actualBoundingBoxDescent || 0).toFixed(1),
+                 W - 260, y);
+      y += 72;
+      if (y > c.canvas.height - 60) break;
+    }
+  }
+
+  function _demo3Page4(c) {
+    _demo3Header(c, "Multilingual + textLocale");
+    c.textAlign = "left"; c.textBaseline = "alphabetic";
+    const lines = [
+      { font: "32px NotoSansJP-Regular",  loc: "ja-JP", color: "#f0f6fc", text: "日本語: 今日もコードを書こう。 (ja-JP)" },
+      { font: "32px NotoSansSC-Regular",  loc: "zh-CN", color: "#58a6ff", text: "简体中文: 今天也来写代码。" },
+      { font: "32px NotoSansTC-Regular",  loc: "zh-TW", color: "#bc8cff", text: "繁體中文: 今天也來寫程式碼。" },
+      { font: "40px NotoEmoji-Regular",   loc: "",      color: "#d29922", text: "\u{1F600}\u{1F44D}\u{1F31F}\u{2764}\u{1F389} \u{1F525}\u{1F496}\u{1F60A}" },
+      { font: "30px OpenSans-Regular",    loc: "",      color: "#3fb950", text: "Mixed: Hello コード 你好 (fallback test)" }
+    ];
+    let y = 160;
+    for (const l of lines) {
+      c.font = l.font;
+      c.textLocale = l.loc;
+      c.fillStyle = l.color;
+      c.fillText(l.text, 32, y);
+      c.font = "14px OpenSans-Regular";
+      c.fillStyle = "#8b949e";
+      c.fillText("locale='" + l.loc + "'  font='" + l.font + "'", 32, y + 24);
+      y += 88;
+    }
+    c.textLocale = "";
+    c.font = "16px OpenSans-Regular";
+    c.fillStyle = "#8b949e";
+    c.fillText("textLocale は ThorVG FT loader の HarfBuzz 言語タグに渡される。",
+               32, c.canvas.height - 80);
+    c.fillText("該当 family にグリフが無い場合、loadFont 済みフォントから fallback される。",
+               32, c.canvas.height - 56);
+  }
+
+  function _demo3Page5(c) {
+    _demo3Header(c, "strokeText / transform / getImageData");
+    const W = c.canvas.width, H = c.canvas.height;
+    c.textAlign = "left"; c.textBaseline = "alphabetic";
+
+    c.font = "56px OpenSans-Bold";
+    c.lineWidth = 1; c.strokeStyle = "#f78166";
+    c.strokeText("Outline 1px ぬき文字", 32, 170);
+
+    c.font = "56px NotoSansJP-Regular";
+    c.lineWidth = 4; c.strokeStyle = "#58a6ff";
+    c.strokeText("輪郭 4px 日本語", 32, 240);
+
+    c.font = "56px OpenSans-Bold";
+    c.fillStyle = "#3fb950";
+    c.fillText("Fill + Stroke 重ね", 32, 310);
+    c.lineWidth = 2; c.strokeStyle = "#0d1117";
+    c.strokeText("Fill + Stroke 重ね", 32, 310);
+
+    c.save();
+    c.translate(W * 0.62, 200); c.rotate(-Math.PI / 6);
+    c.font = "54px NotoSansJP-Regular"; c.fillStyle = "#bc8cff";
+    c.fillText("回転テキスト", 0, 0);
+    c.restore();
+
+    c.save();
+    c.translate(W * 0.7, 290); c.rotate(Math.PI / 12);
+    c.font = "60px NotoEmoji-Regular";
+    c.fillText("\u{1F389}\u{2728}\u{1F31F}", 0, 0);
+    c.restore();
+
+    c.save();
+    c.translate(W * 0.62, 360); c.scale(1.6, 1.0);
+    c.font = "36px OpenSans-Regular"; c.fillStyle = "#d29922";
+    c.fillText("scaleX 1.6x 横長", 0, 0);
+    c.restore();
+
+    const bx = 32, by = 380, bw = 500, bh = 140;
+    c.fillStyle = "#222";    c.fillRect(bx, by, bw, bh);
+    c.fillStyle = "#ff0000"; c.fillRect(bx + 10, by + 10, bw - 20, bh - 20);
+    c.font = "60px NotoSansJP-Regular";
+    c.fillStyle = "#ffffff";
+    c.textAlign = "center"; c.textBaseline = "middle";
+    c.fillText("検査 CHECK", bx + bw / 2, by + bh / 2);
+    c.textAlign = "left"; c.textBaseline = "alphabetic";
+
+    const samples = [
+      { name: "red bg",         x: bx + 30,            y: by + 30 },
+      { name: "center (white)", x: bx + bw / 2,        y: by + bh / 2 },
+      { name: "red right",      x: bx + bw - 30,       y: by + bh - 30 }
+    ];
+    const infoLines = [];
+    for (const s of samples) {
+      const img = c.getImageData(Math.floor(s.x), Math.floor(s.y), 1, 1).data;
+      infoLines.push(s.name + " @ (" + Math.floor(s.x) + "," + Math.floor(s.y) +
+                     ") = rgba(" + img[0] + "," + img[1] + "," + img[2] + "," + img[3] + ")");
+    }
+    const allInfo = infoLines.join(" | ");
+    if (allInfo !== demo3LastPixelCheck) {
+      demo3LastPixelCheck = allInfo;
+      console.log("Demo3 page5: " + allInfo);
+    }
+    c.font = "16px OpenSans-Regular";
+    c.fillStyle = "#8b949e";
+    for (let k = 0; k < infoLines.length; k++) {
+      c.fillText(infoLines[k], bx, by + bh + 26 + k * 22);
+    }
+    c.fillText("白文字近傍は (255,255,255,255)、赤背景近傍は (255,0,0,255) に近いはず",
+               bx, by + bh + 26 + infoLines.length * 22 + 6);
+
+    c.font = "16px OpenSans-Regular";
+    c.fillStyle = "#79c0ff";
+    const m = c.measureText("Aj");
+    c.fillText("measureText('Aj') @16px: w=" + m.width.toFixed(2) +
+               " a=" + (m.actualBoundingBoxAscent || 0).toFixed(2) +
+               " d=" + (m.actualBoundingBoxDescent || 0).toFixed(2),
+               32, H - 32);
+  }
+
+  function render() {
+    if      (demo3Page === 1) _demo3Page1(ctx);
+    else if (demo3Page === 2) _demo3Page2(ctx);
+    else if (demo3Page === 3) _demo3Page3(ctx);
+    else if (demo3Page === 4) _demo3Page4(ctx);
+    else if (demo3Page === 5) _demo3Page5(ctx);
+    updateNav();
+  }
+
+  function updateNav() {
+    const nav = document.getElementById("nav");
+    nav.innerHTML = "";
+    const titles = ["1. Font / size", "2. align / baseline", "3. measureText", "4. Multilingual", "5. stroke / transform / pixel"];
+    for (let i = 0; i < titles.length; i++) {
+      const b = document.createElement("button");
+      b.textContent = titles[i];
+      if (demo3Page === i + 1) b.classList.add("active");
+      b.onclick = () => { demo3Page = i + 1; render(); };
+      nav.appendChild(b);
+    }
+  }
+
+  window.addEventListener("keydown", e => {
+    if (e.key === "ArrowLeft" || e.key === "[") {
+      demo3Page = ((demo3Page - 2 + demo3PageMax) % demo3PageMax) + 1; render();
+    }
+    if (e.key === "ArrowRight" || e.key === "]") {
+      demo3Page = (demo3Page % demo3PageMax) + 1; render();
+    }
+    if (/^[1-5]$/.test(e.key)) { demo3Page = parseInt(e.key); render(); }
+  });
+
+  document.getElementById("dump").onclick = e => {
+    e.preventDefault();
+    console.log("=== current pixel check ===\n" + demo3LastPixelCheck);
+  };
+
+  // フォント読み込みを待ってから描画
+  if (document.fonts && document.fonts.ready) {
+    document.fonts.ready.then(render);
+  } else {
+    window.addEventListener("load", render);
+  }
+})();
+</script>
+</body>
+</html>

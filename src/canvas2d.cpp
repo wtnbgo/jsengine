@@ -119,6 +119,8 @@ struct DrawState {
     std::string fontName;
     float fontSize = 16.0f;
     std::string textAlign = "left";
+    std::string textBaseline = "alphabetic";  // top/hanging/middle/alphabetic/ideographic/bottom
+    std::string textLocale;                   // BCP47 タグ ("ja-JP" 等)。ThorVG FT loader 用
     tvg::Matrix transform = {1,0,0, 0,1,0, 0,0,1};
 };
 
@@ -511,6 +513,97 @@ static JSValue ctx_stroke(JSContext *ctx, JSValueConst this_val, int argc, JSVal
 // ============================================================
 // テキスト
 // ============================================================
+//
+// CSS px と ThorVG の font size 単位の橋渡し:
+//   ThorVG の Text::size() はポイントサイズ (1pt = 1/72 inch) を期待。
+//   CSS の font-size は 1px = 1/96 inch の論理ピクセル。
+//   したがって CSS px → ThorVG pt 変換は 72/96 = 0.75 倍。
+//   GlyphMetrics.advance や TextMetrics.ascent/descent も pt スケールで
+//   返るので、CSS px に戻すには 1/0.75 = 4/3 倍する。
+
+// CSS px → ThorVG Text サイズ。ThorVG text->size() は pt 想定。
+// TextMetrics / GlyphMetrics の戻り値は、ここで渡したスケールが描画キャンバスの
+// 座標と同じ単位として扱える（elements 流の実装で実証済み）。
+constexpr float kPxToPt = 72.0f / 96.0f;
+
+// 現在の DrawState で text を構築する共通ヘルパー。
+// フォント未ロード / size 設定失敗時は nullptr を返し、内部で unref 済み。
+static tvg::Text* make_text_for_state(const DrawState &st, const char *str) {
+    auto *text = tvg::Text::gen();
+    if (st.fontName.empty() ||
+        text->font(st.fontName.c_str()) != tvg::Result::Success) {
+        text->unref();
+        return nullptr;
+    }
+    text->size(st.fontSize * kPxToPt);
+    if (!st.textLocale.empty()) text->locale(st.textLocale.c_str());
+    text->text(str);
+    return text;
+}
+
+// UTF-8 1 文字のバイト数（first byte から判定）
+static inline int utf8_seq_len(unsigned char c) {
+    if ((c & 0x80) == 0) return 1;
+    if ((c & 0xE0) == 0xC0) return 2;
+    if ((c & 0xF0) == 0xE0) return 3;
+    return 4;
+}
+
+// 文字列幅を per-glyph advance 合計で測定（戻り値は CSS px）。
+// TextMetrics / GlyphMetrics は text->size() で渡したスケールでそのまま返り、
+// 描画キャンバスの座標と同じ単位として扱える（elements の text_backend_tvg.cpp 参照）。
+// グリフ未対応文字は概算 (fontSize * 0.6) でフォールバック。
+static float measure_text_width_px(tvg::Text *text, const char *str, float fontSize) {
+    float width = 0.0f;
+    bool gotAny = false;
+    for (const char *c = str; *c; ) {
+        int len = utf8_seq_len((unsigned char)*c);
+        std::string ch(c, len);
+        tvg::GlyphMetrics gm{};
+        if (text->metrics(ch.c_str(), gm) == tvg::Result::Success) {
+            width += gm.advance;
+            gotAny = true;
+        } else {
+            width += fontSize * 0.6f;
+        }
+        c += len;
+    }
+    if (!gotAny) return (float)strlen(str) * fontSize * 0.6f;
+    return width;
+}
+
+// textAlign / textBaseline から transform オフセットを計算（CSS px 単位）。
+//
+// ThorVG の Text 原点は「フォントメトリック上の ascender top」で、TextMetrics.ascent
+// 分だけ下にベースラインが来る。CSS Canvas 2D 仕様の "top"/"bottom" は em square
+// (高さ = fontSize) の上下端が基準なので、ThorVG メトリックを em の比率で按分し直す。
+static void compute_text_offset(const DrawState &st, float widthPx,
+                                float ascentPx, float descentPx,
+                                float &outDx, float &outDy) {
+    // X: textAlign
+    const auto &al = st.textAlign;
+    if (al == "right" || al == "end") outDx = -widthPx;
+    else if (al == "center")           outDx = -widthPx * 0.5f;
+    else                                outDx = 0.0f;  // left / start
+
+    // Y: textBaseline. ThorVG の anchor を CSS Canvas 仕様の anchor 位置に動かす。
+    //   baseline (= alphabetic line) は ThorVG_origin + ascentPx の位置にある。
+    //   em の上端/下端は baseline からそれぞれ emAscent / emDescent (合計 = fontSize)
+    //   離れた位置。ThorVG が返す ascentPx + descentPx は fontSize より大きい (hhea
+    //   メトリック想定)、その比率で em を上下に按分する。
+    const float fontSize = st.fontSize;
+    const float total = ascentPx + descentPx;
+    const float emAscent  = (total > 0.0f) ? ascentPx  * fontSize / total : ascentPx;
+    const float emDescent = (total > 0.0f) ? descentPx * fontSize / total : descentPx;
+
+    const auto &bl = st.textBaseline;
+    if (bl == "top")               outDy = emAscent  - ascentPx;                 // em top を y へ
+    else if (bl == "hanging")      outDy = emAscent  - ascentPx;                 // CJK では top とほぼ同位置
+    else if (bl == "middle")       outDy = (emAscent - fontSize * 0.5f) - ascentPx; // em center
+    else if (bl == "ideographic")  outDy = -(ascentPx + descentPx);              // descender bottom を y へ
+    else if (bl == "bottom")       outDy = (emAscent - fontSize) - ascentPx;     // em bottom を y へ
+    else                           outDy = -ascentPx;                            // alphabetic (default)
+}
 
 static JSValue ctx_fillText(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     auto *d = get_data(ctx, this_val);
@@ -518,18 +611,25 @@ static JSValue ctx_fillText(JSContext *ctx, JSValueConst this_val, int argc, JSV
     if (!str) return JS_EXCEPTION;
     double x, y;
     JS_ToFloat64(ctx, &x, argv[1]); JS_ToFloat64(ctx, &y, argv[2]);
-    auto *text = tvg::Text::gen();
-    // フォント未ロード時はスキップ
-    if (text->font(d->state.fontName.c_str()) != tvg::Result::Success) {
-        text->unref();
+
+    auto *text = make_text_for_state(d->state, str);
+    if (!text) {
         JS_FreeCString(ctx, str);
         return JS_UNDEFINED;
     }
-    text->size(d->state.fontSize);
-    text->text(str);
     text->fill(d->state.fillStyle.r, d->state.fillStyle.g, d->state.fillStyle.b);
     text->opacity((uint8_t)(d->state.fillStyle.a * d->state.globalAlpha));
-    tvg::Matrix t = {1,0,(float)x, 0,1,(float)y - d->state.fontSize * 0.85f, 0,0,1};
+
+    // 位置オフセット計算（TextMetrics の単位はそのまま CSS px 同等として扱う）
+    tvg::TextMetrics tm{};
+    text->metrics(tm);
+    float ascentPx = tm.ascent;
+    float descentPx = -tm.descent;  // descent は負値で返るので反転
+    float widthPx = measure_text_width_px(text, str, d->state.fontSize);
+    float dx = 0, dy = 0;
+    compute_text_offset(d->state, widthPx, ascentPx, descentPx, dx, dy);
+
+    tvg::Matrix t = {1,0,(float)x + dx, 0,1,(float)y + dy, 0,0,1};
     text->transform(mat_mul(d->state.transform, t));
     d->addPaint(text);
     JS_FreeCString(ctx, str);
@@ -542,17 +642,24 @@ static JSValue ctx_strokeText(JSContext *ctx, JSValueConst this_val, int argc, J
     if (!str) return JS_EXCEPTION;
     double x, y;
     JS_ToFloat64(ctx, &x, argv[1]); JS_ToFloat64(ctx, &y, argv[2]);
-    auto *text = tvg::Text::gen();
-    if (text->font(d->state.fontName.c_str()) != tvg::Result::Success) {
-        text->unref();
+
+    auto *text = make_text_for_state(d->state, str);
+    if (!text) {
         JS_FreeCString(ctx, str);
         return JS_UNDEFINED;
     }
-    text->size(d->state.fontSize);
-    text->text(str);
     text->outline(d->state.lineWidth, d->state.strokeStyle.r, d->state.strokeStyle.g, d->state.strokeStyle.b);
     text->opacity((uint8_t)(d->state.strokeStyle.a * d->state.globalAlpha));
-    tvg::Matrix t = {1,0,(float)x, 0,1,(float)y - d->state.fontSize * 0.85f, 0,0,1};
+
+    tvg::TextMetrics tm{};
+    text->metrics(tm);
+    float ascentPx = tm.ascent;
+    float descentPx = -tm.descent;
+    float widthPx = measure_text_width_px(text, str, d->state.fontSize);
+    float dx = 0, dy = 0;
+    compute_text_offset(d->state, widthPx, ascentPx, descentPx, dx, dy);
+
+    tvg::Matrix t = {1,0,(float)x + dx, 0,1,(float)y + dy, 0,0,1};
     text->transform(mat_mul(d->state.transform, t));
     d->addPaint(text);
     JS_FreeCString(ctx, str);
@@ -563,10 +670,32 @@ static JSValue ctx_measureText(JSContext *ctx, JSValueConst this_val, int argc, 
     auto *d = get_data(ctx, this_val);
     const char *str = JS_ToCString(ctx, argv[0]);
     if (!str) return JS_EXCEPTION;
-    float estimatedWidth = (float)strlen(str) * d->state.fontSize * 0.6f;
+
+    // フォールバック（フォント未ロード等）
+    float width   = (float)strlen(str) * d->state.fontSize * 0.6f;
+    float ascent  = d->state.fontSize * 0.85f;
+    float descent = d->state.fontSize * 0.15f;
+
+    auto *text = make_text_for_state(d->state, str);
+    if (text) {
+        tvg::TextMetrics tm{};
+        if (text->metrics(tm) == tvg::Result::Success) {
+            ascent  = tm.ascent;
+            descent = -tm.descent;  // descent は負値で返るので反転
+            if (ascent  < 0) ascent  = d->state.fontSize * 0.85f;
+            if (descent < 0) descent = d->state.fontSize * 0.15f;
+        }
+        width = measure_text_width_px(text, str, d->state.fontSize);
+        text->unref();
+    }
+
     JS_FreeCString(ctx, str);
     JSValue obj = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, obj, "width", JS_NewFloat64(ctx, estimatedWidth));
+    JS_SetPropertyStr(ctx, obj, "width", JS_NewFloat64(ctx, width));
+    JS_SetPropertyStr(ctx, obj, "actualBoundingBoxAscent", JS_NewFloat64(ctx, ascent));
+    JS_SetPropertyStr(ctx, obj, "actualBoundingBoxDescent", JS_NewFloat64(ctx, descent));
+    JS_SetPropertyStr(ctx, obj, "fontBoundingBoxAscent", JS_NewFloat64(ctx, ascent));
+    JS_SetPropertyStr(ctx, obj, "fontBoundingBoxDescent", JS_NewFloat64(ctx, descent));
     return obj;
 }
 
@@ -941,8 +1070,44 @@ static JSValue ctx_set_font(JSContext *ctx, JSValueConst this_val, int argc, JSV
     auto *d = get_data(ctx, this_val);
     const char *str = JS_ToCString(ctx, argv[0]);
     if (!str) return JS_UNDEFINED;
-    float size = 16.0f; char name[256] = "";
-    if (sscanf(str, "%fpx %255[^\n]", &size, name) >= 1) { d->state.fontSize = size; if (name[0]) d->state.fontName = name; }
+    // CSS font 構文の柔軟解析。例:
+    //   "24px Arial"
+    //   "bold 24px Arial"
+    //   "italic bold 24px \"Open Sans\", sans-serif"
+    //   "normal normal 26px Arial"
+    // 戦略: "px" を探して、その直前の数字を fontSize、その後ろの最初のフォント名を fontName とする
+    const char *px = strstr(str, "px");
+    if (px) {
+        // px 前の数値を逆走査
+        const char *p = px;
+        while (p > str && (p[-1] == ' ' || p[-1] == '\t')) p--;
+        const char *numEnd = p;
+        while (p > str && ((p[-1] >= '0' && p[-1] <= '9') || p[-1] == '.')) p--;
+        if (p < numEnd) {
+            d->state.fontSize = (float)atof(p);
+        }
+        // px の後ろのフォント名を抽出（引用符・空白・末尾カンマ以降除外）
+        const char *q = px + 2;
+        while (*q == ' ' || *q == '\t') q++;
+        char nm[256] = {0};
+        int n = 0;
+        bool quote = false;
+        char quoteCh = 0;
+        if (*q == '"' || *q == '\'') { quote = true; quoteCh = *q; q++; }
+        while (*q && n < 255) {
+            if (quote) {
+                if (*q == quoteCh) break;
+            } else {
+                if (*q == ',' || *q == ' ' || *q == '\t') break;
+            }
+            nm[n++] = *q++;
+        }
+        while (n > 0 && (nm[n-1] == ' ' || nm[n-1] == '\t')) n--;
+        nm[n] = '\0';
+        if (nm[0]) d->state.fontName = nm;
+    } else {
+        // px 省略の旧フォーマット "24 Arial" 等は無視（標準ブラウザでも無効）
+    }
     JS_FreeCString(ctx, str);
     return JS_UNDEFINED;
 }
@@ -954,6 +1119,27 @@ static JSValue ctx_get_textAlign(JSContext *ctx, JSValueConst this_val, int argc
 static JSValue ctx_set_textAlign(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     const char *str = JS_ToCString(ctx, argv[0]);
     if (str) { get_data(ctx, this_val)->state.textAlign = str; JS_FreeCString(ctx, str); }
+    return JS_UNDEFINED;
+}
+
+static JSValue ctx_get_textBaseline(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    return JS_NewString(ctx, get_data(ctx, this_val)->state.textBaseline.c_str());
+}
+
+static JSValue ctx_set_textBaseline(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    const char *str = JS_ToCString(ctx, argv[0]);
+    if (str) { get_data(ctx, this_val)->state.textBaseline = str; JS_FreeCString(ctx, str); }
+    return JS_UNDEFINED;
+}
+
+// 拡張プロパティ: textLocale (BCP47 タグ。ThorVG FT loader への HarfBuzz 言語ヒント)
+static JSValue ctx_get_textLocale(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    return JS_NewString(ctx, get_data(ctx, this_val)->state.textLocale.c_str());
+}
+
+static JSValue ctx_set_textLocale(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    const char *str = JS_ToCString(ctx, argv[0]);
+    if (str) { get_data(ctx, this_val)->state.textLocale = str; JS_FreeCString(ctx, str); }
     return JS_UNDEFINED;
 }
 
@@ -1157,6 +1343,8 @@ static JSValue canvas2d_constructor(JSContext *ctx, JSValueConst new_target, int
     DEFINE_GETSET(obj, "globalAlpha", ctx_get_globalAlpha, ctx_set_globalAlpha);
     DEFINE_GETSET(obj, "font", ctx_get_font, ctx_set_font);
     DEFINE_GETSET(obj, "textAlign", ctx_get_textAlign, ctx_set_textAlign);
+    DEFINE_GETSET(obj, "textBaseline", ctx_get_textBaseline, ctx_set_textBaseline);
+    DEFINE_GETSET(obj, "textLocale", ctx_get_textLocale, ctx_set_textLocale);
     DEFINE_GETSET(obj, "lineCap", ctx_get_lineCap, ctx_set_lineCap);
     DEFINE_GETSET(obj, "lineJoin", ctx_get_lineJoin, ctx_set_lineJoin);
     DEFINE_GETSET(obj, "globalCompositeOperation", ctx_get_globalCompositeOperation, ctx_set_globalCompositeOperation);

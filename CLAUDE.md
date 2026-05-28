@@ -51,7 +51,7 @@ cmake --build build/x64-windows --config Release
 - `src/jsengine.hpp` / `src/jsengine.cpp` — `JsEngine` class. Manages the QuickJS runtime/context, JS file loading (via SDL_LoadFile), lifecycle calls (update/render/done), and browser-compatible input event dispatch (addEventListener/removeEventListener).
 - `src/webgl.h` / `src/webgl.cpp` — WebGL 2.0 compatible bindings mapping to GLES 3.0. Registers `gl` global and `WebGL2RenderingContext`.
 - `src/webaudio.h` / `src/webaudio.cpp` — Web Audio API bindings. Uses AudioEngine/AudioStream for playback.
-- `src/canvas2d.h` / `src/canvas2d.cpp` — Canvas 2D API bindings using ThorVG SwCanvas. Bitmap-retained mode with deferred rendering: draw ops are batched and rendered to pixel buffer on flush/texture access/getImageData. drawImage uses ThorVG Picture. Dirty rect tracking for partial GL texture upload. テキスト描画は ThorVG の **FreeType + HarfBuzz (FT) ローダー** 経由（`TVG_LOADER_FT=ON`、`TVG_LOADER_TTF=OFF`）で、合字・複雑文字・CJK・多言語フォールバックに対応。
+- `src/canvas2d.h` / `src/canvas2d.cpp` — Canvas 2D API bindings using ThorVG SwCanvas. Bitmap-retained mode with deferred rendering: draw ops are batched and rendered to pixel buffer on flush/texture access/getImageData. drawImage uses ThorVG Picture. Dirty rect tracking for partial GL texture upload. テキスト描画は ThorVG の **FreeType + HarfBuzz (FT) ローダー** 経由（`TVG_LOADER_FT=ON`、`TVG_LOADER_TTF=OFF`）で、合字・複雑文字・CJK・多言語フォールバックに対応。`textAlign` (left/center/right/start/end)、`textBaseline` (top/hanging/middle/alphabetic/ideographic/bottom)、`textLocale` (BCP47) をサポート。
 - `src/audio/` — AudioEngine (miniaudio singleton with sound groups) and AudioStream (file/memory/stream decoding with SDL3 I/O). Supports WAV, MP3, FLAC, and optionally OGG Vorbis/Opus.
 - `glad/` — GLAD loader for OpenGL ES 3.0 (local subdirectory, built as a CMake sub-project).
 
@@ -80,5 +80,7 @@ cmake --build build/x64-windows --config Release
 - `texImage2D` は WebGL2 の unsized internalformat (`RGBA + FLOAT` 等) を `fixInternalFormat()` で GLES3 の sized format (`RGBA32F` 等) に自動変換する。
 - デバッグビルドでは `KHR_debug` 拡張が利用可能な場合 `glDebugMessageCallbackKHR` を有効化し、GL エラーを同期的にログ出力する（app.cpp）。Release ビルド（`NDEBUG` 定義時）では `#ifndef NDEBUG` で無効化。
 - `globalThis.__DEBUG__` フラグ: jsengine.cpp が `NDEBUG` の有無で `true`/`false` を JS に渡す。Demo 9 のレンダ結果ピクセル検証など、本番では出したくないログを `if (globalThis.__DEBUG__) { ... }` でガードする。
+- Canvas2D テキストの座標系: ThorVG `Text` の anchor は ascender top（≒ `TextMetrics.ascent` 分だけベースラインより上）。CSS Canvas 仕様の `textBaseline` は em-square 基準なので、`ascent + descent`（hhea 由来で em より大きい）を em の比率で按分してから anchor を計算する。CSS px → ThorVG size は `* 72/96`、`TextMetrics`/`GlyphMetrics` の戻り値は CSS px と同じスケールで扱う。
 - Demo 1 に Canvas2D ベースの HUD オーバーレイ（操作説明・デモ一覧・システム情報）を表示。
+- Demo 3: Canvas2D テキスト機能の総合検証サンプル。1280×720 全画面 5 ページ（`[`/`]` で切替）。Page1=font family/size, Page2=textAlign/textBaseline, Page3=measureText 可視化, Page4=多言語+textLocale, Page5=stroke/transform/getImageData。`docs/demo3_text_verification.md` に期待挙動、`docs/demo3_reference.html` にブラウザ参照ページ。
 - Demo 9: three-vrm v3 による VRM アバター表示。GLTFLoader.parse でバイナリ VRM パース、MToon シェーダー + SkinnedMesh によるフルカラー描画動作。

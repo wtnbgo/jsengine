@@ -132,10 +132,14 @@ ctx.stroke();
 
 // --- テキスト ---
 ctx.font = "24px FontName";                              // "サイズpx フォント名"
-ctx.textAlign = "left";                                  // "left" | "center" | "right"（予約）
-ctx.fillText("Hello", x, y);                             // y はベースライン位置
+ctx.textAlign = "left";                                  // "left" | "center" | "right" | "start" | "end"
+ctx.textBaseline = "alphabetic";                         // "top" | "hanging" | "middle" | "alphabetic" | "ideographic" | "bottom"
+ctx.textLocale = "ja-JP";                                // BCP47 (ThorVG FT loader の HarfBuzz 言語ヒント)。"zh-CN"/"zh-TW" 等
+ctx.fillText("Hello", x, y);                             // y は textBaseline で指定した位置に対応
 ctx.strokeText("Hello", x, y);
-var m = ctx.measureText("Hello");                        // => { width }
+var m = ctx.measureText("Hello");
+// m: { width, actualBoundingBoxAscent, actualBoundingBoxDescent,
+//      fontBoundingBoxAscent, fontBoundingBoxDescent } (CSS px)
 
 // --- 画像描画（ThorVG Picture ベース） ---
 ctx.drawImage(image, dx, dy);                            // 3引数: 原寸描画

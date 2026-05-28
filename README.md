@@ -129,7 +129,7 @@ Demo 1 displays a HUD overlay showing controls, demo list, and system informatio
 |-----|------|
 | **1** | Vertex-colored triangle (WASD movement, wheel alpha, HUD overlay) |
 | **2** | Canvas2D shapes (rectangles, circles, Bezier curves, transparency) |
-| **3** | Canvas2D text (multiple fonts, sizes, colors) |
+| **3** | Canvas2D text verification (5 pages via `[`/`]`: family/size, textAlign/textBaseline, measureText, multilingual + textLocale, stroke/transform/getImageData) |
 | **4** | Canvas2D animation (rotating shapes, orbital circles) |
 | **5** | pixi.js v7.4.3 test (Graphics drawing, animation) |
 | **6** | Canvas2D drawImage / getImageData / putImageData test |

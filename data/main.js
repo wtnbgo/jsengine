@@ -255,6 +255,7 @@ function renderDemo1HUD() {
             "7 : Dirty Rect Update",
             "8 : three.js r176",
             "9 : three-vrm (VRM avatar)",
+            "0 : pixi.ui widgets",
             "",
             "--- System Info ---",
             "GL: " + (gl.getParameter(gl.RENDERER) || "?"),
@@ -368,63 +369,341 @@ function renderDemo2() {
 }
 
 // ============================================================
-// デモ3: Canvas2D テキスト描画
+// デモ3: Canvas2D テキスト総合検証
 // ============================================================
+//   ページ切替: '[' / ']' で前後ページ
+//   1: フォントファミリ / サイズスケール
+//   2: textAlign / textBaseline
+//   3: measureText 可視化
+//   4: 多言語 (日本語 / 中文 / Emoji) + locale
+//   5: strokeText / transform / getImageData 中央ピクセル検証
 
-function renderDemo3() {
-    var c = canvas2d;
+var canvas2d_demo3 = null;
+var demo3Page = 1;
+var demo3PageMax = 5;
+var demo3LastPixelCheck = "";
 
-    // 背景
-    c.fillStyle = "#0d1117";
-    c.fillRect(0, 0, 512, 512);
-
-    // OpenSans Bold タイトル
-    c.font = "48px OpenSans-Bold";
-    c.fillStyle = "#58a6ff";
-    c.fillText("Canvas2D", 30, 80);
-
-    // OpenSans Regular サブタイトル
-    c.font = "32px OpenSans-Regular";
-    c.fillStyle = "#f0f6fc";
-    c.fillText("ThorVG + QuickJS", 30, 140);
-
-    // Roboto Regular
-    c.font = "24px Roboto-Regular";
-    c.fillStyle = "#8b949e";
-    c.fillText("OpenGL ES 3.0 Rendering", 30, 190);
-
-    // 複数フォント・色
-    var items = [
-        {text: "OpenSans Regular",  font: "24px OpenSans-Regular",  color: "#ff7b72", y: 250},
-        {text: "OpenSans Bold",     font: "24px OpenSans-Bold",     color: "#3fb950", y: 290},
-        {text: "Roboto Regular",    font: "24px Roboto-Regular",    color: "#58a6ff", y: 330},
-        {text: "RobotoMono",        font: "24px RobotoMono-VariableFont_wght", color: "#d29922", y: 370},
-    ];
-    for (var i = 0; i < items.length; i++) {
-        c.font = items[i].font;
-        c.fillStyle = items[i].color;
-        c.fillText(items[i].text, 30, items[i].y);
-
-        // 色見本矩形
-        c.fillRect(350, items[i].y - 18, 60, 22);
+function _ensureDemo3Canvas() {
+    if (!canvas2d_demo3) {
+        canvas2d_demo3 = new Canvas2D(screenW, screenH);
     }
+    return canvas2d_demo3;
+}
 
-    // ストロークテキスト
-    c.font = "40px OpenSans-Bold";
-    c.strokeStyle = "#f78166";
-    c.lineWidth = 2;
-    c.strokeText("Outline Text", 30, 450);
+function _demo3Header(c, title) {
+    var W = c.width, H = c.height;
+    c.fillStyle = "#0d1117";
+    c.fillRect(0, 0, W, H);
+    c.font = "32px OpenSans-Bold";
+    c.fillStyle = "#58a6ff";
+    c.textAlign = "left";
+    c.textBaseline = "alphabetic";
+    c.fillText("Demo 3: Canvas2D Text", 24, 44);
+    c.font = "18px OpenSans-Regular";
+    c.fillStyle = "#8b949e";
+    c.fillText("Page " + demo3Page + "/" + demo3PageMax + "  ([ / ] to switch)  — " + title, 24, 72);
+    // 区切り線
+    c.fillStyle = "#30363d";
+    c.fillRect(0, 86, W, 1);
+}
 
-    // サイズバリエーション
-    c.fillStyle = "#bc8cff";
-    var sizes = [12, 16, 20, 28, 36];
-    var tx = 300;
+// Page 1: フォントファミリ別とサイズスケール
+function _demo3Page1(c) {
+    _demo3Header(c, "Font family / size");
+    var W = c.width;
+    var families = [
+        { name: "OpenSans-Regular",    color: "#f0f6fc", text:"AaBb 0123 jpqg — Latin baseline" },
+        { name: "OpenSans-Bold",       color: "#3fb950", text:"AaBb 0123 jpqg — Bold" },
+        { name: "Roboto-Regular",      color: "#58a6ff", text:"Roboto 0123 () [] {}" },
+        { name: "RobotoMono-VariableFont_wght", color: "#d29922", text:"mono = code(); /* x */" },
+        { name: "NotoSansJP-Regular",  color: "#79c0ff", text:"日本語フォント あいうえお 漢字 0123" },
+        { name: "NotoEmoji-Regular",   color: "#ffb3b3", text:"\u{1F600}\u{1F44D}\u{1F31F}\u{2764}\u{1F389}\u{1F525}" }
+    ];
+    var y = 130;
+    c.textBaseline = "alphabetic";
+    c.textAlign = "left";
+    for (var i = 0; i < families.length; i++) {
+        c.font = "30px " + families[i].name;
+        c.fillStyle = families[i].color;
+        c.fillText(families[i].name + "  " + families[i].text, 24, y);
+        y += 48;
+    }
+    // サイズスケール: 10〜96 px
+    c.fillStyle = "#30363d";
+    c.fillRect(0, y + 10, W, 1);
+    y += 36;
+    var sizes = [10, 14, 18, 24, 32, 48, 64, 96];
+    c.textBaseline = "alphabetic";
+    var sx = 24;
     for (var j = 0; j < sizes.length; j++) {
         c.font = sizes[j] + "px OpenSans-Regular";
-        c.fillText(sizes[j] + "px", tx, 450 + (j > 0 ? 10 : 0));
-        tx += sizes[j] * 2 + 10;
+        c.fillStyle = "#79c0ff";
+        var label = String(sizes[j]);
+        c.fillText(label, sx, y + sizes[j]);
+        var m = c.measureText(label);
+        c.fillStyle = "#21262d";
+        c.fillRect(sx, y + sizes[j] + 4, m.width, 1);
+        sx += m.width + 24;
+        if (sx > W - 100) break;
+    }
+    c.fillStyle = "#8b949e";
+    c.font = "16px OpenSans-Regular";
+    c.fillText("10 / 14 / 18 / 24 / 32 / 48 / 64 / 96 px  (横線は measureText().width)",
+               24, y + 140);
+}
+
+// Page 2: textAlign / textBaseline
+function _demo3Page2(c) {
+    _demo3Header(c, "textAlign / textBaseline");
+    var W = c.width;
+    var cx = W * 0.5;
+
+    c.font = "26px OpenSans-Regular";
+    c.fillStyle = "#8b949e";
+    c.textAlign = "left";
+    c.textBaseline = "alphabetic";
+    c.fillText("textAlign  (vertical guide at center)", 24, 130);
+
+    // 縦ガイド線
+    c.fillStyle = "#30363d";
+    c.fillRect(cx, 140, 1, 200);
+    var ay = 180;
+    var aligns = [
+        { v:"left",   c:"#3fb950", t:"left ← テキスト揃え" },
+        { v:"center", c:"#58a6ff", t:"center  中央揃え 🎯" },
+        { v:"right",  c:"#bc8cff", t:"右揃え right →" }
+    ];
+    c.textBaseline = "alphabetic";
+    for (var i = 0; i < aligns.length; i++) {
+        c.font = "32px NotoSansJP-Regular";
+        c.textAlign = aligns[i].v;
+        c.fillStyle = aligns[i].c;
+        c.fillText(aligns[i].t, cx, ay + i * 48);
     }
 
+    c.textAlign = "left";
+    c.fillStyle = "#8b949e";
+    c.font = "26px OpenSans-Regular";
+    c.fillText("textBaseline  (horizontal guide for each)", 24, 400);
+
+    var baselines = [
+        { v:"top",        c:"#3fb950" },
+        { v:"hanging",    c:"#56d364" },
+        { v:"middle",     c:"#58a6ff" },
+        { v:"alphabetic", c:"#bc8cff" },
+        { v:"ideographic",c:"#a8a3f7" },
+        { v:"bottom",     c:"#d29922" }
+    ];
+    var bx = 32;
+    for (var j = 0; j < baselines.length; j++) {
+        var by = 450 + j * 44;
+        // ガイド線
+        c.fillStyle = "#30363d";
+        c.fillRect(bx, by, W - bx * 2, 1);
+        c.font = "32px OpenSans-Regular";
+        c.textBaseline = baselines[j].v;
+        c.fillStyle = baselines[j].c;
+        c.fillText(baselines[j].v + " — Apgy0 漢字", bx + 8, by);
+    }
+    c.textBaseline = "alphabetic";
+}
+
+// Page 3: measureText 可視化
+function _demo3Page3(c) {
+    _demo3Header(c, "measureText() visualization");
+    var W = c.width;
+    c.textAlign = "left";
+    c.textBaseline = "alphabetic";
+
+    var samples = [
+        { font:"22px OpenSans-Regular",     text:"The quick brown fox jumps over the lazy dog" },
+        { font:"30px OpenSans-Bold",        text:"Bold variation 太字" },
+        { font:"32px Roboto-Regular",       text:"Roboto sample 0123 () [] {}" },
+        { font:"36px RobotoMono-VariableFont_wght", text:"mono = code()" },
+        { font:"30px NotoSansJP-Regular",   text:"日本語の文字列の幅を測ります" },
+        { font:"30px NotoSansSC-Regular",   text:"中文字符串宽度测试" },
+        { font:"40px NotoEmoji-Regular",    text:"\u{1F600}\u{1F44D}\u{2764}\u{1F525}\u{1F389}" },
+        { font:"48px OpenSans-Bold",        text:"BIG 大きい" }
+    ];
+    var y = 150;
+    for (var i = 0; i < samples.length; i++) {
+        c.font = samples[i].font;
+        var m = c.measureText(samples[i].text);
+        var x0 = 32;
+        var top = y - (m.actualBoundingBoxAscent || m.fontBoundingBoxAscent || 0);
+        var bot = y + (m.actualBoundingBoxDescent || m.fontBoundingBoxDescent || 0);
+        // ascent / descent 範囲を半透明矩形で
+        c.fillStyle = "#16313d";
+        c.fillRect(x0, top, m.width, bot - top);
+        // ベースライン
+        c.fillStyle = "#30363d";
+        c.fillRect(x0, y, m.width, 1);
+        // 文字本体
+        c.fillStyle = "#f0f6fc";
+        c.fillText(samples[i].text, x0, y);
+        // メトリクス表示（右側）
+        c.font = "14px OpenSans-Regular";
+        c.fillStyle = "#8b949e";
+        var info = "w=" + m.width.toFixed(1) +
+                   " a=" + (m.actualBoundingBoxAscent||0).toFixed(1) +
+                   " d=" + (m.actualBoundingBoxDescent||0).toFixed(1);
+        c.fillText(info, W - 260, y);
+        y += 72;
+        if (y > c.height - 60) break;
+    }
+}
+
+// Page 4: 多言語 + locale
+function _demo3Page4(c) {
+    _demo3Header(c, "Multilingual + textLocale");
+    c.textAlign = "left";
+    c.textBaseline = "alphabetic";
+
+    var lines = [
+        { font:"32px NotoSansJP-Regular",  loc:"ja-JP", color:"#f0f6fc",
+          text:"日本語: 今日もコードを書こう。 (ja-JP)" },
+        { font:"32px NotoSansSC-Regular",  loc:"zh-CN", color:"#58a6ff",
+          text:"简体中文: 今天也来写代码。" },
+        { font:"32px NotoSansTC-Regular",  loc:"zh-TW", color:"#bc8cff",
+          text:"繁體中文: 今天也來寫程式碼。" },
+        { font:"40px NotoEmoji-Regular",   loc:"",      color:"#d29922",
+          text:"\u{1F600}\u{1F44D}\u{1F31F}\u{2764}\u{1F389} \u{1F525}\u{1F496}\u{1F60A}" },
+        { font:"30px OpenSans-Regular",    loc:"",      color:"#3fb950",
+          text:"Mixed: Hello コード 你好 (fallback test)" }
+    ];
+    var y = 160;
+    for (var i = 0; i < lines.length; i++) {
+        c.font = lines[i].font;
+        c.textLocale = lines[i].loc;
+        c.fillStyle = lines[i].color;
+        c.fillText(lines[i].text, 32, y);
+        c.font = "14px OpenSans-Regular";
+        c.fillStyle = "#8b949e";
+        c.fillText("locale='" + lines[i].loc + "'  font='" + lines[i].font + "'", 32, y + 24);
+        y += 88;
+    }
+    c.textLocale = "";
+    // 補足
+    c.font = "16px OpenSans-Regular";
+    c.fillStyle = "#8b949e";
+    c.fillText("textLocale は ThorVG FT loader の HarfBuzz 言語タグに渡される。",
+               32, c.height - 80);
+    c.fillText("該当 family にグリフが無い場合、loadFont 済みフォントから fallback される。",
+               32, c.height - 56);
+}
+
+// Page 5: strokeText / transform / getImageData
+function _demo3Page5(c) {
+    _demo3Header(c, "strokeText / transform / getImageData");
+    var W = c.width, H = c.height;
+    c.textAlign = "left";
+    c.textBaseline = "alphabetic";
+
+    // strokeText バリエーション
+    c.font = "56px OpenSans-Bold";
+    c.lineWidth = 1;
+    c.strokeStyle = "#f78166";
+    c.strokeText("Outline 1px ぬき文字", 32, 170);
+
+    c.font = "56px NotoSansJP-Regular";
+    c.lineWidth = 4;
+    c.strokeStyle = "#58a6ff";
+    c.strokeText("輪郭 4px 日本語", 32, 240);
+
+    // 塗り + ストロークの重ね
+    c.font = "56px OpenSans-Bold";
+    c.fillStyle = "#3fb950";
+    c.fillText("Fill + Stroke 重ね", 32, 310);
+    c.lineWidth = 2;
+    c.strokeStyle = "#0d1117";
+    c.strokeText("Fill + Stroke 重ね", 32, 310);
+
+    // transform 回転テキスト
+    c.save();
+    c.translate(W * 0.62, 200);
+    c.rotate(-Math.PI / 6);
+    c.font = "54px NotoSansJP-Regular";
+    c.fillStyle = "#bc8cff";
+    c.fillText("回転テキスト", 0, 0);
+    c.restore();
+
+    // 絵文字回転
+    c.save();
+    c.translate(W * 0.7, 290);
+    c.rotate(Math.PI / 12);
+    c.font = "60px NotoEmoji-Regular";
+    c.fillText("\u{1F389}\u{2728}\u{1F31F}", 0, 0);
+    c.restore();
+
+    // スケール変形テキスト
+    c.save();
+    c.translate(W * 0.62, 360);
+    c.scale(1.6, 1.0);
+    c.font = "36px OpenSans-Regular";
+    c.fillStyle = "#d29922";
+    c.fillText("scaleX 1.6x 横長", 0, 0);
+    c.restore();
+
+    // getImageData 中央ピクセル検証
+    var bx = 32, by = 380, bw = 500, bh = 140;
+    c.fillStyle = "#222";
+    c.fillRect(bx, by, bw, bh);
+    c.fillStyle = "#ff0000";
+    c.fillRect(bx + 10, by + 10, bw - 20, bh - 20);
+    c.font = "60px NotoSansJP-Regular";
+    c.fillStyle = "#ffffff";
+    c.textAlign = "center";
+    c.textBaseline = "middle";
+    c.fillText("検査 CHECK", bx + bw/2, by + bh/2);
+    c.textAlign = "left";
+    c.textBaseline = "alphabetic";
+
+    // フラッシュ後に複数点ピクセル取得
+    c.flush();
+    var samples = [
+        { name:"red bg",        x: bx + 30,            y: by + 30 },
+        { name:"center (white)",x: bx + bw/2,          y: by + bh/2 },
+        { name:"red right",     x: bx + bw - 30,       y: by + bh - 30 }
+    ];
+    var infoLines = [];
+    for (var s = 0; s < samples.length; s++) {
+        var img = c.getImageData(samples[s].x, samples[s].y, 1, 1);
+        var v = new Uint8Array(img.data);
+        infoLines.push(samples[s].name + " @ (" + samples[s].x.toFixed(0) + "," +
+                       samples[s].y.toFixed(0) + ") = rgba(" + v[0] + "," + v[1] +
+                       "," + v[2] + "," + v[3] + ")");
+    }
+    var allInfo = infoLines.join(" | ");
+    if (allInfo !== demo3LastPixelCheck) {
+        demo3LastPixelCheck = allInfo;
+        if (globalThis.__DEBUG__) console.log("Demo3 page5: " + allInfo);
+    }
+    c.font = "16px OpenSans-Regular";
+    c.fillStyle = "#8b949e";
+    for (var k = 0; k < infoLines.length; k++) {
+        c.fillText(infoLines[k], bx, by + bh + 26 + k * 22);
+    }
+    c.fillText("白文字近傍は (255,255,255,255)、赤背景近傍は (255,0,0,255) に近いはず",
+               bx, by + bh + 26 + infoLines.length * 22 + 6);
+
+    // フォントメトリクス情報
+    c.font = "16px OpenSans-Regular";
+    c.fillStyle = "#79c0ff";
+    var m = c.measureText("Aj");
+    c.fillText("measureText('Aj') @16px: w=" + m.width.toFixed(2) +
+               " a=" + (m.actualBoundingBoxAscent||0).toFixed(2) +
+               " d=" + (m.actualBoundingBoxDescent||0).toFixed(2),
+               32, H - 32);
+}
+
+function renderDemo3() {
+    var c = _ensureDemo3Canvas();
+    if      (demo3Page === 1) _demo3Page1(c);
+    else if (demo3Page === 2) _demo3Page2(c);
+    else if (demo3Page === 3) _demo3Page3(c);
+    else if (demo3Page === 4) _demo3Page4(c);
+    else if (demo3Page === 5) _demo3Page5(c);
+    else                       _demo3Page1(c);
     c.flush();
 }
 
@@ -596,6 +875,198 @@ function renderDemo5() {
     }
     pixiApp.renderer.reset();
     pixiApp.renderer.render(pixiApp.stage);
+}
+
+// ============================================================
+// デモ10: pixi.ui ウィジェットショーケース
+// ============================================================
+
+var pixiUiApp = null;
+var pixiUiState = {
+    bgColor: 0x1a2030,
+    progress: 0,
+    sliderValue: 50,
+    switchOn: false,
+    log: "click any widget",
+};
+var pixiUiLogText = null;
+var pixiUiProgressBar = null;
+var pixiUiBgGraphics = null;
+
+function initDemo10() {
+    if (pixiUiApp) return;
+
+    loadScript("lib/polyfill.js");
+    loadScript("lib/browser_shim.js");
+    loadScript("lib/pixi.min.js");
+    loadScript("lib/pixi-ui-deps-shim.js");
+    loadScript("lib/pixi-ui.js");
+
+    if (!PIXI.ui) {
+        console.error("PIXI.ui failed to initialize");
+        return;
+    }
+    console.log("PIXI.ui loaded: " + Object.keys(PIXI.ui).join(", "));
+
+    pixiUiApp = new PIXI.Application({
+        width: 1280, height: 720,
+        backgroundColor: pixiUiState.bgColor,
+        backgroundAlpha: 1,
+        antialias: false,
+        autoStart: false,
+        sharedTicker: false,
+    });
+
+    // pixi のインタラクションシステムを有効化（v7 デフォルトで有効だが念のため）
+    pixiUiApp.stage.interactive = true;
+    pixiUiApp.stage.hitArea = pixiUiApp.screen;
+
+    // 背景（動的に色変更）
+    pixiUiBgGraphics = new PIXI.Graphics();
+    pixiUiApp.stage.addChild(pixiUiBgGraphics);
+    redrawBg10();
+
+    // タイトル
+    var title = new PIXI.Text("pixi.ui Widget Showcase", {
+        fontFamily: "Arial", fontSize: 28, fill: 0xffffff, fontWeight: "bold",
+    });
+    title.x = 40; title.y = 30;
+    pixiUiApp.stage.addChild(title);
+
+    var ui = PIXI.ui;
+
+    // --- Button (背景色変更) ---
+    var btnBg = new PIXI.Graphics();
+    btnBg.beginFill(0x4060a0).drawRoundedRect(0, 0, 160, 50, 8).endFill();
+    var btnLabel = new PIXI.Text("Cycle Color", { fontFamily: "Arial", fontSize: 18, fill: 0xffffff });
+    btnLabel.x = 80 - btnLabel.width / 2;
+    btnLabel.y = 25 - btnLabel.height / 2;
+    btnBg.addChild(btnLabel);
+    // Graphics をヒットエリアつきのボタンビューとして使う（Container だとヒットテストが効かない）
+    btnBg.hitArea = new PIXI.Rectangle(0, 0, 160, 50);
+    var button = new ui.Button(btnBg);
+    var bgColors = [0x1a2030, 0x402030, 0x204030, 0x203040, 0x402040];
+    var bgColorIdx = 0;
+    button.onPress.connect(function () {
+        bgColorIdx = (bgColorIdx + 1) % bgColors.length;
+        pixiUiState.bgColor = bgColors[bgColorIdx];
+        redrawBg10();
+        pixiUiState.log = "Button pressed: color #" + bgColorIdx;
+        if (pixiUiLogText) pixiUiLogText.text = pixiUiState.log;
+    });
+    btnBg.x = 40; btnBg.y = 100;
+    pixiUiApp.stage.addChild(btnBg);
+
+    // --- CheckBox ---
+    var cbStyleOn = new PIXI.Graphics().beginFill(0x4060a0).drawRoundedRect(0, 0, 28, 28, 4).endFill();
+    var cbCheck = new PIXI.Graphics().lineStyle(4, 0xffffff).moveTo(6, 14).lineTo(13, 21).lineTo(22, 8);
+    cbStyleOn.addChild(cbCheck);
+    var cbStyleOff = new PIXI.Graphics().lineStyle(2, 0x808080).beginFill(0x303848).drawRoundedRect(0, 0, 28, 28, 4).endFill();
+    var checkbox = new ui.CheckBox({
+        checked: false,
+        style: {
+            unchecked: cbStyleOff,
+            checked: cbStyleOn,
+        },
+    });
+    checkbox.x = 220; checkbox.y = 110;
+    checkbox.onCheck.connect(function (val) {
+        pixiUiState.switchOn = val;
+        pixiUiState.log = "Checkbox: " + (val ? "ON" : "OFF");
+        if (pixiUiLogText) pixiUiLogText.text = pixiUiState.log;
+    });
+    pixiUiApp.stage.addChild(checkbox);
+    var cbLabel = new PIXI.Text("Animate", { fontFamily: "Arial", fontSize: 16, fill: 0xcccccc });
+    cbLabel.x = 260; cbLabel.y = 116;
+    pixiUiApp.stage.addChild(cbLabel);
+
+    // --- Slider ---
+    var sliderBg = new PIXI.Graphics().beginFill(0x303848).drawRoundedRect(0, 0, 300, 12, 6).endFill();
+    var sliderFill = new PIXI.Graphics().beginFill(0x60a0ff).drawRoundedRect(0, 0, 300, 12, 6).endFill();
+    var sliderHandle = new PIXI.Graphics().beginFill(0xffffff).drawCircle(0, 0, 14).endFill();
+    var slider = new ui.Slider({
+        bg: sliderBg,
+        fill: sliderFill,
+        slider: sliderHandle,
+        min: 0, max: 100, value: pixiUiState.sliderValue,
+    });
+    slider.x = 40; slider.y = 200;
+    slider.onUpdate.connect(function (val) {
+        pixiUiState.sliderValue = val | 0;
+        pixiUiState.log = "Slider: " + pixiUiState.sliderValue;
+        if (pixiUiLogText) pixiUiLogText.text = pixiUiState.log;
+    });
+    pixiUiApp.stage.addChild(slider);
+    var sliderLabel = new PIXI.Text("Slider (drag handle)", { fontFamily: "Arial", fontSize: 14, fill: 0xcccccc });
+    sliderLabel.x = 40; sliderLabel.y = 175;
+    pixiUiApp.stage.addChild(sliderLabel);
+
+    // --- ProgressBar ---
+    var pbLabel = new PIXI.Text("ProgressBar (time-driven)", { fontFamily: "Arial", fontSize: 14, fill: 0xcccccc });
+    pbLabel.x = 40; pbLabel.y = 260;
+    pixiUiApp.stage.addChild(pbLabel);
+    pixiUiProgressBar = new ui.ProgressBar({
+        bg: new PIXI.Graphics().beginFill(0x303848).drawRoundedRect(0, 0, 300, 18, 4).endFill(),
+        fill: new PIXI.Graphics().beginFill(0x40c060).drawRoundedRect(0, 0, 300, 18, 4).endFill(),
+        progress: 0,
+    });
+    pixiUiProgressBar.x = 40; pixiUiProgressBar.y = 285;
+    pixiUiApp.stage.addChild(pixiUiProgressBar);
+
+    // --- ScrollBox ---
+    var scrollItems = [];
+    for (var i = 0; i < 12; i++) {
+        var itemBg = new PIXI.Graphics().beginFill(0x405060).drawRoundedRect(0, 0, 220, 36, 4).endFill();
+        var itemLabel = new PIXI.Text("Item " + (i + 1), { fontFamily: "Arial", fontSize: 14, fill: 0xffffff });
+        itemLabel.x = 12; itemLabel.y = 10;
+        itemBg.addChild(itemLabel);
+        scrollItems.push(itemBg);
+    }
+    var scrollBox = new ui.ScrollBox({
+        background: 0x202830,
+        elementsMargin: 4,
+        width: 240, height: 280,
+        items: scrollItems,
+    });
+    scrollBox.x = 700; scrollBox.y = 100;
+    pixiUiApp.stage.addChild(scrollBox);
+    var sbLabel = new PIXI.Text("ScrollBox (wheel to scroll)", { fontFamily: "Arial", fontSize: 14, fill: 0xcccccc });
+    sbLabel.x = 700; sbLabel.y = 75;
+    pixiUiApp.stage.addChild(sbLabel);
+
+    // --- ログ表示 ---
+    pixiUiLogText = new PIXI.Text(pixiUiState.log, {
+        fontFamily: "Arial", fontSize: 16, fill: 0xffe080,
+    });
+    pixiUiLogText.x = 40; pixiUiLogText.y = 640;
+    pixiUiApp.stage.addChild(pixiUiLogText);
+
+    var helpText = new PIXI.Text("Click button, drag slider, scroll wheel over scrollbox", {
+        fontFamily: "Arial", fontSize: 12, fill: 0x808890,
+    });
+    helpText.x = 40; helpText.y = 670;
+    pixiUiApp.stage.addChild(helpText);
+
+    console.log("pixi.ui demo initialized");
+}
+
+function redrawBg10() {
+    if (!pixiUiBgGraphics) return;
+    pixiUiBgGraphics.clear();
+    pixiUiBgGraphics.beginFill(pixiUiState.bgColor).drawRect(0, 0, 1280, 720).endFill();
+}
+
+function renderDemo10() {
+    if (!pixiUiApp) return;
+    // ProgressBar をアニメーション ON 時のみ進める
+    if (pixiUiProgressBar) {
+        if (pixiUiState.switchOn) {
+            pixiUiState.progress = (pixiUiState.progress + 0.4) % 100;
+        }
+        pixiUiProgressBar.progress = pixiUiState.progress;
+    }
+    pixiUiApp.renderer.reset();
+    pixiUiApp.renderer.render(pixiUiApp.stage);
 }
 
 // ============================================================
@@ -1198,11 +1669,21 @@ try {
 }
 
 // フォント読み込み
+// 第1引数: ファイルパス、省略可能な第2引数: alias 名（ThorVG 内部登録名）
+// 第2引数なしの場合は ThorVG が標準的なフォント名（ファイル stem など）で登録する
 try {
     Canvas2D.loadFont("fonts/OpenSans-Regular.ttf");
     Canvas2D.loadFont("fonts/OpenSans-Bold.ttf");
     Canvas2D.loadFont("fonts/Roboto-Regular.ttf");
     Canvas2D.loadFont("fonts/RobotoMono-VariableFont_wght.ttf");
+    // 多言語: NotoSansJP / SC / TC は ThorVG FT loader のフォールバック候補にもなる
+    Canvas2D.loadFont("fonts/NotoSansJP-Regular.otf");
+    Canvas2D.loadFont("fonts/NotoSansSC-Regular.otf");
+    Canvas2D.loadFont("fonts/NotoSansTC-Regular.otf");
+    Canvas2D.loadFont("fonts/NotoEmoji-Regular.ttf");
+    // pixi.js / pixi.ui がデフォルトで "Arial" / "sans-serif" を要求するため alias 登録
+    Canvas2D.loadFont("fonts/OpenSans-Regular.ttf", "Arial");
+    Canvas2D.loadFont("fonts/OpenSans-Regular.ttf", "sans-serif");
     console.log("Fonts loaded");
 } catch(e) {
     console.error("Font load error: " + e);
@@ -1231,6 +1712,7 @@ if (initialDemo > 0) {
     if (demoMode === 5) initDemo5();
     if (demoMode === 8) initDemo8();
     if (demoMode === 9) initDemo9();
+    if (demoMode === 10) initDemo10();
 }
 
 // ============================================================
@@ -1256,9 +1738,22 @@ addEventListener("keydown", function(e) {
     if (e.key === "7") { demoMode = 7; demo7Inited = false; console.log("Demo 7: Dirty Rect"); }
     if (e.key === "8") { demoMode = 8; initDemo8(); console.log("Demo 8: three.js"); }
     if (e.key === "9") { demoMode = 9; initDemo9(); console.log("Demo 9: three-vrm"); }
+    if (e.key === "0") { demoMode = 10; initDemo10(); console.log("Demo 10: pixi.ui"); }
 
     if (e.key === "r" || e.key === "R") {
         offsetX = 0.0; offsetY = 0.0; alpha = 1.0;
+    }
+
+    // Demo 3 ページ切替 ([ / ])
+    if (demoMode === 3) {
+        if (e.key === "[") {
+            demo3Page = (demo3Page - 2 + demo3PageMax) % demo3PageMax + 1;
+            console.log("Demo 3 page: " + demo3Page);
+        }
+        if (e.key === "]") {
+            demo3Page = demo3Page % demo3PageMax + 1;
+            console.log("Demo 3 page: " + demo3Page);
+        }
     }
 });
 
@@ -1330,7 +1825,7 @@ function render() {
         drawCanvas2DAt(canvas2d);
     } else if (demoMode === 3) {
         renderDemo3();
-        drawCanvas2DAt(canvas2d);
+        drawCanvas2DAt(canvas2d_demo3);
     } else if (demoMode === 4) {
         renderDemo4();
         drawCanvas2DAt(canvas2d);
@@ -1346,6 +1841,8 @@ function render() {
         renderDemo8();
     } else if (demoMode === 9) {
         renderDemo9();
+    } else if (demoMode === 10) {
+        renderDemo10();
     }
 }
 
