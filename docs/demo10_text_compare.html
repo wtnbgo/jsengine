@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>Demo 10 text compare (browser-side metrics)</title>
+<style>
+  html, body { margin: 0; padding: 0; background: #161b22; color: #c9d1d9; font-family: monospace; font-size: 13px; }
+  .wrap { max-width: 980px; margin: 0 auto; padding: 16px; }
+  h1 { color: #79c0ff; font-size: 16px; margin: 6px 0 12px; }
+  pre { background:#0d1117; padding:8px 12px; border:1px solid #30363d; overflow-x: auto; }
+  .case { margin-bottom: 12px; }
+  .case b { color: #79c0ff; }
+  canvas.show { border: 1px solid #30363d; background: #20242c; image-rendering: pixelated; }
+  .row { display: flex; gap: 16px; align-items: flex-start; }
+</style>
+</head>
+<body>
+<div class="wrap">
+<h1>Browser-side PIXI-style text canvas measurement</h1>
+<p>
+  jsengine の <code>test_pixi_trace.js</code> と同じ流れをブラウザの Canvas 2D で実行し、
+  visible top / bottom を計算します。jsengine 側の数値と比較するため。
+</p>
+<div id="out"></div>
+</div>
+<script>
+const out = document.getElementById("out");
+
+function scanCanvas(ctx, canvas, label, font, baseline, fill, text) {
+  const W = canvas.width, H = canvas.height;
+  // 透過クリア
+  ctx.clearRect(0, 0, W, H);
+  ctx.font = font;
+  ctx.textBaseline = "alphabetic";
+  ctx.fillStyle = fill;
+  ctx.fillText(text, 0, baseline);
+
+  const img = ctx.getImageData(0, 0, W, H);
+  const d = img.data;
+  let top = -1, bottom = -1;
+  for (let y = 0; y < H && top < 0; y++) {
+    for (let x = 0; x < W; x++) {
+      if (d[(y * W + x) * 4 + 3] !== 0) { top = y; break; }
+    }
+  }
+  for (let y = H - 1; y > top && bottom < 0; y--) {
+    for (let x = 0; x < W; x++) {
+      if (d[(y * W + x) * 4 + 3] !== 0) { bottom = y; break; }
+    }
+  }
+  return { top, bottom, W, H, baseline };
+}
+
+const cases = [
+  // jsengine 側 c2d#2 と同じ条件
+  { name: "Cycle Color (18px, btn label)", W: 94, H: 34, font: "18px Arial", baseline: 23, fill: "#fff", text: "Cycle Color" },
+  // c2d#4 と同じ
+  { name: "Animate (16px, cb label)",      W: 63, H: 30, font: "16px Arial", baseline: 21, fill: "rgb(204,204,204)", text: "Animate" },
+  // c2d#1 と同じ
+  { name: "pixi.ui Widget Showcase (28px, title)", W: 313, H: 52, font: "28px Arial", baseline: 36, fill: "#fff", text: "pixi.ui Widget Showcase" },
+  // measurement キャンバス相当
+  { name: "(measureFont 18px) |ÉqÅM",      W: 59, H: 34, font: "18px Arial", baseline: 23, fill: "#000", text: "|ÉqÅM", bg: "#f00" },
+  { name: "(measureFont 14px) |ÉqÅM",      W: 46, H: 26, font: "14px Arial", baseline: 18, fill: "#000", text: "|ÉqÅM", bg: "#f00" },
+  { name: "(measureFont 28px) |ÉqÅM",      W: 92, H: 52, font: "28px Arial", baseline: 36, fill: "#000", text: "|ÉqÅM", bg: "#f00" },
+];
+
+function drawCase(c) {
+  const canvas = document.createElement("canvas");
+  canvas.width = c.W; canvas.height = c.H;
+  const ctx = canvas.getContext("2d");
+
+  if (c.bg) {
+    ctx.fillStyle = c.bg;
+    ctx.fillRect(0, 0, c.W, c.H);
+    // measureFont 風: bg 上に黒テキスト
+    ctx.font = c.font;
+    ctx.textBaseline = "alphabetic";
+    ctx.fillStyle = c.fill;
+    ctx.fillText(c.text, 0, c.baseline);
+  } else {
+    ctx.font = c.font;
+    ctx.textBaseline = "alphabetic";
+    ctx.fillStyle = c.fill;
+    ctx.fillText(c.text, 0, c.baseline);
+  }
+
+  // scan (bg がある時は赤じゃないピクセルを探す、ない時は alpha != 0)
+  const img = ctx.getImageData(0, 0, c.W, c.H);
+  const d = img.data;
+  let top = -1, bottom = -1;
+  if (c.bg) {
+    for (let y = 0; y < c.H && top < 0; y++) {
+      for (let x = 0; x < c.W; x++) {
+        const i = (y * c.W + x) * 4;
+        if (d[i] !== 255 || d[i+1] !== 0 || d[i+2] !== 0) { top = y; break; }
+      }
+    }
+    for (let y = c.H - 1; y > top && bottom < 0; y--) {
+      for (let x = 0; x < c.W; x++) {
+        const i = (y * c.W + x) * 4;
+        if (d[i] !== 255 || d[i+1] !== 0 || d[i+2] !== 0) { bottom = y; break; }
+      }
+    }
+  } else {
+    for (let y = 0; y < c.H && top < 0; y++) {
+      for (let x = 0; x < c.W; x++) {
+        if (d[(y * c.W + x) * 4 + 3] !== 0) { top = y; break; }
+      }
+    }
+    for (let y = c.H - 1; y > top && bottom < 0; y--) {
+      for (let x = 0; x < c.W; x++) {
+        if (d[(y * c.W + x) * 4 + 3] !== 0) { bottom = y; break; }
+      }
+    }
+  }
+
+  // 表示用拡大コピー
+  const showScale = 3;
+  const show = document.createElement("canvas");
+  show.width = c.W * showScale; show.height = c.H * showScale;
+  show.className = "show";
+  const sctx = show.getContext("2d");
+  sctx.imageSmoothingEnabled = false;
+  sctx.drawImage(canvas, 0, 0, show.width, show.height);
+
+  return { canvas, show, top, bottom };
+}
+
+cases.forEach(c => {
+  const div = document.createElement("div");
+  div.className = "case";
+  const r = drawCase(c);
+  const info = document.createElement("pre");
+  info.textContent =
+    "● " + c.name + "\n" +
+    "  canvas " + c.W + "x" + c.H + "  font=" + c.font + "  baseline=" + c.baseline + "\n" +
+    "  visible top=" + r.top + "  bottom=" + r.bottom +
+    "  (ascent=" + (c.baseline - r.top) + "  descent=" + (r.bottom - c.baseline) + ")";
+  div.appendChild(info);
+  const row = document.createElement("div");
+  row.className = "row";
+  row.appendChild(r.show);
+  div.appendChild(row);
+  out.appendChild(div);
+});
+</script>
+</body>
+</html>
