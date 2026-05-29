@@ -538,7 +538,12 @@ Object.defineProperty(Image.prototype, "src", {
                     throw new Error("blob not found: " + cleanUrl);
                 }
             } else {
-                bitmap = createImageBitmap(cleanUrl);
+                // 注: 自身が下でラップして Promise を返すように上書きするので、
+                // 同期的に解決するために awaitPromise でアンラップする。
+                var maybePromise = createImageBitmap(cleanUrl);
+                bitmap = (maybePromise && typeof maybePromise.then === "function")
+                    ? awaitPromise(maybePromise)
+                    : maybePromise;
             }
             self.width = bitmap.width;
             self.height = bitmap.height;
