@@ -862,6 +862,30 @@ static JSValue ctx_getImageData(JSContext *ctx, JSValueConst this_val, int argc,
     return obj;
 }
 
+// dataVal が TypedArray なら裏の ArrayBuffer の (offset から length) を返す。
+// 単純な ArrayBuffer なら全体を返す。それ以外なら nullptr。
+// 戻り値ポインタは dataVal (または裏 ArrayBuffer) が alive な間だけ有効。
+static const uint8_t* get_pixel_buffer(JSContext *ctx, JSValueConst dataVal, size_t *out_size) {
+    *out_size = 0;
+    if (JS_IsObject(dataVal)) {
+        size_t offset = 0, length = 0, bpe = 0;
+        JSValue ab = JS_GetTypedArrayBuffer(ctx, dataVal, &offset, &length, &bpe);
+        if (!JS_IsException(ab)) {
+            size_t buf_size = 0;
+            uint8_t *buf = JS_GetArrayBuffer(ctx, &buf_size, ab);
+            JS_FreeValue(ctx, ab);
+            if (buf && offset + length <= buf_size) {
+                *out_size = length;
+                return buf + offset;
+            }
+        }
+    }
+    size_t buf_size = 0;
+    const uint8_t *buf = JS_GetArrayBuffer(ctx, &buf_size, dataVal);
+    if (buf) { *out_size = buf_size; return buf; }
+    return nullptr;
+}
+
 static JSValue ctx_putImageData(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     auto *d = get_data(ctx, this_val);
     double dxd, dyd;
@@ -876,11 +900,15 @@ static JSValue ctx_putImageData(JSContext *ctx, JSValueConst this_val, int argc,
     JSValue hVal = JS_GetPropertyStr(ctx, argv[0], "height");
     JS_ToInt32(ctx, &h, hVal); JS_FreeValue(ctx, hVal);
 
+    // ImageData.data は CSS Canvas 仕様で Uint8ClampedArray なので
+    // JS_GetArrayBuffer 単独では取れない。TypedArray も扱える get_pixel_buffer を使う。
     JSValue dataVal = JS_GetPropertyStr(ctx, argv[0], "data");
     size_t sz = 0;
-    const uint8_t *src = JS_GetArrayBuffer(ctx, &sz, dataVal);
-    JS_FreeValue(ctx, dataVal);
-    if (!src) return JS_UNDEFINED;
+    const uint8_t *src = get_pixel_buffer(ctx, dataVal, &sz);
+    if (!src) {
+        JS_FreeValue(ctx, dataVal);
+        return JS_UNDEFINED;
+    }
 
     for (int py = 0; py < h; py++) {
         for (int px = 0; px < w; px++) {
@@ -893,6 +921,7 @@ static JSValue ctx_putImageData(JSContext *ctx, JSValueConst this_val, int argc,
         }
     }
     d->markDirty(dx, dy, w, h);
+    JS_FreeValue(ctx, dataVal);
     return JS_UNDEFINED;
 }
 
