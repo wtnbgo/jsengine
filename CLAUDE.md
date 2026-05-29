@@ -77,6 +77,7 @@ cmake --build build/x64-windows --config Release
 - pixi.js v7.4.3 動作確認済み（UMD 版、data/lib/ に polyfill.js, browser_shim.js, pixi.min.js）。pixi.js v8 は ESM+TLA で読み込み可能だがバッチレンダラーのジオメトリ更新に問題あり（課題）。
 - pixi.js v4.5.4（RPG Maker MV）は test/ で作業中。OES_vertex_array_object 拡張マッピング、CanvasRenderingContext2D シム等を追加済み。
 - `qjs_get_buffer()` は TypedArray の byteOffset を正しく処理する。
+- `qjs_get_pixels()` は `out_hold` 引数で取得した ArrayBuffer の寿命を呼出し側に渡す。`canvas.data` getter のように新規 ArrayBuffer を毎回作って返すケースで、`JS_FreeValue` を即実行するとそのバッファが解放されて `glTexImage2D` に渡したポインタが dangling になり、GPU が解放済みヒープを読んでテクスチャ端に「起動毎に色が変わる謎の点」を生む。呼出し側は GL 関数を呼び終えてから `JS_FreeValue(ctx, pixelsHold)` する。
 - `ctx.getImageData()` の戻り値 `data` は CSS Canvas 仕様通り `Uint8ClampedArray` を返す。ArrayBuffer のままだと `data[i]` でのインデックスアクセスが `undefined` になり、PIXI v7 の `TextMetrics.measureFont()` のような R チャネルスキャン (`if (data[i] !== 255)`) が破綻して `ascent = baseline` (本来の 1.5倍) を返し、テキスト描画位置が大きく下にずれる。
 - `canvas.width` / `canvas.height` の代入は CSS Canvas 仕様通り、サイズが同じでもピクセルバッファをクリアし context state (fillStyle / font / transform 等) を初期化する。PIXI.Text の updateText() は毎回 width/height を代入してから描画するので、これが守られないと前回描画の残骸が残る。
 - `getParameter()` は配列型（VIEWPORT 等）を JS Array で返す。

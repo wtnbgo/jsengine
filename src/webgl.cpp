@@ -83,13 +83,22 @@ static void* qjs_get_buffer(JSContext *ctx, JSValueConst val, size_t *out_size) 
 }
 
 // ピクセルデータ取得ヘルパー
-static void* qjs_get_pixels(JSContext *ctx, JSValueConst val) {
+// 呼出し側は使い終わったら out_hold に対して JS_FreeValue() する。
+// .data プロパティの getter が新規 ArrayBuffer を返すケースで、
+// その場で JS_FreeValue するとバッファが解放されて返したポインタが dangling になる。
+// GL に渡してアップロードが完了するまで ArrayBuffer の寿命を保持する必要がある。
+static void* qjs_get_pixels(JSContext *ctx, JSValueConst val, JSValue *out_hold) {
+    *out_hold = JS_UNDEFINED;
     void *ptr = qjs_get_buffer(ctx, val, NULL);
     if (ptr) return ptr;
     if (JS_IsObject(val)) {
         JSValue data = JS_GetPropertyStr(ctx, val, "data");
         ptr = qjs_get_buffer(ctx, data, NULL);
-        JS_FreeValue(ctx, data);
+        if (ptr) {
+            *out_hold = data;  // GL 呼出が終わるまで保持
+        } else {
+            JS_FreeValue(ctx, data);
+        }
     }
     return ptr;
 }
@@ -520,6 +529,7 @@ static JSValue js_texImage2D(JSContext *ctx, JSValueConst this_val, int argc, JS
     GLint level = (GLint)arg_int(ctx, argv[1]);
     GLint internalformat = (GLint)arg_int(ctx, argv[2]);
 
+    JSValue pixelsHold = JS_UNDEFINED;
     if (argc >= 9) {
         // texImage2D(target, level, internalformat, width, height, border, format, type, pixels)
         GLsizei width = (GLsizei)arg_int(ctx, argv[3]);
@@ -527,7 +537,7 @@ static JSValue js_texImage2D(JSContext *ctx, JSValueConst this_val, int argc, JS
         GLint border = (GLint)arg_int(ctx, argv[5]);
         GLenum format = (GLenum)arg_uint(ctx, argv[6]);
         GLenum type = (GLenum)arg_uint(ctx, argv[7]);
-        void *pixels = qjs_get_pixels(ctx, argv[8]);
+        void *pixels = qjs_get_pixels(ctx, argv[8], &pixelsHold);
         internalformat = fixInternalFormat(internalformat, type);
         glTexImage2D(target, level, internalformat, width, height, border, format, type, pixels);
     } else if (argc >= 6) {
@@ -543,11 +553,12 @@ static JSValue js_texImage2D(JSContext *ctx, JSValueConst this_val, int argc, JS
             JSValue hv = JS_GetPropertyStr(ctx, argv[5], "height");
             if (!JS_IsUndefined(hv)) { height = (GLsizei)arg_int(ctx, hv); }
             JS_FreeValue(ctx, hv);
-            pixels = qjs_get_pixels(ctx, argv[5]);
+            pixels = qjs_get_pixels(ctx, argv[5], &pixelsHold);
         }
         internalformat = fixInternalFormat(internalformat, type);
         glTexImage2D(target, level, internalformat, width, height, 0, format, type, pixels);
     }
+    JS_FreeValue(ctx, pixelsHold);
     return JS_UNDEFINED;
 }
 
@@ -557,13 +568,14 @@ static JSValue js_texSubImage2D(JSContext *ctx, JSValueConst this_val, int argc,
     GLint xoffset = (GLint)arg_int(ctx, argv[2]);
     GLint yoffset = (GLint)arg_int(ctx, argv[3]);
 
+    JSValue pixelsHold = JS_UNDEFINED;
     if (argc >= 9) {
         // texSubImage2D(target, level, xoffset, yoffset, width, height, format, type, pixels)
         GLsizei width = (GLsizei)arg_int(ctx, argv[4]);
         GLsizei height = (GLsizei)arg_int(ctx, argv[5]);
         GLenum format = (GLenum)arg_uint(ctx, argv[6]);
         GLenum type = (GLenum)arg_uint(ctx, argv[7]);
-        void *pixels = qjs_get_pixels(ctx, argv[8]);
+        void *pixels = qjs_get_pixels(ctx, argv[8], &pixelsHold);
         glTexSubImage2D(target, level, xoffset, yoffset, width, height, format, type, pixels);
     } else if (argc >= 7) {
         // texSubImage2D(target, level, xoffset, yoffset, format, type, source)
@@ -578,12 +590,13 @@ static JSValue js_texSubImage2D(JSContext *ctx, JSValueConst this_val, int argc,
             JSValue hv = JS_GetPropertyStr(ctx, argv[6], "height");
             if (!JS_IsUndefined(hv)) { height = (GLsizei)arg_int(ctx, hv); }
             JS_FreeValue(ctx, hv);
-            pixels = qjs_get_pixels(ctx, argv[6]);
+            pixels = qjs_get_pixels(ctx, argv[6], &pixelsHold);
         }
         if (width > 0 && height > 0 && pixels) {
             glTexSubImage2D(target, level, xoffset, yoffset, width, height, format, type, pixels);
         }
     }
+    JS_FreeValue(ctx, pixelsHold);
     return JS_UNDEFINED;
 }
 
@@ -618,8 +631,10 @@ static JSValue js_texImage3D(JSContext *ctx, JSValueConst this_val, int argc, JS
     GLint border = (GLint)arg_int(ctx, argv[6]);
     GLenum format = (GLenum)arg_uint(ctx, argv[7]);
     GLenum type = (GLenum)arg_uint(ctx, argv[8]);
-    void *pixels = qjs_get_pixels(ctx, argv[9]);
+    JSValue pixelsHold = JS_UNDEFINED;
+    void *pixels = qjs_get_pixels(ctx, argv[9], &pixelsHold);
     glTexImage3D(target, level, internalformat, width, height, depth, border, format, type, pixels);
+    JS_FreeValue(ctx, pixelsHold);
     return JS_UNDEFINED;
 }
 
