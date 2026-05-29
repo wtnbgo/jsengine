@@ -130,7 +130,7 @@ See `manual.js` for a complete API listing in JavaScript-style documentation.
 
 ## Demos
 
-`data/main.js` includes 8 demos switchable by key press.
+`data/main.js` includes 10 demos switchable by key press.
 
 Demo 1 displays a HUD overlay showing controls, demo list, and system information.
 
@@ -144,6 +144,8 @@ Demo 1 displays a HUD overlay showing controls, demo list, and system informatio
 | **6** | Canvas2D drawImage / getImageData / putImageData test |
 | **7** | Canvas2D dirty rect partial update test |
 | **8** | three.js r176 test (cube, sphere, floor plane, ESM) |
+| **9** | three-vrm v3 VRM avatar display (MToon shader, SkinnedMesh) |
+| **0** | pixi.ui v1.2.4 widget showcase (Button / CheckBox / Slider / ProgressBar / ScrollBox) |
 | **Space** | Play beep sound |
 | **R** | Reset |
 

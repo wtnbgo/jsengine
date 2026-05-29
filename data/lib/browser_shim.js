@@ -119,12 +119,82 @@ HTMLCanvasElement.prototype.getContext = function(type, options) {
     return null;
 };
 
+// pixi v7 の EventSystem は pointer* 系を登録するが、jsengine は mouse* 系のみ発火する。
+// pointer event を mouse event にマップしてキャンバス／グローバルで受け取れるようにする。
+function _mapEventType(t) {
+    if (t === "pointerdown") return "mousedown";
+    if (t === "pointerup") return "mouseup";
+    if (t === "pointermove") return "mousemove";
+    if (t === "pointercancel") return "mouseup";
+    if (t === "pointerleave" || t === "pointerenter") return null;
+    // pointerover / pointerout / pointerupoutside / gotpointercapture 等は対応イベントなしのため無視
+    if (t === "pointerover" || t === "pointerout" || t === "pointerupoutside") return null;
+    return t;
+}
 HTMLCanvasElement.prototype.addEventListener = function(type, cb) {
-    addEventListener(type, cb);
+    // pixi EventSystem は domElement = canvas として登録するので、最初に
+    // pointer/mouse/wheel イベントを購読してきた canvas を pixi の対象として記録する。
+    // onPointerUp の `e !== this.domElement` 判定に使う target を補完するため。
+    if (type.indexOf("pointer") === 0 || type.indexOf("mouse") === 0 || type === "wheel") {
+        globalThis.__pixiDomElement = this;
+    }
+    var mapped = _mapEventType(type);
+    if (mapped) addEventListener(mapped, cb);
 };
 HTMLCanvasElement.prototype.removeEventListener = function(type, cb) {
-    removeEventListener(type, cb);
+    var mapped = _mapEventType(type);
+    if (mapped) removeEventListener(mapped, cb);
 };
+
+// pixi v7 EventSystem は `globalThis.addEventListener("pointerup", ...)` を
+// canvas でなく window に直接登録するため、HTMLCanvasElement の上書きでは
+// 捕まらない。globalThis 側でも同じ pointer→mouse マッピングが必要。
+// あわせて event オブジェクトに preventDefault 等のメソッドを生やしておく
+// （jsengine の C++ 側 event は plain object なので、pixi が呼ぶ
+//  e.preventDefault() / e.stopPropagation() / e.composedPath() で
+//  "not a function" になる）。
+var _origGlobalAdd = addEventListener;
+var _origGlobalRemove = removeEventListener;
+var _cbMap = new WeakMap(); // 元 cb -> wrapped cb（removeEventListener 用）
+function _noop() {}
+function _emptyArr() { return []; }
+function _ensureEventMethods(e) {
+    if (!e || typeof e !== "object") return e;
+    if (typeof e.preventDefault !== "function") e.preventDefault = _noop;
+    if (typeof e.stopPropagation !== "function") e.stopPropagation = _noop;
+    if (typeof e.stopImmediatePropagation !== "function") e.stopImmediatePropagation = _noop;
+    if (typeof e.composedPath !== "function") e.composedPath = _emptyArr;
+    // pixi onPointerUp は `e.target !== domElement` で pointerup→pointerupoutside に
+    // すり替える。target 未設定だと Button の onPress が拾えないため、最初に pixi が
+    // 購読した canvas を target として埋めておく。
+    if (e.target === undefined && globalThis.__pixiDomElement) {
+        e.target = globalThis.__pixiDomElement;
+    }
+    return e;
+}
+function _wrappedGlobalAdd(type, cb) {
+    var mapped = _mapEventType(type);
+    if (!mapped) return;
+    var wrapped = function(e) { cb(_ensureEventMethods(e)); };
+    try { _cbMap.set(cb, wrapped); } catch (_) {} // cb が primitive の場合は無視
+    _origGlobalAdd(mapped, wrapped);
+}
+function _wrappedGlobalRemove(type, cb) {
+    var mapped = _mapEventType(type);
+    if (!mapped) return;
+    var wrapped = null;
+    try { wrapped = _cbMap.get(cb); } catch (_) {}
+    _origGlobalRemove(mapped, wrapped || cb);
+}
+globalThis.addEventListener = _wrappedGlobalAdd;
+globalThis.removeEventListener = _wrappedGlobalRemove;
+
+// pixi の normalizeToPointerData は `nativeEvent instanceof MouseEvent` で
+// 分岐して pointerId/pointerType/pressure 等を補う。jsengine 側の event は
+// plain object なので default では instanceof が false → 正規化されない。
+// Symbol.hasInstance を上書きして「clientX と button を持つ object」を
+// MouseEvent として認識させる。PointerEvent はわざと未マッチのままに残し、
+// pixi に常に正規化パスを通させる。
 HTMLCanvasElement.prototype.getBoundingClientRect = function() {
     return { x: 0, y: 0, width: this.width, height: this.height, top: 0, left: 0, bottom: this.height, right: this.width };
 };
@@ -655,6 +725,16 @@ window.CustomEvent = CustomEvent;
 // pixi.js が参照するイベントクラス
 function MouseEvent(type, opts) { Event.call(this, type, opts); }
 MouseEvent.prototype = Object.create(Event.prototype);
+// jsengine が C++ で生成する event オブジェクトは MouseEvent インスタンスでないため、
+// Symbol.hasInstance で「clientX と button を持つ object」を MouseEvent と判定する。
+// これで pixi の normalizeToPointerData が pointerId/pointerType 等を補ってくれる。
+Object.defineProperty(MouseEvent, Symbol.hasInstance, {
+    value: function(obj) {
+        return obj != null && typeof obj === "object"
+            && typeof obj.clientX === "number"
+            && typeof obj.button === "number";
+    }
+});
 function PointerEvent(type, opts) { Event.call(this, type, opts); }
 PointerEvent.prototype = Object.create(Event.prototype);
 function TouchEvent(type, opts) { Event.call(this, type, opts); }
