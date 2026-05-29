@@ -152,7 +152,7 @@ ctx.drawImage(image, sx, sy, sw, sh, dx, dy, dw, dh);   // 9引数: 切り出し
 // image: createImageBitmap() の戻り値、または data プロパティを持つオブジェクト
 
 // --- ピクセル操作（C++ 側で直接バッファアクセス） ---
-var imgData = ctx.getImageData(x, y, w, h);              // => { width, height, data (RGBA buffer) }
+var imgData = ctx.getImageData(x, y, w, h);              // => { width, height, data: Uint8ClampedArray(RGBA) }
 ctx.putImageData(imgData, dx, dy);                       // RGBA バッファを直接書き込み
 
 // --- 変換 ---

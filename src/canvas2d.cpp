@@ -843,7 +843,22 @@ static JSValue ctx_getImageData(JSContext *ctx, JSValueConst this_val, int argc,
     JSValue obj = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, obj, "width", JS_NewInt32(ctx, w));
     JS_SetPropertyStr(ctx, obj, "height", JS_NewInt32(ctx, h));
-    JS_SetPropertyStr(ctx, obj, "data", JS_NewArrayBufferCopy(ctx, out.data(), sz));
+    // data は CSS Canvas 仕様で Uint8ClampedArray。ArrayBuffer のままだと
+    // imagedata.data[i] でのインデックスアクセスが undefined を返し、
+    // PIXI の measureFont 等のスキャンが破綻する。
+    JSValue ab = JS_NewArrayBufferCopy(ctx, out.data(), sz);
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue ctor = JS_GetPropertyStr(ctx, global, "Uint8ClampedArray");
+    JSValue data;
+    if (JS_IsConstructor(ctx, ctor)) {
+        data = JS_CallConstructor(ctx, ctor, 1, &ab);
+    } else {
+        data = JS_DupValue(ctx, ab);
+    }
+    JS_FreeValue(ctx, ctor);
+    JS_FreeValue(ctx, global);
+    JS_FreeValue(ctx, ab);
+    JS_SetPropertyStr(ctx, obj, "data", data);
     return obj;
 }
 
@@ -933,12 +948,23 @@ static JSValue ctx_resize(JSContext *ctx, JSValueConst this_val, int argc, JSVal
     JS_ToUint32(ctx, &h, argv[1]);
     if (w < 1) w = 1;
     if (h < 1) h = 1;
-    if (w == d->width && h == d->height) return JS_UNDEFINED;
 
     // 蓄積分を破棄
     for (auto *p : d->pendingPaints) p->unref();
     d->pendingPaints.clear();
     d->hasPending = false;
+
+    // 状態リセット (CSS Canvas 仕様: canvas.width 代入で context state も初期化)
+    d->state = DrawState();
+    d->stateStack.clear();
+
+    if (w == d->width && h == d->height) {
+        // サイズ変更なしでもピクセルバッファはクリアする (CSS Canvas 仕様)
+        std::fill(d->pixels.begin(), d->pixels.end(), 0u);
+        d->rgbaCacheDirty = true;
+        d->markAllDirty();
+        return JS_UNDEFINED;
+    }
 
     d->width = w;
     d->height = h;
