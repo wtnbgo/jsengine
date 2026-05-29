@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>Demo 2 Canvas2D Reference (browser-side ground truth)</title>
+<style>
+  html, body { margin: 0; padding: 0; background: #161b22; color: #c9d1d9;
+               font-family: sans-serif; }
+  .wrap { max-width: 720px; margin: 0 auto; padding: 16px; }
+  h1 { font-size: 18px; margin: 6px 0 12px; color: #79c0ff; }
+  canvas { display:block; background:#0d1117; box-shadow: 0 0 12px #000; }
+  .note { font-size: 12px; color: #8b949e; margin-top: 8px; }
+  .legend { font-size: 12px; margin-top: 8px; color:#8b949e; }
+  code { background:#21262d; padding:1px 4px; border-radius:3px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Demo 2 Canvas2D Reference — Canvas2D 図形描画の「正解」</h1>
+  <canvas id="c" width="512" height="512"></canvas>
+  <div class="legend">
+    このページは jsengine の Demo 2 と同じ描画コードをブラウザの Canvas 2D API で実行します。
+    並べて見比べることで、矩形・パス・円・ベジェ・α合成のズレが分かります。
+    <ul>
+      <li>静的描画（アニメーションなし）</li>
+      <li>サイズは <b>512×512</b> 固定</li>
+      <li>jsengine 側は <code>3</code> キーで Demo 3 → <code>2</code> キーで Demo 2 に切替（実体は Demo 番号 2）</li>
+    </ul>
+    <b>jsengine 側との差異 (期待される):</b>
+    <ul>
+      <li>なし — 全ての形状・色・α合成・パスは Canvas2D 標準動作内で完結するため、見た目はピクセル単位で近いはず。</li>
+      <li>ベジェ曲線・円弧の補間アルゴリズム差で 1〜2px のエッジ差は出る可能性あり。</li>
+    </ul>
+  </div>
+</div>
+
+<script>
+// ============================================================
+// jsengine の data/main.js から renderDemo2 部分をそのまま移植
+// ============================================================
+(function () {
+  const canvas = document.getElementById("c");
+  const c = canvas.getContext("2d");
+
+  // 背景
+  c.fillStyle = "#1a1a2e";
+  c.fillRect(0, 0, 512, 512);
+
+  // 矩形（塗り）
+  c.fillStyle = "#e94560";
+  c.fillRect(30, 30, 120, 80);
+
+  // 矩形（枠線）
+  c.strokeStyle = "#0f3460";
+  c.lineWidth = 4;
+  c.strokeRect(180, 30, 120, 80);
+
+  // 半透明矩形
+  c.globalAlpha = 0.5;
+  c.fillStyle = "#16213e";
+  c.fillRect(60, 60, 120, 80);
+  c.globalAlpha = 1.0;
+
+  // 円（パスで描画）
+  c.beginPath();
+  c.arc(400, 80, 50, 0, Math.PI * 2);
+  c.closePath();
+  c.fillStyle = "#533483";
+  c.fill();
+
+  // 半円
+  c.beginPath();
+  c.arc(400, 80, 50, 0, Math.PI);
+  c.closePath();
+  c.fillStyle = "rgba(255,200,0,0.7)";
+  c.fill();
+
+  // 三角形パス
+  c.beginPath();
+  c.moveTo(50, 250);
+  c.lineTo(150, 180);
+  c.lineTo(150, 320);
+  c.closePath();
+  c.fillStyle = "#2b9348";
+  c.fill();
+  c.strokeStyle = "white";
+  c.lineWidth = 2;
+  c.stroke();
+
+  // ベジェ曲線
+  c.beginPath();
+  c.moveTo(200, 250);
+  c.bezierCurveTo(250, 150, 350, 350, 450, 250);
+  c.strokeStyle = "#ff6b6b";
+  c.lineWidth = 3;
+  c.stroke();
+
+  // 複数矩形パターン
+  var colors = ["#e63946", "#457b9d", "#2a9d8f", "#e9c46a", "#f4a261"];
+  for (var i = 0; i < 5; i++) {
+    c.fillStyle = colors[i];
+    c.fillRect(30 + i * 60, 380, 50, 50);
+  }
+
+  // 同心円
+  for (var j = 5; j > 0; j--) {
+    c.beginPath();
+    c.arc(400, 400, j * 20, 0, Math.PI * 2);
+    c.closePath();
+    c.fillStyle = "rgba(" + (j*50) + "," + (255-j*40) + "," + (j*30+100) + ",0.6)";
+    c.fill();
+  }
+})();
+</script>
+</body>
+</html>

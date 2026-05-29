@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>Demo 6 Canvas2D Reference (browser-side ground truth)</title>
+<style>
+  @font-face { font-family: "OpenSans-Regular"; src: url("../data/fonts/OpenSans-Regular.ttf"); }
+  @font-face { font-family: "OpenSans-Bold";    src: url("../data/fonts/OpenSans-Bold.ttf"); }
+
+  html, body { margin: 0; padding: 0; background: #161b22; color: #c9d1d9;
+               font-family: "OpenSans-Regular", sans-serif; }
+  .wrap { max-width: 720px; margin: 0 auto; padding: 16px; }
+  h1 { font-size: 18px; margin: 6px 0 12px; color: #79c0ff; }
+  canvas { display:block; background:#0d1117; box-shadow: 0 0 12px #000; }
+  .legend { font-size: 12px; margin-top: 8px; color:#8b949e; }
+  code { background:#21262d; padding:1px 4px; border-radius:3px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Demo 6 Canvas2D Reference — drawImage / getImageData / putImageData の「正解」</h1>
+  <canvas id="c" width="500" height="700"></canvas>
+  <div class="legend">
+    このページは jsengine の Demo 6 と同じ描画コードをブラウザの Canvas 2D API で実行します。
+    <ul>
+      <li>サイズは <b>500×700</b> 固定。テスト用画像 <code>data/test_pattern.png</code> を読み込んで描画</li>
+      <li>jsengine 側は <code>Image</code>/<code>HTMLCanvasElement</code> シム経由で「ブラウザと同じ感覚」のフローも検証している</li>
+      <li>ブラウザ側はそれらが native なので、シム経路の B/C/D セクションは「ブラウザでは当然動く」前提</li>
+    </ul>
+    <b>jsengine 側との差異 (期待される):</b>
+    <ul>
+      <li>セクション 2 (Image シム経由): jsengine では <code>testImg._data</code> の存在やバイト数も表示される。ブラウザでは native <code>HTMLImageElement</code> なので <code>_data</code> は <code>undefined</code> 扱い、その代わり実画像が出る</li>
+      <li>セクション 3 (getImageData/putImageData): ブラウザ・jsengine 両方とも同じ色反転結果になるはず</li>
+    </ul>
+  </div>
+</div>
+
+<script>
+// ============================================================
+// jsengine の data/main.js から renderDemo6 部分を移植
+// ブラウザでは Image / HTMLCanvasElement が native なのでシム不要
+// ============================================================
+(function () {
+  const canvas = document.getElementById("c");
+  const c = canvas.getContext("2d");
+
+  // テスト画像を Image で読み込み（jsengine と同じ test_pattern.png）
+  const testPatternImg = new Image();
+  testPatternImg.src = "../data/test_pattern.png";
+
+  function render() {
+    // 背景クリア
+    c.clearRect(0, 0, 500, 700);
+
+    // 背景色
+    c.fillStyle = "#222233";
+    c.fillRect(0, 0, 500, 700);
+
+    // タイトル
+    c.font = "18px OpenSans-Bold";
+    c.fillStyle = "white";
+    c.fillText("Demo 6: drawImage / ImageData", 10, 20);
+
+    // --- drawImage テスト ---
+    // 1. そのまま描画
+    c.fillStyle = "#444466";
+    c.fillRect(10, 30, 74, 74);
+    c.drawImage(testPatternImg, 15, 35);
+    c.font = "12px OpenSans-Regular";
+    c.fillStyle = "white";
+    c.fillText("original", 15, 118);
+
+    // 2. リサイズ描画
+    c.fillStyle = "#444466";
+    c.fillRect(100, 30, 124, 74);
+    c.drawImage(testPatternImg, 105, 35, 120, 70);
+    c.fillStyle = "white";
+    c.fillText("resize 120x70", 105, 118);
+
+    // 3. 切り出し描画
+    c.fillStyle = "#444466";
+    c.fillRect(240, 30, 84, 84);
+    c.drawImage(testPatternImg, 16, 16, 32, 32, 245, 35, 80, 80);
+    c.fillStyle = "white";
+    c.fillText("clip+scale", 245, 128);
+
+    // 4. 同じ画像を複数回配置
+    c.fillStyle = "white";
+    c.fillText("tiled:", 10, 150);
+    for (var i = 0; i < 5; i++) {
+      c.drawImage(testPatternImg, 10 + i * 70, 155);
+    }
+
+    // === セクション2: ブラウザでは Image/HTMLCanvasElement が native ===
+    c.fillStyle = "#333355";
+    c.fillRect(0, 230, 500, 200);
+    c.font = "14px OpenSans-Bold";
+    c.fillStyle = "#ffcc00";
+    c.fillText("Image / HTMLCanvas (native in browser):", 10, 250);
+
+    c.font = "12px OpenSans-Regular";
+    c.fillStyle = "white";
+    c.fillText("w=" + testPatternImg.naturalWidth + "  h=" + testPatternImg.naturalHeight, 10, 270);
+
+    // A: Image → drawImage
+    c.fillStyle = "#444466";
+    c.fillRect(10, 280, 74, 74);
+    c.drawImage(testPatternImg, 15, 285);
+    c.fillStyle = "white";
+    c.fillText("A: direct", 15, 370);
+
+    // B: 別 canvas にコピーして getImageData
+    const testCanvas = document.createElement("canvas");
+    testCanvas.width = testPatternImg.naturalWidth;
+    testCanvas.height = testPatternImg.naturalHeight;
+    const testCtx = testCanvas.getContext("2d");
+    testCtx.drawImage(testPatternImg, 0, 0);
+    const td = testCtx.getImageData(0, 0, testPatternImg.naturalWidth, testPatternImg.naturalHeight);
+    let nonzero = 0;
+    for (let ti = 0; ti < td.data.length; ti += 4) {
+      if (td.data[ti + 3] !== 0) nonzero++;
+    }
+    c.fillStyle = "white";
+    c.fillText("B: canvas copy " + nonzero + "/" + (testPatternImg.naturalWidth * testPatternImg.naturalHeight) + " opaque", 100, 310);
+
+    // C: HTMLCanvasElement (browser is native) — 同じことをもう一度
+    const htmlCanvas = document.createElement("canvas");
+    htmlCanvas.width = testPatternImg.naturalWidth;
+    htmlCanvas.height = testPatternImg.naturalHeight;
+    const htmlCtx = htmlCanvas.getContext("2d");
+    htmlCtx.drawImage(testPatternImg, 0, 0);
+    const td2 = htmlCtx.getImageData(0, 0, testPatternImg.naturalWidth, testPatternImg.naturalHeight);
+    let nonzero2 = 0;
+    for (let ti2 = 0; ti2 < td2.data.length; ti2 += 4) {
+      if (td2.data[ti2 + 3] !== 0) nonzero2++;
+    }
+    c.fillText("C: HTMLCanvas " + nonzero2 + "/" + (testPatternImg.naturalWidth * testPatternImg.naturalHeight) + " opaque", 100, 330);
+    c.fillText("D: canvas.data=N/A (browser uses getImageData)", 100, 350);
+
+    // === セクション3: getImageData / putImageData ===
+    c.fillStyle = "#222233";
+    c.fillRect(0, 430, 500, 200);
+    c.font = "14px OpenSans-Bold";
+    c.fillStyle = "#ffcc00";
+    c.fillText("getImageData / putImageData:", 10, 450);
+
+    c.fillStyle = "#ff6600";
+    c.fillRect(10, 460, 80, 50);
+    c.fillStyle = "#0066ff";
+    c.fillRect(50, 480, 80, 50);
+
+    const imgData = c.getImageData(10, 460, 120, 70);
+
+    // コピー1: そのまま貼り付け
+    c.putImageData(imgData, 150, 460);
+    c.font = "12px OpenSans-Regular";
+    c.fillStyle = "white";
+    c.fillText("copy", 150, 545);
+
+    // コピー2: 色反転して貼り付け
+    const inverted = c.getImageData(10, 460, 120, 70);
+    for (let pi = 0; pi < inverted.data.length; pi += 4) {
+      if (inverted.data[pi + 3] > 0) {
+        inverted.data[pi]     = 255 - inverted.data[pi];
+        inverted.data[pi + 1] = 255 - inverted.data[pi + 1];
+        inverted.data[pi + 2] = 255 - inverted.data[pi + 2];
+      }
+    }
+    c.putImageData(inverted, 280, 460);
+    c.fillStyle = "white";
+    c.fillText("inverted", 280, 545);
+
+    // original ラベル
+    c.font = "12px OpenSans-Regular";
+    c.fillStyle = "white";
+    c.fillText("original", 10, 545);
+  }
+
+  // 画像 + フォントの読み込みを待ってから描画
+  Promise.all([
+    new Promise((res) => {
+      if (testPatternImg.complete) res();
+      else testPatternImg.onload = res;
+    }),
+    document.fonts && document.fonts.ready ? document.fonts.ready : Promise.resolve(),
+  ]).then(render);
+})();
+</script>
+</body>
+</html>

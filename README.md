@@ -151,6 +151,16 @@ Use `-demo N` to select the initial demo mode at launch.
 
 Place font files in `data/fonts/` (e.g., OpenSans, Roboto).
 
+### Browser reference pages
+
+`docs/demo{N}_reference.html` (for Demo 2, 3, 4, 6, 7, 10) execute the same rendering code in a browser as a ground-truth reference (Canvas 2D for 2/3/4/6/7, same pixi.ui lib for 10). Use them side-by-side with jsengine to isolate rendering differences. Each demo also has a `docs/demo{N}_verification.md` (or `demo3_text_verification.md`) describing expected appearance and common failure modes. Serve the project root via HTTP to view them:
+
+```bash
+cd D:/test/jsengine
+python -m http.server 8000
+# then open http://localhost:8000/docs/demoN_reference.html
+```
+
 ## License
 
 This project is licensed under the [MIT License](LICENSE).

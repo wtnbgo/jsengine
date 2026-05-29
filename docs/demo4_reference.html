@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>Demo 4 Canvas2D Reference (browser-side ground truth)</title>
+<style>
+  @font-face { font-family: "RobotoMono-VariableFont_wght"; src: url("../data/fonts/RobotoMono-VariableFont_wght.ttf"); }
+
+  html, body { margin: 0; padding: 0; background: #161b22; color: #c9d1d9;
+               font-family: sans-serif; }
+  .wrap { max-width: 720px; margin: 0 auto; padding: 16px; }
+  h1 { font-size: 18px; margin: 6px 0 12px; color: #79c0ff; }
+  canvas { display:block; background:#0d1117; box-shadow: 0 0 12px #000; }
+  .legend { font-size: 12px; margin-top: 8px; color:#8b949e; }
+  code { background:#21262d; padding:1px 4px; border-radius:3px; }
+  button { background:#21262d; color:#c9d1d9; border:1px solid #30363d;
+           padding:4px 10px; font-size:14px; cursor:pointer; margin-right:4px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Demo 4 Canvas2D Reference — Canvas2D アニメーションの「正解」</h1>
+  <div style="margin-bottom:8px">
+    <button id="pause">一時停止</button>
+    <button id="step">1 フレーム進める</button>
+    <span style="font-size:12px;color:#8b949e;margin-left:8px">t = <span id="tdisp">0.0</span> s</span>
+  </div>
+  <canvas id="c" width="512" height="512"></canvas>
+  <div class="legend">
+    このページは jsengine の Demo 4 と同じ描画コードをブラウザの Canvas 2D API で実行します。
+    <ul>
+      <li>サイズは <b>512×512</b>、毎フレーム時刻 <code>time</code> ms に依存して動く</li>
+      <li>jsengine 側との比較のため、一時停止と 1 フレーム進めるボタンを用意</li>
+      <li>時刻は <code>performance.now()</code> ベース。jsengine 側は <code>SDL_GetTicks</code> ベース。両者を同じ <code>t</code> 値（秒）に揃えて並べると比較しやすい</li>
+    </ul>
+    <b>jsengine 側との差異 (期待される):</b>
+    <ul>
+      <li>FPS が違うので「同時刻でのコマ」を直接比較するには <code>t</code> 値の表示を見ながら一時停止する必要あり</li>
+      <li>軌道上の小さな円は <code>rgba(255,255,255,0.5)</code> なので背景色 (<code>#16213e</code>) と混色して見える</li>
+    </ul>
+  </div>
+</div>
+
+<script>
+// ============================================================
+// jsengine の data/main.js から renderDemo4 部分を移植
+// ============================================================
+(function () {
+  const canvas = document.getElementById("c");
+  const c = canvas.getContext("2d");
+  const tdisp = document.getElementById("tdisp");
+  const pauseBtn = document.getElementById("pause");
+  const stepBtn = document.getElementById("step");
+
+  let time = 0;          // ms
+  let lastFrame = performance.now();
+  let paused = false;
+
+  pauseBtn.onclick = () => {
+    paused = !paused;
+    pauseBtn.textContent = paused ? "再開" : "一時停止";
+    if (!paused) {
+      lastFrame = performance.now();
+      requestAnimationFrame(loop);
+    }
+  };
+  stepBtn.onclick = () => {
+    if (!paused) return;
+    time += 16.67;
+    render();
+  };
+
+  function render() {
+    var cx = 256, cy = 256;
+
+    // 背景
+    c.fillStyle = "#16213e";
+    c.fillRect(0, 0, 512, 512);
+
+    // 回転する四角形群
+    for (var i = 0; i < 6; i++) {
+      c.save();
+      c.translate(cx, cy);
+      c.rotate(time * 0.001 * (i + 1) * 0.5 + i * Math.PI / 3);
+
+      var size = 40 + i * 15;
+      var hue = (i * 60 + Math.floor(time * 0.05)) % 360;
+      // HSL 簡易変換
+      var r = 0, g = 0, b = 0;
+      var h = hue / 60;
+      var x = 1 - Math.abs(h % 2 - 1);
+      if      (h < 1) { r = 1; g = x; }
+      else if (h < 2) { r = x; g = 1; }
+      else if (h < 3) { g = 1; b = x; }
+      else if (h < 4) { g = x; b = 1; }
+      else if (h < 5) { r = x; b = 1; }
+      else            { r = 1; b = x; }
+
+      c.globalAlpha = 0.7;
+      c.fillStyle = "rgba(" + Math.floor(r*255) + "," + Math.floor(g*255) + "," + Math.floor(b*255) + ",1)";
+      c.fillRect(-size/2, -size/2, size, size);
+
+      c.strokeStyle = "white";
+      c.lineWidth = 1;
+      c.strokeRect(-size/2, -size/2, size, size);
+      c.globalAlpha = 1.0;
+
+      c.restore();
+    }
+
+    // 中央の回転する円
+    c.save();
+    c.translate(cx, cy);
+    var circleR = 30 + Math.sin(time * 0.002) * 10;
+    c.beginPath();
+    c.arc(0, 0, circleR, 0, Math.PI * 2);
+    c.closePath();
+    c.fillStyle = "white";
+    c.fill();
+    c.restore();
+
+    // 軌道上の小さな円
+    for (var j = 0; j < 8; j++) {
+      var angle = time * 0.001 + j * Math.PI / 4;
+      var orbitR = 150;
+      var px = cx + Math.cos(angle) * orbitR;
+      var py = cy + Math.sin(angle) * orbitR;
+      c.beginPath();
+      c.arc(px, py, 10, 0, Math.PI * 2);
+      c.closePath();
+      c.fillStyle = "rgba(255,255,255,0.5)";
+      c.fill();
+    }
+
+    // FPS / 時間表示
+    c.font = "18px RobotoMono-VariableFont_wght";
+    c.fillStyle = "rgba(255,255,255,0.8)";
+    c.fillText("t=" + (time * 0.001).toFixed(1) + "s", 10, 30);
+    c.fillText("Demo 4: Animation", 10, 500);
+
+    tdisp.textContent = (time * 0.001).toFixed(1);
+  }
+
+  function loop(now) {
+    if (paused) return;
+    const dt = now - lastFrame;
+    lastFrame = now;
+    time += dt;
+    render();
+    requestAnimationFrame(loop);
+  }
+
+  if (document.fonts && document.fonts.ready) {
+    document.fonts.ready.then(() => requestAnimationFrame(loop));
+  } else {
+    requestAnimationFrame(loop);
+  }
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>Demo 10 pixi.ui Reference (browser-side ground truth)</title>
+<style>
+  html, body { margin: 0; padding: 0; background: #161b22; color: #c9d1d9;
+               font-family: sans-serif; }
+  .wrap { max-width: 1320px; margin: 0 auto; padding: 16px; }
+  h1 { font-size: 18px; margin: 6px 0 12px; color: #79c0ff; }
+  #pixiContainer { display:block; background:#0d1117; box-shadow: 0 0 12px #000;
+                   width: 1280px; height: 720px; }
+  #pixiContainer canvas { display:block; }
+  .legend { font-size: 12px; margin-top: 8px; color:#8b949e; }
+  code { background:#21262d; padding:1px 4px; border-radius:3px; }
+  .log { font-family: monospace; font-size: 12px; color:#ffe080; margin-top: 8px;
+         background:#0d1117; padding: 6px 10px; border:1px solid #30363d; min-height: 20px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Demo 10 pixi.ui Reference — pixi.ui ウィジェットの「正解」動作</h1>
+  <div id="pixiContainer"></div>
+  <div class="log" id="logDisplay">click any widget</div>
+  <div class="legend">
+    このページは jsengine の Demo 10 と同じ初期化コードをブラウザで実行します。
+    <code>data/lib/pixi.min.js</code>, <code>pixi-ui-deps-shim.js</code>, <code>pixi-ui.js</code> をそのまま読み込み。
+    <ul>
+      <li>サイズは <b>1280×720</b></li>
+      <li><b>Button</b>: クリックで背景色がサイクル変更</li>
+      <li><b>CheckBox</b>: クリックで Animate (ProgressBar) ON/OFF</li>
+      <li><b>Slider</b>: ハンドルをドラッグで値変更 (0〜100)</li>
+      <li><b>ProgressBar</b>: CheckBox ON 時のみ進む</li>
+      <li><b>ScrollBox</b>: マウスホイールでスクロール</li>
+    </ul>
+    <b>jsengine 側との比較ポイント:</b>
+    <ul>
+      <li>ブラウザ側はクリック・ドラッグ・ホイールが native に動く → 全ウィジェットが期待通り反応する</li>
+      <li>jsengine 側でクリック反応がない場合、原因は browser_shim.js の pointer event 変換にある</li>
+      <li>tweedle はシム実装（即時遷移）なので、本来のアニメーションが見たい場合は CDN 版 tweedle を使う必要あり（このページでも同じシム）</li>
+    </ul>
+  </div>
+</div>
+
+<!-- jsengine と同じ lib を読み込む（順序重要） -->
+<script src="../data/lib/pixi.min.js"></script>
+<script src="../data/lib/pixi-ui-deps-shim.js"></script>
+<script src="../data/lib/pixi-ui.js"></script>
+
+<script>
+// ============================================================
+// jsengine の data/main.js から initDemo10 / renderDemo10 を移植
+// ブラウザでは PIXI.Application が自前で RAF を回すので renderDemo10 は不要
+// （pixi-ui のイベント処理は v7 標準の interaction system で動く）
+// ============================================================
+(function () {
+  if (!window.PIXI || !PIXI.ui) {
+    document.getElementById("logDisplay").textContent =
+      "PIXI / PIXI.ui failed to load — check data/lib/* paths";
+    return;
+  }
+
+  const pixiUiState = {
+    bgColor: 0x1a2030,
+    progress: 0,
+    sliderValue: 50,
+    switchOn: false,
+    log: "click any widget",
+  };
+  let pixiUiBgGraphics = null;
+  let pixiUiProgressBar = null;
+  let pixiUiLogText = null;
+  const logDisplay = document.getElementById("logDisplay");
+  const setLog = (s) => {
+    pixiUiState.log = s;
+    if (pixiUiLogText) pixiUiLogText.text = s;
+    logDisplay.textContent = s;
+  };
+
+  // PIXI.Application (autoStart: true でデフォルトの ticker を回す)
+  const pixiUiApp = new PIXI.Application({
+    width: 1280, height: 720,
+    backgroundColor: pixiUiState.bgColor,
+    backgroundAlpha: 1,
+    antialias: false,
+  });
+  document.getElementById("pixiContainer").appendChild(pixiUiApp.view);
+
+  pixiUiApp.stage.interactive = true;
+  pixiUiApp.stage.hitArea = pixiUiApp.screen;
+
+  // 背景
+  pixiUiBgGraphics = new PIXI.Graphics();
+  pixiUiApp.stage.addChild(pixiUiBgGraphics);
+  redrawBg10();
+
+  // タイトル
+  const title = new PIXI.Text("pixi.ui Widget Showcase", {
+    fontFamily: "Arial", fontSize: 28, fill: 0xffffff, fontWeight: "bold",
+  });
+  title.x = 40; title.y = 30;
+  pixiUiApp.stage.addChild(title);
+
+  const ui = PIXI.ui;
+
+  // --- Button ---
+  const btnBg = new PIXI.Graphics();
+  btnBg.beginFill(0x4060a0).drawRoundedRect(0, 0, 160, 50, 8).endFill();
+  const btnLabel = new PIXI.Text("Cycle Color", { fontFamily: "Arial", fontSize: 18, fill: 0xffffff });
+  btnLabel.x = 80 - btnLabel.width / 2;
+  btnLabel.y = 25 - btnLabel.height / 2;
+  btnBg.addChild(btnLabel);
+  btnBg.hitArea = new PIXI.Rectangle(0, 0, 160, 50);
+  const button = new ui.Button(btnBg);
+  const bgColors = [0x1a2030, 0x402030, 0x204030, 0x203040, 0x402040];
+  let bgColorIdx = 0;
+  button.onPress.connect(() => {
+    bgColorIdx = (bgColorIdx + 1) % bgColors.length;
+    pixiUiState.bgColor = bgColors[bgColorIdx];
+    redrawBg10();
+    setLog("Button pressed: color #" + bgColorIdx);
+  });
+  btnBg.x = 40; btnBg.y = 100;
+  pixiUiApp.stage.addChild(btnBg);
+
+  // --- CheckBox ---
+  const cbStyleOn = new PIXI.Graphics().beginFill(0x4060a0).drawRoundedRect(0, 0, 28, 28, 4).endFill();
+  const cbCheck = new PIXI.Graphics().lineStyle(4, 0xffffff).moveTo(6, 14).lineTo(13, 21).lineTo(22, 8);
+  cbStyleOn.addChild(cbCheck);
+  const cbStyleOff = new PIXI.Graphics().lineStyle(2, 0x808080).beginFill(0x303848).drawRoundedRect(0, 0, 28, 28, 4).endFill();
+  const checkbox = new ui.CheckBox({
+    checked: false,
+    style: { unchecked: cbStyleOff, checked: cbStyleOn },
+  });
+  checkbox.x = 220; checkbox.y = 110;
+  checkbox.onCheck.connect((val) => {
+    pixiUiState.switchOn = val;
+    setLog("Checkbox: " + (val ? "ON" : "OFF"));
+  });
+  pixiUiApp.stage.addChild(checkbox);
+  const cbLabel = new PIXI.Text("Animate", { fontFamily: "Arial", fontSize: 16, fill: 0xcccccc });
+  cbLabel.x = 260; cbLabel.y = 116;
+  pixiUiApp.stage.addChild(cbLabel);
+
+  // --- Slider ---
+  const sliderBg = new PIXI.Graphics().beginFill(0x303848).drawRoundedRect(0, 0, 300, 12, 6).endFill();
+  const sliderFill = new PIXI.Graphics().beginFill(0x60a0ff).drawRoundedRect(0, 0, 300, 12, 6).endFill();
+  const sliderHandle = new PIXI.Graphics().beginFill(0xffffff).drawCircle(0, 0, 14).endFill();
+  const slider = new ui.Slider({
+    bg: sliderBg, fill: sliderFill, slider: sliderHandle,
+    min: 0, max: 100, value: pixiUiState.sliderValue,
+  });
+  slider.x = 40; slider.y = 200;
+  slider.onUpdate.connect((val) => {
+    pixiUiState.sliderValue = val | 0;
+    setLog("Slider: " + pixiUiState.sliderValue);
+  });
+  pixiUiApp.stage.addChild(slider);
+  const sliderLabel = new PIXI.Text("Slider (drag handle)", { fontFamily: "Arial", fontSize: 14, fill: 0xcccccc });
+  sliderLabel.x = 40; sliderLabel.y = 175;
+  pixiUiApp.stage.addChild(sliderLabel);
+
+  // --- ProgressBar ---
+  const pbLabel = new PIXI.Text("ProgressBar (time-driven)", { fontFamily: "Arial", fontSize: 14, fill: 0xcccccc });
+  pbLabel.x = 40; pbLabel.y = 260;
+  pixiUiApp.stage.addChild(pbLabel);
+  pixiUiProgressBar = new ui.ProgressBar({
+    bg: new PIXI.Graphics().beginFill(0x303848).drawRoundedRect(0, 0, 300, 18, 4).endFill(),
+    fill: new PIXI.Graphics().beginFill(0x40c060).drawRoundedRect(0, 0, 300, 18, 4).endFill(),
+    progress: 0,
+  });
+  pixiUiProgressBar.x = 40; pixiUiProgressBar.y = 285;
+  pixiUiApp.stage.addChild(pixiUiProgressBar);
+
+  // --- ScrollBox ---
+  const scrollItems = [];
+  for (let i = 0; i < 12; i++) {
+    const itemBg = new PIXI.Graphics().beginFill(0x405060).drawRoundedRect(0, 0, 220, 36, 4).endFill();
+    const itemLabel = new PIXI.Text("Item " + (i + 1), { fontFamily: "Arial", fontSize: 14, fill: 0xffffff });
+    itemLabel.x = 12; itemLabel.y = 10;
+    itemBg.addChild(itemLabel);
+    scrollItems.push(itemBg);
+  }
+  const scrollBox = new ui.ScrollBox({
+    background: 0x202830, elementsMargin: 4,
+    width: 240, height: 280, items: scrollItems,
+  });
+  scrollBox.x = 700; scrollBox.y = 100;
+  pixiUiApp.stage.addChild(scrollBox);
+  const sbLabel = new PIXI.Text("ScrollBox (wheel to scroll)", { fontFamily: "Arial", fontSize: 14, fill: 0xcccccc });
+  sbLabel.x = 700; sbLabel.y = 75;
+  pixiUiApp.stage.addChild(sbLabel);
+
+  // --- ログ表示（canvas 内） ---
+  pixiUiLogText = new PIXI.Text(pixiUiState.log, {
+    fontFamily: "Arial", fontSize: 16, fill: 0xffe080,
+  });
+  pixiUiLogText.x = 40; pixiUiLogText.y = 640;
+  pixiUiApp.stage.addChild(pixiUiLogText);
+
+  const helpText = new PIXI.Text("Click button, drag slider, scroll wheel over scrollbox", {
+    fontFamily: "Arial", fontSize: 12, fill: 0x808890,
+  });
+  helpText.x = 40; helpText.y = 670;
+  pixiUiApp.stage.addChild(helpText);
+
+  // ProgressBar アニメーション (jsengine の renderDemo10 相当を ticker で)
+  pixiUiApp.ticker.add(() => {
+    if (pixiUiState.switchOn) {
+      pixiUiState.progress = (pixiUiState.progress + 0.4) % 100;
+      if (pixiUiProgressBar) pixiUiProgressBar.progress = pixiUiState.progress;
+    }
+  });
+
+  function redrawBg10() {
+    if (!pixiUiBgGraphics) return;
+    pixiUiBgGraphics.clear();
+    pixiUiBgGraphics.beginFill(pixiUiState.bgColor).drawRect(0, 0, 1280, 720).endFill();
+  }
+
+  console.log("pixi.ui demo initialized in browser");
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>Demo 7 Canvas2D Reference (browser-side ground truth)</title>
+<style>
+  @font-face { font-family: "OpenSans-Regular"; src: url("../data/fonts/OpenSans-Regular.ttf"); }
+  @font-face { font-family: "OpenSans-Bold";    src: url("../data/fonts/OpenSans-Bold.ttf"); }
+
+  html, body { margin: 0; padding: 0; background: #161b22; color: #c9d1d9;
+               font-family: sans-serif; }
+  .wrap { max-width: 860px; margin: 0 auto; padding: 16px; }
+  h1 { font-size: 18px; margin: 6px 0 12px; color: #79c0ff; }
+  canvas { display:block; background:#0d1117; box-shadow: 0 0 12px #000; }
+  .legend { font-size: 12px; margin-top: 8px; color:#8b949e; }
+  code { background:#21262d; padding:1px 4px; border-radius:3px; }
+  button { background:#21262d; color:#c9d1d9; border:1px solid #30363d;
+           padding:4px 10px; font-size:14px; cursor:pointer; margin-right:4px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Demo 7 Canvas2D Reference — dirty rect 差分更新の「見た目の正解」</h1>
+  <div style="margin-bottom:8px">
+    <button id="pause">一時停止</button>
+    <button id="step">1 フレーム進める</button>
+    <span style="font-size:12px;color:#8b949e;margin-left:8px">t = <span id="tdisp">0.0</span> s</span>
+  </div>
+  <canvas id="c" width="640" height="480"></canvas>
+  <div class="legend">
+    このページは jsengine の Demo 7 と同じ描画コードをブラウザの Canvas 2D API で実行します。
+    <ul>
+      <li>サイズは <b>640×480</b>、毎フレーム時刻 <code>time</code> ms に依存して動く黄色矩形</li>
+      <li>背景（青→赤グラデーション + グリッド）は <b>初回フレームだけ</b> 描画されるのを jsengine 側と合わせるため、ブラウザ側も <code>demo7Inited</code> フラグで同じ挙動にしている</li>
+      <li><b>dirty rect 最適化自体は jsengine 内部の最適化</b>なので、ブラウザでは「見た目の正解」を確認するのが目的</li>
+    </ul>
+    <b>jsengine 側との差異 (期待される):</b>
+    <ul>
+      <li>dirty rect は jsengine 内部の GL テクスチャ部分アップロード機構。ブラウザは関知しない（全画面 redraw で代用）</li>
+      <li>「前フレーム位置をクリア → 背景再描画 → 新位置に描画」の流れ自体は両方で同じ</li>
+      <li>背景再描画は 4px 単位の縞をクリア範囲だけに引き直すので、jsengine 側でズレがあれば「縞の継ぎ目」として見える</li>
+    </ul>
+  </div>
+</div>
+
+<script>
+// ============================================================
+// jsengine の data/main.js から renderDemo7 部分を移植
+// ============================================================
+(function () {
+  const canvas = document.getElementById("c");
+  const c = canvas.getContext("2d");
+  const tdisp = document.getElementById("tdisp");
+  const pauseBtn = document.getElementById("pause");
+  const stepBtn = document.getElementById("step");
+
+  let time = 0;
+  let lastFrame = performance.now();
+  let paused = false;
+  let demo7Inited = false;
+  let _prevX, _prevY;
+
+  pauseBtn.onclick = () => {
+    paused = !paused;
+    pauseBtn.textContent = paused ? "再開" : "一時停止";
+    if (!paused) {
+      lastFrame = performance.now();
+      requestAnimationFrame(loop);
+    }
+  };
+  stepBtn.onclick = () => {
+    if (!paused) return;
+    time += 16.67;
+    render();
+  };
+
+  function render() {
+    // 初回のみ: 背景を描画
+    if (!demo7Inited) {
+      // 背景グラデーション風
+      for (var y = 0; y < 480; y += 4) {
+        var r = Math.floor(y * 255 / 480);
+        c.fillStyle = "rgba(" + r + ",50," + (255 - r) + ",1)";
+        c.fillRect(0, y, 640, 4);
+      }
+      // グリッド線
+      c.strokeStyle = "rgba(255,255,255,0.2)";
+      c.lineWidth = 1;
+      for (var gx = 0; gx < 640; gx += 40) {
+        c.beginPath(); c.moveTo(gx, 0); c.lineTo(gx, 480); c.stroke();
+      }
+      for (var gy = 0; gy < 480; gy += 40) {
+        c.beginPath(); c.moveTo(0, gy); c.lineTo(640, gy); c.stroke();
+      }
+      // タイトル
+      c.font = "20px OpenSans-Bold";
+      c.fillStyle = "white";
+      c.fillText("Demo 7: Dirty Rect Update", 10, 30);
+      c.font = "14px OpenSans-Regular";
+      c.fillText("Background drawn once, only moving rect updates each frame", 10, 55);
+
+      demo7Inited = true;
+    }
+
+    // 毎フレーム: 前フレームの矩形をクリアして新位置に描画
+    var t = time * 0.001;
+    var bx = 300 + Math.cos(t) * 200;
+    var by = 240 + Math.sin(t * 1.3) * 150;
+    var bw = 60, bh = 60;
+
+    // 前回位置のクリア
+    if (_prevX !== undefined) {
+      c.clearRect(_prevX - 2, _prevY - 2, bw + 4, bh + 4);
+      // 背景の再描画（クリアした部分のみ）
+      var cx0 = Math.floor(_prevX - 2);
+      var cy0 = Math.floor(_prevY - 2);
+      for (var ry = cy0; ry < cy0 + bh + 4 && ry < 480; ry += 4) {
+        if (ry < 0) continue;
+        var rr = Math.floor(ry * 255 / 480);
+        c.fillStyle = "rgba(" + rr + ",50," + (255 - rr) + ",1)";
+        c.fillRect(cx0, ry, bw + 4, Math.min(4, cy0 + bh + 4 - ry));
+      }
+    }
+
+    // 新位置に描画
+    c.fillStyle = "rgba(255,255,0,0.9)";
+    c.fillRect(bx, by, bw, bh);
+    c.strokeStyle = "white";
+    c.lineWidth = 2;
+    c.strokeRect(bx, by, bw, bh);
+
+    // 位置保存
+    _prevX = bx;
+    _prevY = by;
+
+    tdisp.textContent = (time * 0.001).toFixed(1);
+  }
+
+  function loop(now) {
+    if (paused) return;
+    const dt = now - lastFrame;
+    lastFrame = now;
+    time += dt;
+    render();
+    requestAnimationFrame(loop);
+  }
+
+  if (document.fonts && document.fonts.ready) {
+    document.fonts.ready.then(() => requestAnimationFrame(loop));
+  } else {
+    requestAnimationFrame(loop);
+  }
+})();
+</script>
+</body>
+</html>

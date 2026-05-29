@@ -88,4 +88,5 @@ cmake --build build/x64-windows --config Release
 - Canvas2D フォント解決: ThorVG 側 (FT loader) を拡張し `Text::load()` 時に FT_Face から family/style 名を取り込む。`LoaderMgr::font()` の name マッチングが「ロード時 name / family / "family Style"」のいずれにも対応するので、`ctx.font = "24px Open Sans"` のような CSS 風指定がそのまま動く。`ctx.font` パーサは引用符なしの family 名でも空白を含む文字列をカンマまで取り込む。`Canvas2D.fontInfo(name)` で `{family, style}` を取得可能。
 - Demo 1 に Canvas2D ベースの HUD オーバーレイ（操作説明・デモ一覧・システム情報）を表示。
 - Demo 3: Canvas2D テキスト機能の総合検証サンプル。1280×720 全画面 5 ページ（`[`/`]` で切替）。Page1=font family/size, Page2=textAlign/textBaseline, Page3=measureText 可視化, Page4=多言語+textLocale, Page5=stroke/transform/getImageData。`docs/demo3_text_verification.md` に期待挙動、`docs/demo3_reference.html` にブラウザ参照ページ。
+- ブラウザ参照ページ: Demo 2/3/4/6/7/10 に `docs/demo{N}_reference.html` + `docs/demo{N}_verification.md` を用意（Demo 3 のみ `_text_verification.md`）。同じ描画コードをブラウザの Canvas 2D API（Demo 10 は同じ pixi.ui lib）で実行した「正解」と jsengine 側を見比べることで実装差分を切り分け可能。`python -m http.server 8000` 等で配信して `http://localhost:8000/docs/demo{N}_reference.html` を開く。
 - Demo 9: three-vrm v3 による VRM アバター表示。GLTFLoader.parse でバイナリ VRM パース、MToon シェーダー + SkinnedMesh によるフルカラー描画動作。
