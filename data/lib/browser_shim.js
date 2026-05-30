@@ -119,17 +119,15 @@ HTMLCanvasElement.prototype.getContext = function(type, options) {
     return null;
 };
 
-// pixi v7 の EventSystem は pointer* 系を登録するが、jsengine は mouse* 系のみ発火する。
-// pointer event を mouse event にマップしてキャンバス／グローバルで受け取れるようにする。
-function _mapEventType(t) {
-    if (t === "pointerdown") return "mousedown";
-    if (t === "pointerup") return "mouseup";
-    if (t === "pointermove") return "mousemove";
-    if (t === "pointercancel") return "mouseup";
-    if (t === "pointerleave" || t === "pointerenter") return null;
-    // pointerover / pointerout / pointerupoutside / gotpointercapture 等は対応イベントなしのため無視
-    if (t === "pointerover" || t === "pointerout" || t === "pointerupoutside") return null;
-    return t;
+// jsengine は pointer* 系をネイティブ発火するので type マッピングは不要。
+// 残された役割は (1) event オブジェクトに preventDefault 等を生やす
+// (2) pixi の onPointerUp が見る e.target を補完する の 2 点。
+// pointerover / pointerout / pointerupoutside / pointerleave / pointerenter は
+// native で発火しないので登録を no-op で吸収する (pixi EventSystem が登録するが使われない)。
+function _isUnsupportedPointerEvent(t) {
+    return t === "pointerover" || t === "pointerout" || t === "pointerupoutside"
+        || t === "pointerleave" || t === "pointerenter"
+        || t === "gotpointercapture" || t === "lostpointercapture";
 }
 HTMLCanvasElement.prototype.addEventListener = function(type, cb) {
     // pixi EventSystem は domElement = canvas として登録するので、最初に
@@ -138,21 +136,17 @@ HTMLCanvasElement.prototype.addEventListener = function(type, cb) {
     if (type.indexOf("pointer") === 0 || type.indexOf("mouse") === 0 || type === "wheel") {
         globalThis.__pixiDomElement = this;
     }
-    var mapped = _mapEventType(type);
-    if (mapped) addEventListener(mapped, cb);
+    if (_isUnsupportedPointerEvent(type)) return;
+    addEventListener(type, cb);
 };
 HTMLCanvasElement.prototype.removeEventListener = function(type, cb) {
-    var mapped = _mapEventType(type);
-    if (mapped) removeEventListener(mapped, cb);
+    if (_isUnsupportedPointerEvent(type)) return;
+    removeEventListener(type, cb);
 };
 
-// pixi v7 EventSystem は `globalThis.addEventListener("pointerup", ...)` を
-// canvas でなく window に直接登録するため、HTMLCanvasElement の上書きでは
-// 捕まらない。globalThis 側でも同じ pointer→mouse マッピングが必要。
-// あわせて event オブジェクトに preventDefault 等のメソッドを生やしておく
-// （jsengine の C++ 側 event は plain object なので、pixi が呼ぶ
-//  e.preventDefault() / e.stopPropagation() / e.composedPath() で
-//  "not a function" になる）。
+// jsengine の C++ 側 event は plain object なので pixi が呼ぶ
+// e.preventDefault() / stopPropagation() / composedPath() が "not a function" になる。
+// グローバル addEventListener をラップして event オブジェクトに no-op を生やす。
 var _origGlobalAdd = addEventListener;
 var _origGlobalRemove = removeEventListener;
 var _cbMap = new WeakMap(); // 元 cb -> wrapped cb（removeEventListener 用）
@@ -173,18 +167,16 @@ function _ensureEventMethods(e) {
     return e;
 }
 function _wrappedGlobalAdd(type, cb) {
-    var mapped = _mapEventType(type);
-    if (!mapped) return;
+    if (_isUnsupportedPointerEvent(type)) return;
     var wrapped = function(e) { cb(_ensureEventMethods(e)); };
     try { _cbMap.set(cb, wrapped); } catch (_) {} // cb が primitive の場合は無視
-    _origGlobalAdd(mapped, wrapped);
+    _origGlobalAdd(type, wrapped);
 }
 function _wrappedGlobalRemove(type, cb) {
-    var mapped = _mapEventType(type);
-    if (!mapped) return;
+    if (_isUnsupportedPointerEvent(type)) return;
     var wrapped = null;
     try { wrapped = _cbMap.get(cb); } catch (_) {}
-    _origGlobalRemove(mapped, wrapped || cb);
+    _origGlobalRemove(type, wrapped || cb);
 }
 globalThis.addEventListener = _wrappedGlobalAdd;
 globalThis.removeEventListener = _wrappedGlobalRemove;

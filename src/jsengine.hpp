@@ -47,4 +47,6 @@ private:
     JSValue pushMouseEvent(const SDL_Event *event, const char *type);
     JSValue pushWheelEvent(const SDL_Event *event);
     JSValue pushTouchEvent(const SDL_Event *event, const char *type);
+    JSValue pushPointerEventFromMouse(const SDL_Event *event, const char *type);
+    JSValue pushPointerEventFromTouch(const SDL_Event *event, const char *type);
 };

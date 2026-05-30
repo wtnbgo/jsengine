@@ -119,6 +119,7 @@ Input is received via the browser-standard `addEventListener` pattern. SDL3 even
 | `mousedown` / `mouseup` / `mousemove` | Mouse | `clientX`, `clientY`, `button`, `buttons`, `movementX`, `movementY`, modifier keys |
 | `wheel` | Mouse wheel | `deltaX`, `deltaY`, `deltaZ`, `deltaMode`, `clientX`, `clientY`, modifier keys |
 | `touchstart` / `touchmove` / `touchend` / `touchcancel` | Touch | `touches[]`, `changedTouches[]` (each: `identifier`, `clientX`, `clientY`, `force`) |
+| `pointerdown` / `pointermove` / `pointerup` / `pointercancel` | Pointer (mouse/touch unified) | MouseEvent props + `pointerId`, `pointerType`, `isPrimary`, `pressure`, `width`, `height`, `tiltX`, `tiltY`, `twist` |
 
 ### WebGL Binding Coverage
 

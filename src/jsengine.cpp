@@ -2125,8 +2125,95 @@ JSValue JsEngine::pushTouchEvent(const SDL_Event *event, const char *type) {
 }
 
 // ============================================================
+// PointerEvent (マウス由来)
+// ============================================================
+// マウスは pointerId=1 固定、pointerType="mouse"、isPrimary=true。
+// pressure は button 押下中 0.5 (W3C 仕様の "active button" 既定値)、それ以外 0。
+JSValue JsEngine::pushPointerEventFromMouse(const SDL_Event *event, const char *type) {
+    // ベースとなる MouseEvent を構築してから pointer 固有プロパティを追加する
+    JSValue obj = pushMouseEvent(event, type);
+
+    bool isDown = (event->type == SDL_EVENT_MOUSE_BUTTON_DOWN);
+    uint32_t buttons = 0;
+    if (event->type == SDL_EVENT_MOUSE_MOTION) {
+        buttons = (uint32_t)event->motion.state;
+    } else {
+        // SDL_BUTTON(x) は SDL3 で SDL_BUTTON_MASK(x)
+        buttons = (uint32_t)SDL_GetMouseState(nullptr, nullptr);
+    }
+    double pressure = isDown ? 0.5 : ((buttons != 0) ? 0.5 : 0.0);
+
+    JS_SetPropertyStr(ctx_, obj, "pointerId",   JS_NewInt32(ctx_, 1));
+    JS_SetPropertyStr(ctx_, obj, "pointerType", JS_NewString(ctx_, "mouse"));
+    JS_SetPropertyStr(ctx_, obj, "isPrimary",   JS_NewBool(ctx_, 1));
+    JS_SetPropertyStr(ctx_, obj, "pressure",    JS_NewFloat64(ctx_, pressure));
+    JS_SetPropertyStr(ctx_, obj, "tangentialPressure", JS_NewFloat64(ctx_, 0.0));
+    JS_SetPropertyStr(ctx_, obj, "width",       JS_NewFloat64(ctx_, 1.0));
+    JS_SetPropertyStr(ctx_, obj, "height",      JS_NewFloat64(ctx_, 1.0));
+    JS_SetPropertyStr(ctx_, obj, "tiltX",       JS_NewInt32(ctx_, 0));
+    JS_SetPropertyStr(ctx_, obj, "tiltY",       JS_NewInt32(ctx_, 0));
+    JS_SetPropertyStr(ctx_, obj, "twist",       JS_NewInt32(ctx_, 0));
+
+    // type を pointer* に上書き
+    JS_SetPropertyStr(ctx_, obj, "type", JS_NewString(ctx_, type));
+    return obj;
+}
+
+// ============================================================
+// PointerEvent (タッチ由来)
+// ============================================================
+// 各指の SDL_FingerEvent を pointerId=fingerID として個別に発火。
+// pointerType="touch"、pressure は finger.pressure をそのまま採用。
+JSValue JsEngine::pushPointerEventFromTouch(const SDL_Event *event, const char *type) {
+    const SDL_TouchFingerEvent &t = event->tfinger;
+    JSValue obj = JS_NewObject(ctx_);
+
+    int winW = 1, winH = 1;
+    SDL_Window *window = SDL_GetWindowFromID(t.windowID);
+    if (window) SDL_GetWindowSize(window, &winW, &winH);
+    double px = t.x * winW;
+    double py = t.y * winH;
+
+    JS_SetPropertyStr(ctx_, obj, "type",        JS_NewString(ctx_, type));
+    JS_SetPropertyStr(ctx_, obj, "clientX",     JS_NewFloat64(ctx_, px));
+    JS_SetPropertyStr(ctx_, obj, "clientY",     JS_NewFloat64(ctx_, py));
+    JS_SetPropertyStr(ctx_, obj, "screenX",     JS_NewFloat64(ctx_, px));
+    JS_SetPropertyStr(ctx_, obj, "screenY",     JS_NewFloat64(ctx_, py));
+    JS_SetPropertyStr(ctx_, obj, "pageX",       JS_NewFloat64(ctx_, px));
+    JS_SetPropertyStr(ctx_, obj, "pageY",       JS_NewFloat64(ctx_, py));
+    JS_SetPropertyStr(ctx_, obj, "movementX",   JS_NewFloat64(ctx_, t.dx * winW));
+    JS_SetPropertyStr(ctx_, obj, "movementY",   JS_NewFloat64(ctx_, t.dy * winH));
+    JS_SetPropertyStr(ctx_, obj, "button",      JS_NewInt32(ctx_, 0));
+    bool isUp = (event->type == SDL_EVENT_FINGER_UP || event->type == SDL_EVENT_FINGER_CANCELED);
+    JS_SetPropertyStr(ctx_, obj, "buttons",     JS_NewUint32(ctx_, isUp ? 0u : 1u));
+
+    // タッチ固有: identifier (1 から始まる正の整数 / fingerID をオフセットして pointerId と一致させる)
+    int64_t pid = (int64_t)t.fingerID + 2; // mouse=1 と衝突しないように +2
+    JS_SetPropertyStr(ctx_, obj, "pointerId",   JS_NewInt64(ctx_, pid));
+    JS_SetPropertyStr(ctx_, obj, "pointerType", JS_NewString(ctx_, "touch"));
+    JS_SetPropertyStr(ctx_, obj, "isPrimary",   JS_NewBool(ctx_, 1));
+    JS_SetPropertyStr(ctx_, obj, "pressure",    JS_NewFloat64(ctx_, t.pressure));
+    JS_SetPropertyStr(ctx_, obj, "tangentialPressure", JS_NewFloat64(ctx_, 0.0));
+    JS_SetPropertyStr(ctx_, obj, "width",       JS_NewFloat64(ctx_, 1.0));
+    JS_SetPropertyStr(ctx_, obj, "height",      JS_NewFloat64(ctx_, 1.0));
+    JS_SetPropertyStr(ctx_, obj, "tiltX",       JS_NewInt32(ctx_, 0));
+    JS_SetPropertyStr(ctx_, obj, "tiltY",       JS_NewInt32(ctx_, 0));
+    JS_SetPropertyStr(ctx_, obj, "twist",       JS_NewInt32(ctx_, 0));
+
+    SDL_Keymod mod = SDL_GetModState();
+    JS_SetPropertyStr(ctx_, obj, "altKey",   JS_NewBool(ctx_, (mod & SDL_KMOD_ALT) != 0));
+    JS_SetPropertyStr(ctx_, obj, "ctrlKey",  JS_NewBool(ctx_, (mod & SDL_KMOD_CTRL) != 0));
+    JS_SetPropertyStr(ctx_, obj, "shiftKey", JS_NewBool(ctx_, (mod & SDL_KMOD_SHIFT) != 0));
+    JS_SetPropertyStr(ctx_, obj, "metaKey",  JS_NewBool(ctx_, (mod & SDL_KMOD_GUI) != 0));
+
+    return obj;
+}
+
+// ============================================================
 // SDL イベント → JS イベントディスパッチ
 // ============================================================
+// マウス/タッチ系は従来の mouse*/touch* に加えて pointer* も発火する。
+// (browser_shim.js での pointer→mouse マッピングを廃止し、ネイティブで両方発火させる)
 void JsEngine::handleEvent(const SDL_Event *event) {
     if (!ctx_) return;
 
@@ -2138,28 +2225,35 @@ void JsEngine::handleEvent(const SDL_Event *event) {
         dispatchEvent("keyup", pushKeyboardEvent(event, "keyup"));
         break;
     case SDL_EVENT_MOUSE_MOTION:
-        dispatchEvent("mousemove", pushMouseEvent(event, "mousemove"));
+        dispatchEvent("mousemove",   pushMouseEvent(event, "mousemove"));
+        dispatchEvent("pointermove", pushPointerEventFromMouse(event, "pointermove"));
         break;
     case SDL_EVENT_MOUSE_BUTTON_DOWN:
-        dispatchEvent("mousedown", pushMouseEvent(event, "mousedown"));
+        dispatchEvent("mousedown",   pushMouseEvent(event, "mousedown"));
+        dispatchEvent("pointerdown", pushPointerEventFromMouse(event, "pointerdown"));
         break;
     case SDL_EVENT_MOUSE_BUTTON_UP:
-        dispatchEvent("mouseup", pushMouseEvent(event, "mouseup"));
+        dispatchEvent("mouseup",   pushMouseEvent(event, "mouseup"));
+        dispatchEvent("pointerup", pushPointerEventFromMouse(event, "pointerup"));
         break;
     case SDL_EVENT_MOUSE_WHEEL:
         dispatchEvent("wheel", pushWheelEvent(event));
         break;
     case SDL_EVENT_FINGER_DOWN:
         dispatchEvent("touchstart", pushTouchEvent(event, "touchstart"));
+        dispatchEvent("pointerdown", pushPointerEventFromTouch(event, "pointerdown"));
         break;
     case SDL_EVENT_FINGER_MOTION:
         dispatchEvent("touchmove", pushTouchEvent(event, "touchmove"));
+        dispatchEvent("pointermove", pushPointerEventFromTouch(event, "pointermove"));
         break;
     case SDL_EVENT_FINGER_UP:
         dispatchEvent("touchend", pushTouchEvent(event, "touchend"));
+        dispatchEvent("pointerup", pushPointerEventFromTouch(event, "pointerup"));
         break;
     case SDL_EVENT_FINGER_CANCELED:
         dispatchEvent("touchcancel", pushTouchEvent(event, "touchcancel"));
+        dispatchEvent("pointercancel", pushPointerEventFromTouch(event, "pointercancel"));
         break;
     default:
         break;

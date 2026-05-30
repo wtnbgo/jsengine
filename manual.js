@@ -339,6 +339,28 @@ addEventListener("wheel", function(e) {
     e.metaKey;    // boolean
 });
 
+// --- PointerEvent ("pointerdown", "pointermove", "pointerup", "pointercancel") ---
+// マウス/タッチ両方を統一的に扱える Pointer Events 仕様。C++ 側で mouse*/touch* と
+// 並行してネイティブ発火する (browser_shim.js の pointer→mouse マッピングは廃止済み)。
+// pointerover / pointerout / pointerupoutside / pointerleave / pointerenter /
+// gotpointercapture / lostpointercapture は未発火 (shim 側で登録を no-op で吸収)。
+addEventListener("pointerdown", function(e) {
+    // MouseEvent のプロパティ (clientX/Y, button, buttons, movement*, modifier keys) を全て継承
+    e.pointerId;          // マウス=1, タッチ=fingerID+2 (衝突回避)
+    e.pointerType;        // "mouse" | "touch"
+    e.isPrimary;          // 主要ポインタか (常に true)
+    e.pressure;           // 0.0 ~ 1.0 (mouse=0.5 押下中/0.0 通常, touch=実際の force)
+    e.tangentialPressure; // 0.0 (ペン専用、未対応)
+    e.width;              // 接触面サイズ (常に 1.0)
+    e.height;             // 同上
+    e.tiltX; e.tiltY;     // スタイラスティルト (常に 0)
+    e.twist;              // スタイラスツイスト (常に 0)
+});
+
+addEventListener("pointermove", function(e) { /* pointerdown と同じ */ });
+addEventListener("pointerup",   function(e) { /* pointerdown と同じ。pressure=0 */ });
+addEventListener("pointercancel", function(e) { /* タッチキャンセル時のみ発火 */ });
+
 // --- TouchEvent ("touchstart", "touchmove", "touchend", "touchcancel") ---
 addEventListener("touchstart", function(e) {
     e.type;                        // "touchstart"
