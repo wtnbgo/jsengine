@@ -143,6 +143,7 @@ set(SOURCES
 	src/jsengine.cpp
 	src/webgl.cpp
 	src/webaudio.cpp
+	src/webgamepad.cpp
 	src/canvas2d.cpp
 	src/audio/AudioEngine.cpp
 	src/audio/AudioStream.cpp

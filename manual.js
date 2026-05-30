@@ -361,6 +361,32 @@ addEventListener("pointermove", function(e) { /* pointerdown と同じ */ });
 addEventListener("pointerup",   function(e) { /* pointerdown と同じ。pressure=0 */ });
 addEventListener("pointercancel", function(e) { /* タッチキャンセル時のみ発火 */ });
 
+// --- GamepadEvent ("gamepadconnected", "gamepaddisconnected") ---
+// SDL3 の SDL_Gamepad 経由でコントローラ接続/切断を検出。e.gamepad に Gamepad オブジェクト。
+addEventListener("gamepadconnected", function(e) {
+    console.log("Gamepad connected:", e.gamepad.id, "index=" + e.gamepad.index);
+});
+
+// --- navigator.getGamepads() ---
+// 接続中のゲームパッドを poll する。スロット順 (index) 配列。未接続位置は null。
+var pads = navigator.getGamepads();   // (Gamepad | null)[]
+if (pads[0]) {
+    var p = pads[0];
+    p.id;            // "Xbox Series Controller" 等
+    p.index;         // 0..n-1
+    p.connected;     // true
+    p.timestamp;     // 接続時刻 (ms, performance.now ベース)
+    p.mapping;       // "standard" 固定
+    p.axes;          // 数値配列 [-1.0..1.0]: [LX, LY, RX, RY]
+    p.buttons;       // ボタン配列 (W3C 標準 17 個):
+                     //   0=A 1=B 2=X 3=Y 4=LB 5=RB 6=LT 7=RT
+                     //   8=Back 9=Start 10=L3 11=R3
+                     //   12=Up 13=Down 14=Left 15=Right 16=Guide
+    p.buttons[0].pressed;   // boolean
+    p.buttons[0].value;     // 0.0 ~ 1.0 (LT/RT は連続値、他は 0 / 1)
+    p.buttons[0].touched;   // = pressed
+}
+
 // --- TouchEvent ("touchstart", "touchmove", "touchend", "touchcancel") ---
 addEventListener("touchstart", function(e) {
     e.type;                        // "touchstart"

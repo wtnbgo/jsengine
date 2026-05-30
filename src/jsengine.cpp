@@ -1,6 +1,7 @@
 #include "jsengine.hpp"
 #include "webgl.h"
 #include "webaudio.h"
+#include "webgamepad.h"
 #include "canvas2d.h"
 #include <quickjs.h>
 #include <SDL3/SDL.h>
@@ -1742,6 +1743,7 @@ bool JsEngine::init(int argc, char **argv) {
 
     // Web Audio API バインディング登録
     webaudio_bind(ctx_);
+    webgamepad_bind(ctx_);
 
     // Canvas 2D API バインディング登録
     canvas2d_bind(ctx_);
@@ -2254,6 +2256,10 @@ void JsEngine::handleEvent(const SDL_Event *event) {
     case SDL_EVENT_FINGER_CANCELED:
         dispatchEvent("touchcancel", pushTouchEvent(event, "touchcancel"));
         dispatchEvent("pointercancel", pushPointerEventFromTouch(event, "pointercancel"));
+        break;
+    case SDL_EVENT_GAMEPAD_ADDED:
+    case SDL_EVENT_GAMEPAD_REMOVED:
+        webgamepad_handleEvent(event);
         break;
     default:
         break;

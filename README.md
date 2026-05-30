@@ -120,6 +120,9 @@ Input is received via the browser-standard `addEventListener` pattern. SDL3 even
 | `wheel` | Mouse wheel | `deltaX`, `deltaY`, `deltaZ`, `deltaMode`, `clientX`, `clientY`, modifier keys |
 | `touchstart` / `touchmove` / `touchend` / `touchcancel` | Touch | `touches[]`, `changedTouches[]` (each: `identifier`, `clientX`, `clientY`, `force`) |
 | `pointerdown` / `pointermove` / `pointerup` / `pointercancel` | Pointer (mouse/touch unified) | MouseEvent props + `pointerId`, `pointerType`, `isPrimary`, `pressure`, `width`, `height`, `tiltX`, `tiltY`, `twist` |
+| `gamepadconnected` / `gamepaddisconnected` | Gamepad | `gamepad` (Gamepad object: `id`, `index`, `connected`, `timestamp`, `mapping`, `axes[]`, `buttons[]`) |
+
+Use `navigator.getGamepads()` for polling the current gamepad state every frame.
 
 ### WebGL Binding Coverage
 

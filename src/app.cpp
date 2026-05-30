@@ -1,6 +1,7 @@
 #include "app.hpp"
 #include "jsengine.hpp"
 #include "webaudio.h"
+#include "webgamepad.h"
 #include "canvas2d.h"
 #include "glad/gles2.h"
 
@@ -88,6 +89,9 @@ bool App::init(int argc, char *argv[])
     // オーディオシステム初期化
     webaudio_init();
 
+    // ゲームパッドサブシステム初期化
+    webgamepad_init();
+
     // JsEngine 初期化
     jsEngine_ = std::make_unique<JsEngine>();
     jsEngine_->setBasePath(dataPath);
@@ -112,6 +116,9 @@ App::~App()
     if (jsEngine_) {
         jsEngine_.reset();
     }
+
+    // ゲームパッドサブシステム終了
+    webgamepad_uninit();
 
     // オーディオシステム終了
     webaudio_uninit();

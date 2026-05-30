@@ -32,6 +32,10 @@ public:
 
     JSContext* getContext() const { return ctx_; }
 
+    // 任意の type と event オブジェクトを addEventListener で登録されたリスナへ配信。
+    // event_obj は呼び出し後に JS_FreeValue されるので、呼び元で free しないこと。
+    void dispatchEvent(const char *type, JSValue event_obj);
+
     static JsEngine* getInstance() { return instance_; }
 
 private:
@@ -40,9 +44,6 @@ private:
     std::string basePath_;
 
     static JsEngine* instance_;
-
-    // イベントディスパッチヘルパー
-    void dispatchEvent(const char *type, JSValue event_obj);
     JSValue pushKeyboardEvent(const SDL_Event *event, const char *type);
     JSValue pushMouseEvent(const SDL_Event *event, const char *type);
     JSValue pushWheelEvent(const SDL_Event *event);
