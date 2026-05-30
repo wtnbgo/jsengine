@@ -109,6 +109,29 @@ struct PathCmd { PathOp op; float args[7]; };
 // Canvas2D 内部データ — ビットマップ保持型
 // ============================================================
 
+// clip パスの参照カウント付き保持 (save/restore で共有しつつ寿命管理)
+// ThorVG の Paint::clip(Shape*) を呼ぶので Shape* で保持する
+struct ClipRef {
+    tvg::Shape* p = nullptr;
+    ClipRef() = default;
+    ClipRef(const ClipRef& o) : p(o.p) { if (p) p->ref(); }
+    ClipRef(ClipRef&& o) noexcept : p(o.p) { o.p = nullptr; }
+    ClipRef& operator=(const ClipRef& o) {
+        if (this != &o) { if (p) p->unref(); p = o.p; if (p) p->ref(); }
+        return *this;
+    }
+    ClipRef& operator=(ClipRef&& o) noexcept {
+        if (this != &o) { if (p) p->unref(); p = o.p; o.p = nullptr; }
+        return *this;
+    }
+    ~ClipRef() { if (p) p->unref(); }
+    // 既存 ref を引き取る (Shape::gen() などで ref=1 の Shape を受ける)
+    void adopt(tvg::Shape* np) {
+        if (p) p->unref();
+        p = np;
+    }
+};
+
 struct DrawState {
     Color4 fillStyle   = {0, 0, 0, 255};
     Color4 strokeStyle = {0, 0, 0, 255};
@@ -122,6 +145,7 @@ struct DrawState {
     std::string textBaseline = "alphabetic";  // top/hanging/middle/alphabetic/ideographic/bottom
     std::string textLocale;                   // BCP47 タグ ("ja-JP" 等)。ThorVG FT loader 用
     tvg::Matrix transform = {1,0,0, 0,1,0, 0,0,1};
+    ClipRef clipPath;                         // ctx.clip() で設定された clip 形状
 };
 
 struct Canvas2DData {
@@ -235,7 +259,14 @@ struct Canvas2DData {
     bool hasPending = false;
 
     // 描画操作を蓄積（即座には描画しない）
+    // 現在のクリップが設定されていれば、duplicate して paint に attach する
+    // (ThorVG の Paint::clip() は対象 paint がクリッパーの所有権を取るので、
+    //  共有するためにクローンを渡す)
     void addPaint(tvg::Paint *paint) {
+        if (state.clipPath.p) {
+            // Shape::duplicate() は Paint* を返すので Shape* にキャスト (元が Shape なので安全)
+            paint->clip(static_cast<tvg::Shape*>(state.clipPath.p->duplicate()));
+        }
         pendingPaints.push_back(paint);
         hasPending = true;
     }
@@ -495,6 +526,21 @@ static JSValue ctx_fill(JSContext *ctx, JSValueConst this_val, int argc, JSValue
     shape->fill(d->state.fillStyle.r, d->state.fillStyle.g, d->state.fillStyle.b, a);
     shape->transform(d->state.transform);
     d->addPaint(shape);
+    return JS_UNDEFINED;
+}
+
+// ctx.clip() — 現在のパスをクリップマスクとして設定。
+// 現在の transform を baked-in にし、以降の描画 (fill/stroke/fillText/drawImage 等) が
+// このパスの内側にマスクされる。save/restore で状態スタッキング対応。
+// 引数のパスや fill-rule は現状未対応 (CSS Canvas の基本形のみ)。
+static JSValue ctx_clip(JSContext *ctx, JSValueConst this_val, int /*argc*/, JSValueConst* /*argv*/) {
+    auto *d = get_data(ctx, this_val);
+    if (d->pathCmds.empty()) return JS_UNDEFINED;
+    auto *shape = build_shape(d->pathCmds);
+    // クリップ paint は alpha mask としても使えるよう不透明白で塗り潰す
+    shape->fill(255, 255, 255, 255);
+    shape->transform(d->state.transform);
+    d->state.clipPath.adopt(shape);
     return JS_UNDEFINED;
 }
 
@@ -1396,6 +1442,7 @@ static JSValue canvas2d_constructor(JSContext *ctx, JSValueConst new_target, int
     JS_SetPropertyStr(ctx, obj, "closePath", JS_NewCFunction(ctx, ctx_closePath, "closePath", 0));
     JS_SetPropertyStr(ctx, obj, "fill", JS_NewCFunction(ctx, ctx_fill, "fill", 0));
     JS_SetPropertyStr(ctx, obj, "stroke", JS_NewCFunction(ctx, ctx_stroke, "stroke", 0));
+    JS_SetPropertyStr(ctx, obj, "clip", JS_NewCFunction(ctx, ctx_clip, "clip", 0));
     JS_SetPropertyStr(ctx, obj, "fillText", JS_NewCFunction(ctx, ctx_fillText, "fillText", 3));
     JS_SetPropertyStr(ctx, obj, "strokeText", JS_NewCFunction(ctx, ctx_strokeText, "strokeText", 3));
     JS_SetPropertyStr(ctx, obj, "measureText", JS_NewCFunction(ctx, ctx_measureText, "measureText", 1));

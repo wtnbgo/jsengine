@@ -103,7 +103,7 @@ HTMLCanvasElement.prototype.getContext = function(type, options) {
         if (!c2d.createPattern) c2d.createPattern = function() { return null; };
         if (!c2d.createImageData) c2d.createImageData = function(w,h) { return c2d.getImageData(0,0,w,h); };
         if (!c2d.resetTransform) c2d.resetTransform = function() { c2d.setTransform(1,0,0,1,0,0); };
-        if (!c2d.clip) c2d.clip = function() {};
+        // clip() は canvas2d.cpp 側で実装済み (ThorVG Paint::clip())
         canvas._ctx2d = c2d;
         return c2d;
     }
