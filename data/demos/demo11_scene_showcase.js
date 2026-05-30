@@ -18,6 +18,15 @@ var APP_W = 1280, APP_H = 720;
 var pixiApp = null;
 var sceneRoot = null;  // 全シーンの Container がぶら下がる親
 
+// Scene.pause(topOpts) のヘルパー: 上に乗ったシーンが hideBelow=true なら
+// 自分の container を非表示にする (resume() で再表示)
+function applyPause(container, topOpts) {
+    if (container && topOpts && topOpts.hideBelow) container.visible = false;
+}
+function applyResume(container) {
+    if (container) container.visible = true;
+}
+
 function ensurePixi() {
     if (pixiApp) return pixiApp;
     if (typeof PIXI === "undefined") {
@@ -225,7 +234,9 @@ class MenuScene extends Scene {
         this.container.destroy({ children: true });
         this.container = null;
     }
+    pause(topOpts) { applyPause(this.container, topOpts); }
     resume() {
+        applyResume(this.container);
         // Settings から戻った時にセーブの有無で Continue を再評価
         var save = loadSave();
         var btn = this.buttons[1];
@@ -261,7 +272,9 @@ class MenuScene extends Scene {
     }
     _onNewGame()  { clearSave(); SceneManager.replace(new GameScene({ score: 0 })); }
     _onContinue() { var s = loadSave(); if (s) SceneManager.replace(new GameScene({ score: s.score })); }
-    _onSettings() { SceneManager.push(new SettingsScene()); }
+    // Settings は Menu を完全に覆うフルスクリーン (透過モーダルではない) なので
+    // hideBelow=true で Menu の描画を止め、pauseBelow=true で update も止める
+    _onSettings() { SceneManager.push(new SettingsScene(), null, { hideBelow: true, pauseBelow: true }); }
     _onBack()     {
         // Demo Menu (= Demo 1) に戻す。main.js のグローバルを直接いじる
         SceneManager.clear();
@@ -378,12 +391,14 @@ class GameScene extends Scene {
 
         this.t = 0;
     }
-    pause() {
-        // Pause シーンが上に乗った時のフック (BGM フェード等を入れる場所)
-        // ここではダミー
+    pause(topOpts) {
+        // Pause シーンは hideBelow=false で push されるので Game の表示は残る
+        // (BGM フェード等を入れるならここ)
+        applyPause(this.container, topOpts);
     }
     resume() {
-        // Pause から戻った時
+        applyResume(this.container);
+        // (BGM フェードイン等)
     }
     exit() {
         sceneRoot.removeChild(this.container);

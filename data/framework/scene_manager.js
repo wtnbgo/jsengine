@@ -48,7 +48,7 @@ class Scene {
     }
     enter(_args)    {}
     exit()          {}
-    pause()         {}
+    pause(_topOpts) {}  // 引数: 自分の上に push されたシーンの opts ({ hideBelow, pauseBelow })
     resume()        {}
     update(_dt)     {}
     render()        {}
@@ -65,9 +65,14 @@ class SceneManagerImpl {
     }
 
     push(scene, args, opts) {
+        var newOpts = opts || {};
+        // pause(topOpts) で「自分の上に乗ったシーンの opts」を渡すと、
+        // 下のシーンが hideBelow=true を見て自分の表示を消せる
         var prev = this.top();
-        if (prev) prev.pause();
-        scene.__opts = opts || {};
+        if (prev) {
+            try { prev.pause(newOpts); } catch (e) { console.error("Scene.pause() error:", e); }
+        }
+        scene.__opts = newOpts;
         this.stack.push(scene);
         scene.enter(args);
     }
@@ -77,7 +82,9 @@ class SceneManagerImpl {
         var top = this.stack.pop();
         try { top.exit(); } catch (e) { console.error("Scene.exit() error:", e); }
         var newTop = this.top();
-        if (newTop) newTop.resume();
+        if (newTop) {
+            try { newTop.resume(); } catch (e) { console.error("Scene.resume() error:", e); }
+        }
     }
 
     replace(scene, args, opts) {
