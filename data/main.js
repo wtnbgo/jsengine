@@ -256,6 +256,7 @@ function renderDemo1HUD() {
             "8 : three.js r176",
             "9 : three-vrm (VRM avatar)",
             "0 : pixi.ui widgets",
+            "- : Scene Showcase (NEW)",
             "",
             "--- System Info ---",
             "GL: " + (gl.getParameter(gl.RENDERER) || "?"),
@@ -1080,6 +1081,45 @@ function renderDemo10() {
 }
 
 // ============================================================
+// デモ11: SceneManager / Input / Assets を使ったシーン管理ショーケース
+// 実体は data/demos/demo11_scene_showcase.js にあり、globalThis.demo11 名前空間で公開
+// ============================================================
+
+var demo11Loaded = false;
+
+function ensureDemo11Loaded() {
+    if (demo11Loaded) return;
+    // pixi 一式 (Demo 10 と共用、重複ロードは多重ガード済み)
+    loadScript("lib/polyfill.js");
+    loadScript("lib/browser_shim.js");
+    loadScript("lib/pixi.min.js");
+    // フレームワーク
+    loadScript("framework/scene_manager.js");
+    loadScript("framework/input_action.js");
+    loadScript("framework/assets_ext.js");
+    // デモ本体
+    loadScript("demos/demo11_scene_showcase.js");
+    demo11Loaded = true;
+    // Menu の「Back to Demo Menu」から呼ばれるフック
+    if (globalThis.demo11) {
+        globalThis.demo11.exitToDemo1Hook = function() { demoMode = 1; };
+    }
+}
+
+function initDemo11() {
+    ensureDemo11Loaded();
+    if (globalThis.demo11) globalThis.demo11.init();
+}
+
+function updateDemo11(dt) {
+    if (globalThis.demo11) globalThis.demo11.update(dt);
+}
+
+function renderDemo11() {
+    if (globalThis.demo11) globalThis.demo11.render();
+}
+
+// ============================================================
 // デモ6: Canvas2D drawImage / getImageData / putImageData テスト
 // ============================================================
 
@@ -1723,6 +1763,7 @@ if (initialDemo > 0) {
     if (demoMode === 8) initDemo8();
     if (demoMode === 9) initDemo9();
     if (demoMode === 10) initDemo10();
+    if (demoMode === 11) initDemo11();
 }
 
 // ============================================================
@@ -1749,6 +1790,7 @@ addEventListener("keydown", function(e) {
     if (e.key === "8") { demoMode = 8; initDemo8(); console.log("Demo 8: three.js"); }
     if (e.key === "9") { demoMode = 9; initDemo9(); console.log("Demo 9: three-vrm"); }
     if (e.key === "0") { demoMode = 10; initDemo10(); console.log("Demo 10: pixi.ui"); }
+    if (e.key === "-" || e.code === "Minus") { demoMode = 11; initDemo11(); console.log("Demo 11: Scene Showcase"); }
 
     if (e.key === "r" || e.key === "R") {
         offsetX = 0.0; offsetY = 0.0; alpha = 1.0;
@@ -1821,6 +1863,8 @@ function update(dt) {
         if (keysDown["KeyD"] || keysDown["ArrowRight"])  offsetX += moveSpeed;
         if (offsetX < -1) offsetX = -1; if (offsetX > 1) offsetX = 1;
         if (offsetY < -1) offsetY = -1; if (offsetY > 1) offsetY = 1;
+    } else if (demoMode === 11) {
+        updateDemo11(dt);
     }
 }
 
@@ -1853,6 +1897,8 @@ function render() {
         renderDemo9();
     } else if (demoMode === 10) {
         renderDemo10();
+    } else if (demoMode === 11) {
+        renderDemo11();
     }
 }
 

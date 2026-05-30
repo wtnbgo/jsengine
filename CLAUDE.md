@@ -118,11 +118,20 @@ cmake --build build/x64-windows --config Release
   3. event オブジェクトに `preventDefault` / `stopPropagation` / `stopImmediatePropagation` / `composedPath` を no-op として生やす。
   4. `event.target` に最初に pointer 登録した canvas を埋め、pixi の `onPointerUp` 内 `e !== this.domElement` 判定で pointerup が pointerupoutside にすり替わるのを防ぐ（Button.onPress を発火させるために必須）。
 
+### JS フレームワーク (`data/framework/`)
+
+ゲーム開発の boilerplate を減らすための薄い土台一式。loadScript で読み込まれ globalThis に公開される (ESM ではない)。Demo 11 が最初の利用例。
+
+- `data/framework/scene_manager.js` — Cocos2d Director 風シーン管理。`class Scene` + `SceneManager.push/pop/replace/clear`。スタックベース、`pauseBelow`/`hideBelow` オプションで下位シーンの更新/描画を止められる。`SceneManager.update(dt)`/`render()`/`handleEvent(e)` を毎フレーム呼ぶ前提。
+- `data/framework/input_action.js` — Unity InputAction 風入力抽象化。`Input.bind("jump", ["Space", "Gamepad:A"])` → `Input.isPressed("jump")` / `isJustPressed` / `isJustReleased` / `getValue`。キー (`KeyboardEvent.code`)、マウス (`Mouse:Left`)、ゲームパッド (`Gamepad:A`〜`Guide`、`Gamepad:LeftStickUp` 等半軸ボタン化、`Gamepad:LeftStickX` 等軸そのまま) を統合。`Input.update()` を毎フレーム呼んで状態確定。
+- `data/framework/assets_ext.js` — PIXI.Assets に音声 (`AudioBuffer` 化) とフォント (`Canvas2D.loadFont`) の LoadParser を追加。`PIXI.Assets.load([...])` で画像/JSON/spritesheet と並列に MP3/WAV/OGG/FLAC/Opus と TTF/OTF が扱える。`Assets.audioContext` で AudioContext 共有、`Assets.play(alias, opts)` で即時再生ヘルパー。
+
 ### Demos / 検証ツール
 
 - Demo 1 に Canvas2D ベースの HUD オーバーレイ（操作説明・デモ一覧・システム情報）を表示。
 - Demo 3: Canvas2D テキスト機能の総合検証サンプル。1280×720 全画面 5 ページ（`[` / `]` で切替）。Page1=font family/size, Page2=textAlign/textBaseline, Page3=measureText 可視化, Page4=多言語+textLocale, Page5=stroke/transform/getImageData。`docs/demo3_text_verification.md` に期待挙動、`docs/demo3_reference.html` にブラウザ参照ページ。
 - Demo 9: three-vrm v3 による VRM アバター表示。GLTFLoader.parse でバイナリ VRM パース、MToon シェーダー + SkinnedMesh によるフルカラー描画動作。
 - Demo 10: pixi.ui v1.2.4 ウィジェットショーケース（Button / CheckBox / Slider / ProgressBar / ScrollBox）。
+- Demo 11 (`-` キー): SceneManager / Input / Assets を組み合わせた**フレームワーク事例**。Title → Menu → Settings / Game → Pause の遷移サンプル。RPG メニュー型 UI、push/pop/replace の使い分け実演、Settings でボリューム設定 (localStorage 永続化)、Game でアクション抽象化 (キーボード/Gamepad)、Pause で `pauseBelow` モーダル。実体は `data/demos/demo11_scene_showcase.js`。
 - ブラウザ参照ページ: Demo 2 / 3 / 4 / 6 / 7 / 10 に `docs/demo{N}_reference.html` + `docs/demo{N}_verification.md` を用意（Demo 3 のみ `_text_verification.md`）。同じ描画コードをブラウザの Canvas 2D API（Demo 10 は同じ pixi.ui lib）で実行した「正解」と jsengine 側を見比べることで実装差分を切り分け可能。`python -m http.server 8000` 等で配信して `http://localhost:8000/docs/demo{N}_reference.html` を開く。
 - `docs/demo10_text_compare.html` は pixi v7 `PIXI.TextMetrics` 風のスキャン (`#f00` 背景 + 黒テキスト → 上から非赤の行を探す) をブラウザ native Arial で実行して visible top / bottom を出す測定ツール。jsengine 側の同じ計測 (Canvas2D 経由) と比較してテキスト位置のフォント差を切り分けるのに使う。

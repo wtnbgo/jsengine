@@ -511,6 +511,58 @@ addEventListener("touchcancel", function(e) {
 // 詳細は MDN WebGL2RenderingContext リファレンスを参照。
 
 // ************************************************************
+// オプショナル: JS フレームワーク（data/framework/）
+// ************************************************************
+// ゲーム制作の boilerplate を減らす薄い土台。loadScript で読み込むと
+// globalThis に Scene / SceneManager / Input / Assets が登録される。
+// Demo 11 が利用例。
+//
+// loadScript("framework/scene_manager.js");
+// loadScript("framework/input_action.js");
+// loadScript("framework/assets_ext.js");  // PIXI が先にロード済みであること
+//
+// --- SceneManager (Cocos2d Director 風) ---
+// class MyScene extends Scene {
+//     enter(args) {}   // push / replace で 1 回
+//     exit() {}        // pop / replace で 1 回
+//     pause() {}       // 上に別シーンが push された時
+//     resume() {}      // 上のシーンが pop された時
+//     update(dt) {}    // 毎フレーム (上位の pauseBelow で止まる)
+//     render() {}      // 毎フレーム (上位の hideBelow で隠れる)
+//     handleEvent(e) {} // 最上位シーンのみ
+// }
+// SceneManager.push(scene, args, opts);    // opts: { pauseBelow, hideBelow }
+// SceneManager.pop();
+// SceneManager.replace(scene, args, opts);
+// SceneManager.clear();
+// SceneManager.top();
+// SceneManager.update(dt);                 // 毎フレーム呼ぶ
+// SceneManager.render();
+// SceneManager.handleEvent(e);
+//
+// --- Input (Unity InputAction 風) ---
+// Input.bind("jump", ["Space", "Gamepad:A"]);
+// Input.bind("moveX", ["ArrowLeft|ArrowRight", "Gamepad:LeftStickX"]);
+// Input.update();                          // 毎フレーム呼ぶ
+// Input.isPressed("jump");
+// Input.isJustPressed("jump");
+// Input.isJustReleased("jump");
+// Input.getValue("moveX");                  // 0..1 / -1..1
+// source 文字列: KeyboardEvent.code, "Mouse:Left|Middle|Right",
+//   "Gamepad:A|B|X|Y|LB|RB|LT|RT|Back|Start|L3|R3|DpadUp|DpadDown|DpadLeft|DpadRight|Guide",
+//   "Gamepad:LeftStickX|Y|RightStickX|Y" (軸そのまま -1..1),
+//   "Gamepad:LeftStickUp|Down|Left|Right|RightStickUp|..." (半軸ボタン 0..1)
+//
+// --- Assets (PIXI.Assets 拡張) ---
+// PIXI.Assets が音声 (.mp3 .wav .ogg .flac .opus .m4a → AudioBuffer) と
+// フォント (.ttf .otf → Canvas2D.loadFont) を扱えるようになる。
+// PIXI.Assets.add({ alias: "bgm", src: "bgm.mp3" });
+// await PIXI.Assets.load(["bgm"]);
+// var buf = PIXI.Assets.get("bgm");        // AudioBuffer
+// Assets.play("bgm", { loop: true, volume: 0.5 });  // 即時再生ヘルパー
+// Assets.audioContext;                       // ローダー内部の AudioContext (共有)
+
+// ************************************************************
 // ポリフィル / ブラウザシム（pixi.js 等のライブラリ動作用）
 // ************************************************************
 //
