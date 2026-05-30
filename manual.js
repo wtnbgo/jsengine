@@ -72,10 +72,11 @@ gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, img.width, img.height, 0,
 // Web Audio API（miniaudio + SDL3 ベース）
 // ************************************************************
 // miniaudio エンジンで再生
-// 対応フォーマット: WAV, MP3, FLAC 等（miniaudio がサポートする形式）
+// 対応フォーマット: WAV, MP3, FLAC, OGG Vorbis/Opus
 
 var audioCtx = new AudioContext();
 audioCtx.sampleRate;                   // 読み取り専用（通常 48000）
+audioCtx.currentTime;                  // 読み取り専用: アプリ起動からの経過秒数（setValueAtTime 等の基準）
 audioCtx.state;                        // "running" | "suspended" | "closed"
 audioCtx.destination;                  // ダミーノード（互換性のため）
 audioCtx.masterVolume = 0.8;           // マスターボリューム（0.0 ~ 1.0+）
@@ -83,16 +84,43 @@ audioCtx.resume();                     // 再生再開
 audioCtx.suspend();                    // 一時停止
 audioCtx.close();                      // 全停止
 
-// --- AudioBufferSourceNode ---
-// ファイルパスはベースパスからの相対パス
-var source = audioCtx.createBufferSource("sound.wav");
-source.volume = 1.0;                   // ボリューム（0.0 ~ 1.0+）
-source.pitch = 1.0;                    // ピッチ（1.0 = 原速）
-source.pan = 0.0;                      // パン（-1.0=左, 0.0=中央, 1.0=右）
-source.loop = false;                   // ループ再生
-source.ended;                          // 読み取り専用: 再生終了したか
-source.start();                        // 再生開始（先頭から）
-source.stop();                         // 再生停止
+// --- AudioBufferSourceNode (拡張: ファイル直接ロード) ---
+// jsengine 独自の簡略 API: createBufferSource(path) でファイルを直接読み込み即再生可能
+var beep = audioCtx.createBufferSource("beep.wav");
+beep.volume = 1.0;                     // ボリューム（0.0 ~ 1.0+）。後述の GainNode が無い場合のローカル値
+beep.pan = 0.0;                        // パン（-1.0=左, 0.0=中央, 1.0=右）
+beep.loop = false;                     // ループ再生
+beep.ended;                            // 読み取り専用: 再生終了したか
+beep.start();                          // 再生開始（先頭から）
+beep.stop();                           // 再生停止
+
+// --- AudioBuffer + decodeAudioData (標準) ---
+// fetch でファイルを ArrayBuffer として読み込み、decodeAudioData でデコードして再利用可能な AudioBuffer に
+var ab = await fetch("bgm.mp3").then(function(r) { return r.arrayBuffer(); });
+var audioBuf = await audioCtx.decodeAudioData(ab);
+audioBuf.sampleRate;                   // サンプルレート (Hz)
+audioBuf.length;                       // チャンネルあたりのサンプル数
+audioBuf.duration;                     // 秒
+audioBuf.numberOfChannels;             // チャンネル数
+
+// --- AudioBufferSourceNode (標準: 引数なし + .buffer 代入) ---
+var bgm = audioCtx.createBufferSource();
+bgm.buffer = audioBuf;
+bgm.loop = true;
+bgm.start();
+
+// --- GainNode + AudioParam (フェードイン/アウト) ---
+var gain = audioCtx.createGain();
+gain.gain.value = 1.0;                                          // 即時設定
+gain.gain.setValueAtTime(1.0, audioCtx.currentTime);            // 時刻指定で値を設定
+gain.gain.linearRampToValueAtTime(0.0, audioCtx.currentTime + 2.0); // 2秒かけて 0.0 へ線形フェード
+gain.gain.exponentialRampToValueAtTime(0.5, audioCtx.currentTime + 1.0); // 指数フェード
+gain.gain.cancelScheduledValues(audioCtx.currentTime);          // 予約された自動化を取り消し
+
+// --- 接続 (グラフ構築) ---
+bgm.connect(gain).connect(audioCtx.destination);
+// gain にぶら下げた source の実効ボリュームは source.volume × gain.value
+// gain.disconnect() / source.disconnect() で接続解除（解除後は source.volume のみが反映）
 
 // ************************************************************
 // Canvas 2D API（ThorVG ベース・ビットマップ保持型）

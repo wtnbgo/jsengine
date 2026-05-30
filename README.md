@@ -104,7 +104,7 @@ globalThis.done = done;
 - **`addEventListener(type, callback)`** — Register browser-compatible event listeners
 - **`removeEventListener(type, callback)`** — Remove event listeners
 - **`fs`** — File System Access API (`readText`, `writeText`, `getFileHandle`, `getDirectoryHandle`, `exists`, `stat`, `mkdir`, `remove`, `rename`)
-- **`new AudioContext()`** — Web Audio API (`createBufferSource`, master volume)
+- **`new AudioContext()`** — Web Audio API: `createBufferSource(path)` (file shortcut) / `createBufferSource()` + `.buffer`, `createGain()` + `gain.gain.linearRampToValueAtTime` for fade in/out, `decodeAudioData(arrayBuffer)`, `currentTime`, master volume
 - **`new Canvas2D(w, h)`** — Canvas 2D API (bitmap-retained; rectangles, paths, text, drawImage, getImageData/putImageData, transforms, GL texture output)
 - **`Canvas2D.loadFont(path)`** — Load font file for ThorVG
 - **`createImageBitmap(path)`** — Load image as RGBA pixel data
