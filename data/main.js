@@ -1093,10 +1093,14 @@ function ensureDemo11Loaded() {
     loadScript("lib/polyfill.js");
     loadScript("lib/browser_shim.js");
     loadScript("lib/pixi.min.js");
-    // フレームワーク
+    // pixi.ui (Settings の Slider 等に使う)
+    loadScript("lib/pixi-ui-deps-shim.js");
+    loadScript("lib/pixi-ui.js");
+    // フレームワーク (assets_ext.js → sound_manager.js の順、Assets を先に出す)
     loadScript("framework/scene_manager.js");
     loadScript("framework/input_action.js");
     loadScript("framework/assets_ext.js");
+    loadScript("framework/sound_manager.js");
     // デモ本体
     loadScript("demos/demo11_scene_showcase.js");
     demo11Loaded = true;
@@ -1779,17 +1783,22 @@ addEventListener("keydown", function(e) {
         beep.start();
     }
 
-    // デモ切り替え
-    if (e.key === "1") { demoMode = 1; console.log("Demo 1: Triangle + Texture"); }
-    if (e.key === "2") { demoMode = 2; console.log("Demo 2: Canvas2D Shapes"); }
-    if (e.key === "3") { demoMode = 3; console.log("Demo 3: Canvas2D Text"); }
-    if (e.key === "4") { demoMode = 4; console.log("Demo 4: Canvas2D Animation"); }
-    if (e.key === "5") { demoMode = 5; initDemo5(); console.log("Demo 5: pixi.js"); }
-    if (e.key === "6") { demoMode = 6; console.log("Demo 6: drawImage/ImageData"); }
-    if (e.key === "7") { demoMode = 7; demo7Inited = false; console.log("Demo 7: Dirty Rect"); }
-    if (e.key === "8") { demoMode = 8; initDemo8(); console.log("Demo 8: three.js"); }
-    if (e.key === "9") { demoMode = 9; initDemo9(); console.log("Demo 9: three-vrm"); }
-    if (e.key === "0") { demoMode = 10; initDemo10(); console.log("Demo 10: pixi.ui"); }
+    // デモ切り替え (Demo 11 から離れる時は BGM を止める)
+    function _leaveDemo11IfNeeded(newMode) {
+        if (demoMode === 11 && newMode !== 11 && globalThis.demo11 && globalThis.demo11.onLeave) {
+            globalThis.demo11.onLeave();
+        }
+    }
+    if (e.key === "1") { _leaveDemo11IfNeeded(1);  demoMode = 1;  console.log("Demo 1: Triangle + Texture"); }
+    if (e.key === "2") { _leaveDemo11IfNeeded(2);  demoMode = 2;  console.log("Demo 2: Canvas2D Shapes"); }
+    if (e.key === "3") { _leaveDemo11IfNeeded(3);  demoMode = 3;  console.log("Demo 3: Canvas2D Text"); }
+    if (e.key === "4") { _leaveDemo11IfNeeded(4);  demoMode = 4;  console.log("Demo 4: Canvas2D Animation"); }
+    if (e.key === "5") { _leaveDemo11IfNeeded(5);  demoMode = 5;  initDemo5(); console.log("Demo 5: pixi.js"); }
+    if (e.key === "6") { _leaveDemo11IfNeeded(6);  demoMode = 6;  console.log("Demo 6: drawImage/ImageData"); }
+    if (e.key === "7") { _leaveDemo11IfNeeded(7);  demoMode = 7;  demo7Inited = false; console.log("Demo 7: Dirty Rect"); }
+    if (e.key === "8") { _leaveDemo11IfNeeded(8);  demoMode = 8;  initDemo8(); console.log("Demo 8: three.js"); }
+    if (e.key === "9") { _leaveDemo11IfNeeded(9);  demoMode = 9;  initDemo9(); console.log("Demo 9: three-vrm"); }
+    if (e.key === "0") { _leaveDemo11IfNeeded(10); demoMode = 10; initDemo10(); console.log("Demo 10: pixi.ui"); }
     if (e.key === "-" || e.code === "Minus") { demoMode = 11; initDemo11(); console.log("Demo 11: Scene Showcase"); }
 
     if (e.key === "r" || e.key === "R") {

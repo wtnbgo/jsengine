@@ -64,12 +64,17 @@ struct JsAudioSource;
 struct JsAudioGain;
 
 // GainNode の内部状態
+//   信号フローは src → gain → ... → destination の向き。
+//   outputGain: 自分の出力を受ける次段の gain (gain→gain チェーン用)。
+//   inputGains: 自分に入ってくる前段の gain 群 (値変更時に source 集合を辿るため)。
 struct JsAudioGain {
     double baseValue = 1.0;                     // gain.value
     std::vector<ParamEvent> events;             // 時系列イベント (time 昇順)
-    std::vector<JsAudioSource*> connectedSrcs;  // この gain に connect() している source 群
+    std::vector<JsAudioSource*> connectedSrcs;  // この gain に直接 connect() している source 群
+    JsAudioGain* outputGain = nullptr;          // 自分の出力を受ける次段 gain (なければ direct/destination)
+    std::vector<JsAudioGain*> inputGains;       // 自分の入力側に繋がっている前段 gain 群
     bool connectedToDestination = false;        // gain.connect(destination) されたか
-    double cachedValue = 1.0;                   // 直前 tick で評価した値
+    double cachedValue = 1.0;                   // 直前 tick で評価した baseValue/events 評価値
 };
 
 // AudioBufferSourceNode の内部状態
@@ -155,16 +160,32 @@ static double compute_param_value(const JsAudioGain* gain, double t) {
 }
 
 // source の実効ボリュームを miniaudio に反映する
+// gain→gain チェーンも辿ってすべての段の cachedValue を掛け合わせる。
 static void apply_source_volume(JsAudioSource* s) {
     if (!s || !s->stream) return;
     double effective = s->localVolume;
-    if (s->connectedGain) {
-        effective *= s->connectedGain->cachedValue;
+    JsAudioGain* g = s->connectedGain;
+    int safety = 0;
+    while (g && safety++ < 64) {  // 循環参照ガード (実際には作れないはず)
+        effective *= g->cachedValue;
+        g = g->outputGain;
     }
     if (effective < 0.0) effective = 0.0;
     int v = (int)(effective * 100.0 + 0.5);
     if (v < 0) v = 0;
     s->stream->SetVolume(v);
+}
+
+// 指定 gain (とその前段すべて) に繋がっている全 source の volume を再適用する。
+// 主に master gain など下流側 gain の cachedValue が変わったとき呼ぶ。
+static void apply_volume_to_subtree(JsAudioGain* g, int depth = 0) {
+    if (!g || depth > 64) return;
+    for (JsAudioSource* s : g->connectedSrcs) {
+        apply_source_volume(s);
+    }
+    for (JsAudioGain* in : g->inputGains) {
+        apply_volume_to_subtree(in, depth + 1);
+    }
 }
 
 static void apply_source_pan(JsAudioSource* s) {
@@ -229,14 +250,12 @@ void webaudio_uninit() {
 void webaudio_update(uint32_t deltaMs) {
     g_currentTimeSec += (double)deltaMs / 1000.0;
 
-    // GainNode の自動化を tick し、値が変わった source に反映
+    // GainNode の自動化を tick し、値が変わった gain の影響範囲 (前段サブツリー全体) に反映
     for (JsAudioGain* g : g_allGains) {
         double v = compute_param_value(g, g_currentTimeSec);
         if (v != g->cachedValue) {
             g->cachedValue = v;
-            for (JsAudioSource* s : g->connectedSrcs) {
-                apply_source_volume(s);
-            }
+            apply_volume_to_subtree(g);
         }
     }
 
@@ -287,6 +306,15 @@ static void js_audio_gain_finalizer(JSRuntime* /*rt*/, JSValue val) {
             s->connectedGain = nullptr;
             apply_source_volume(s);
         }
+    }
+    // 自分の出力先 (outputGain) の inputGains リストから自分を取り除く
+    if (g->outputGain) {
+        auto& v = g->outputGain->inputGains;
+        v.erase(std::remove(v.begin(), v.end(), g), v.end());
+    }
+    // 自分の入力側 gain (inputGains) の outputGain ポインタを null 化
+    for (JsAudioGain* in : g->inputGains) {
+        if (in->outputGain == g) in->outputGain = nullptr;
     }
     // グローバルリストから除去
     g_allGains.erase(std::remove(g_allGains.begin(), g_allGains.end(), g), g_allGains.end());
@@ -511,7 +539,7 @@ static JSValue gain_param_set_value(JSContext* ctx, JSValueConst this_val, int, 
     g->baseValue = v;
     if (g->events.empty()) {
         g->cachedValue = v;
-        for (JsAudioSource* s : g->connectedSrcs) apply_source_volume(s);
+        apply_volume_to_subtree(g);
     }
     return JS_UNDEFINED;
 }
@@ -590,19 +618,42 @@ static JSValue make_audio_param(JSContext* ctx, JSValueConst gain_node) {
     return obj;
 }
 
+// 既存接続を切る (gain → gain or gain → destination の片方が立っていれば外す)
+static void gain_clear_output(JsAudioGain* g) {
+    if (!g) return;
+    if (g->outputGain) {
+        auto& v = g->outputGain->inputGains;
+        v.erase(std::remove(v.begin(), v.end(), g), v.end());
+        g->outputGain = nullptr;
+    }
+    g->connectedToDestination = false;
+}
+
 // gain.connect / gain.disconnect
+//   gain → gain チェーンと gain → destination の両方をサポート。
+//   connect 後は前段サブツリーの実効ボリュームを再計算する。
 static JSValue gain_connect(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueConst* argv) {
     JsAudioGain* g = opaq_gain(this_val);
     if (!g) return JS_UNDEFINED;
-    // gain → destination のみ簡易対応 (gain → gain の chain は未対応)
-    g->connectedToDestination = true;
+    gain_clear_output(g);
+    JsAudioGain* next = opaq_gain(argv[0]);
+    if (next) {
+        g->outputGain = next;
+        next->inputGains.push_back(g);
+    } else {
+        // destination とみなす (AudioContext.destination は普通の JSObject)
+        g->connectedToDestination = true;
+    }
+    // チェーン構成が変わったので、自分の前段にぶら下がる source 全てを再評価
+    apply_volume_to_subtree(g);
     return JS_DupValue(ctx, argv[0]);
 }
 
 static JSValue gain_disconnect(JSContext* /*ctx*/, JSValueConst this_val, int, JSValueConst*) {
     JsAudioGain* g = opaq_gain(this_val);
     if (!g) return JS_UNDEFINED;
-    g->connectedToDestination = false;
+    gain_clear_output(g);
+    apply_volume_to_subtree(g);
     return JS_UNDEFINED;
 }
 

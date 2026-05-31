@@ -2,13 +2,21 @@
 // Demo 11: シーン管理ショーケース (RPG メニュー型)
 // ============================================================
 //
-// SceneManager + Input + PIXI.Assets を組み合わせた最初のフレームワーク事例。
+// SceneManager + Input + PIXI.Assets + SoundManager を組み合わせた
+// フレームワーク事例。
 // 遷移パターン:
-//   Title → (replace) → Menu → (push)    → Settings → (pop)  → Menu
-//                              → (replace) → Game     → (push) → Pause
-//                                                              → (pop)  → Game
-//                                                              → (clear → push Title)
+//   Boot (Assets ロード) → Title → (replace) → Menu → (push)    → Settings → (pop)  → Menu
+//                                                   → (replace) → Game     → (push) → Pause
+//                                                                                   → (pop)  → Game
+//                                                                                   → (clear → push Title)
 //   セーブデータは localStorage の "demo11_save" キーに JSON で保存。
+//   マスター音量は localStorage の "demo11_volume" に 0..1 で保存 (Settings 変更時)。
+//
+// アセット:
+//   bgm/title.wav  bgm/game.wav        — ループ再生 (SoundManager.playBgm)
+//   se/select.wav  se/confirm.wav      — メニュー UI 用 SE
+//   se/cancel.wav  se/fire.wav         — キャンセル / GameScene fire
+//   se/pause.wav                       — Pause を被せた時
 
 (function() {
 
@@ -153,7 +161,7 @@ class TitleScene extends Scene {
         title.x = APP_W / 2; title.y = APP_H * 0.35;
         this.container.addChild(title);
 
-        var sub = new PIXI.Text("SceneManager + Input + Assets サンプル", {
+        var sub = new PIXI.Text("SceneManager + Input + Assets + SoundManager サンプル", {
             fontFamily: "Arial", fontSize: 20, fill: 0xa0b0c0,
         });
         sub.anchor.set(0.5, 0.5);
@@ -168,12 +176,17 @@ class TitleScene extends Scene {
         this.container.addChild(this.prompt);
 
         this.t = 0;
+
+        // タイトル BGM (PauseScene 経由で来た場合はもう鳴ってるので playBgm が no-op)
+        SoundManager.playBgm("bgm_title", { fadeIn: 800, volume: 0.5 });
     }
     exit() {
         sceneRoot.removeChild(this.container);
         this.container.destroy({ children: true });
         this.container = null;
     }
+    pause(topOpts) { applyPause(this.container, topOpts); }
+    resume() { applyResume(this.container); }
     update(dt) {
         this.t += dt;
         // プロンプトの脈動
@@ -181,6 +194,7 @@ class TitleScene extends Scene {
         this.prompt.alpha = 0.6 + 0.4 * a;
 
         if (Input.isJustPressed("confirm")) {
+            SoundManager.playSe("se_confirm");
             SceneManager.replace(new MenuScene());
         }
     }
@@ -254,7 +268,14 @@ class MenuScene extends Scene {
         if (Input.isJustPressed("down")) this._moveFocus(+1);
         if (Input.isJustPressed("confirm")) {
             var it = this.items[this.focusIndex];
-            if (it && !it.disabled && it.action) it.action();
+            if (it && !it.disabled && it.action) {
+                SoundManager.playSe("se_confirm");
+                it.action();
+            }
+        }
+        if (Input.isJustPressed("cancel")) {
+            // Cancel で「Demo メニューに戻る」項目にフォーカスして決定するショートカット
+            SoundManager.playSe("se_cancel");
         }
     }
     _moveFocus(d) {
@@ -264,6 +285,7 @@ class MenuScene extends Scene {
             if (!this.items[this.focusIndex].disabled) break;
         }
         this._refocus();
+        SoundManager.playSe("se_select", { volume: 0.7 });
     }
     _refocus() {
         for (var i = 0; i < this.buttons.length; i++) {
@@ -277,6 +299,7 @@ class MenuScene extends Scene {
     _onSettings() { SceneManager.push(new SettingsScene(), null, { hideBelow: true, pauseBelow: true }); }
     _onBack()     {
         // Demo Menu (= Demo 1) に戻す。main.js のグローバルを直接いじる
+        SoundManager.stopBgm(300);
         SceneManager.clear();
         if (typeof globalThis.demo11ExitToDemo1 === "function") globalThis.demo11ExitToDemo1();
     }
@@ -285,6 +308,154 @@ class MenuScene extends Scene {
 // ============================================================
 // SettingsScene
 // ============================================================
+//
+// Master / BGM / SE の 3 グループそれぞれ独立に音量調整。
+// 各 gain ノードは Assets.{masterGain,bgmGain,seGain} で公開済み。
+// localStorage の "demo11_volumes" に { master, bgm, se } を保存。
+// フォーカス: 上下で 5 行 (master/bgm/se スライダー + Test SE + Back) を循環、
+//             左右でスライダー値変更、confirm でボタンクリック、cancel で pop。
+//             マウスはスライダーをドラッグ、ボタンをクリックでも操作可能。
+var VOL_STORE_KEY = "demo11_volumes";
+
+function getStoredVolumes() {
+    try {
+        var raw = localStorage.getItem(VOL_STORE_KEY);
+        if (raw) {
+            var o = JSON.parse(raw);
+            return {
+                master: clampVol(o.master, 1.0),
+                bgm:    clampVol(o.bgm,    1.0),
+                se:     clampVol(o.se,     1.0),
+            };
+        }
+    } catch (_) {}
+    // 旧キーから移行 (demo11_volume = master のみ)
+    var legacy = parseFloat(localStorage.getItem("demo11_volume"));
+    if (!isNaN(legacy) && legacy >= 0 && legacy <= 1) {
+        return { master: legacy, bgm: 1.0, se: 1.0 };
+    }
+    return { master: 1.0, bgm: 1.0, se: 1.0 };
+}
+function clampVol(v, fallback) {
+    if (typeof v !== "number" || isNaN(v) || v < 0 || v > 1) return fallback;
+    return v;
+}
+function setStoredVolumes(v) {
+    try { localStorage.setItem(VOL_STORE_KEY, JSON.stringify(v)); } catch (_) {}
+}
+
+// AudioParam の linearRampToValueAtTime でなめらかに変更
+function rampGain(gainNode, vol, rampMs) {
+    if (!gainNode) return;
+    var t0 = Assets.audioContext.currentTime;
+    var t1 = t0 + Math.max(0.001, (rampMs || 60) / 1000);
+    try {
+        gainNode.gain.cancelScheduledValues(t0);
+        gainNode.gain.setValueAtTime(gainNode.gain.value, t0);
+        gainNode.gain.linearRampToValueAtTime(vol, t1);
+    } catch (_) {
+        gainNode.gain.value = vol;
+    }
+}
+function applyAllVolumes(v, rampMs) {
+    rampGain(Assets.masterGain, v.master, rampMs);
+    rampGain(Assets.bgmGain,    v.bgm,    rampMs);
+    rampGain(Assets.seGain,     v.se,     rampMs);
+}
+
+// --- pixi.ui Slider 行 ----------------------------------------
+// 1 行 = ラベル + スライダー本体 + パーセント表示。focus 状態で枠が黄色に光る。
+class SliderRow extends PIXI.Container {
+    constructor(label, value, onChange) {
+        super();
+        this.w = 480;
+        this.h = 56;
+        this.label = label;
+        this.value = value;  // 0..1
+        this.onChange = onChange;
+
+        // フォーカス枠
+        this.focusFrame = new PIXI.Graphics();
+        this.addChild(this.focusFrame);
+
+        // ラベル
+        this.labelText = new PIXI.Text(label, {
+            fontFamily: "Arial", fontSize: 18, fill: 0xffffff,
+        });
+        this.labelText.x = 12; this.labelText.y = 8;
+        this.addChild(this.labelText);
+
+        // 値テキスト (右寄せ)
+        this.valueText = new PIXI.Text(Math.round(value * 100) + "%", {
+            fontFamily: "Arial", fontSize: 16, fill: 0xb0c0d0,
+        });
+        this.valueText.x = this.w - 60; this.valueText.y = 10;
+        this.addChild(this.valueText);
+
+        // PIXI.ui Slider
+        var sliderW = this.w - 24;
+        var sliderBg   = new PIXI.Graphics().beginFill(0x303848).drawRoundedRect(0, 0, sliderW, 12, 6).endFill();
+        var sliderFill = new PIXI.Graphics().beginFill(0x60a0ff).drawRoundedRect(0, 0, sliderW, 12, 6).endFill();
+        var sliderKnob = new PIXI.Graphics().beginFill(0xffffff).drawCircle(0, 0, 12).endFill();
+        var slider = new PIXI.ui.Slider({
+            bg: sliderBg, fill: sliderFill, slider: sliderKnob,
+            min: 0, max: 100, value: Math.round(value * 100),
+        });
+        slider.x = 12; slider.y = 32;
+        this.addChild(slider);
+        this.slider = slider;
+        var self = this;
+        slider.onUpdate.connect(function(v) {
+            self.value = v / 100;
+            self.valueText.text = Math.round(v) + "%";
+            if (self.onChange) self.onChange(self.value);
+        });
+
+        this._redrawFocus();
+    }
+    setFocused(b) {
+        this._focused = !!b;
+        this._redrawFocus();
+    }
+    handleLeft() {
+        var newVal = Math.max(0, Math.round(this.value * 100) - 5);
+        this.slider.value = newVal;  // pixi.ui Slider は value 代入で onUpdate を発火する
+    }
+    handleRight() {
+        var newVal = Math.min(100, Math.round(this.value * 100) + 5);
+        this.slider.value = newVal;
+    }
+    handleConfirm() { /* slider は confirm 何もしない */ }
+    _redrawFocus() {
+        var g = this.focusFrame;
+        g.clear();
+        if (this._focused) {
+            g.lineStyle(2, 0xffcc66, 1).beginFill(0x182030, 0.6).drawRoundedRect(0, 0, this.w, this.h, 8).endFill();
+        } else {
+            g.lineStyle(1, 0x303848, 1).beginFill(0x101820, 0.3).drawRoundedRect(0, 0, this.w, this.h, 8).endFill();
+        }
+    }
+}
+
+// --- ボタン行 (SimpleButton のラッパ) -------------------------
+class ButtonRow extends PIXI.Container {
+    constructor(label, opts) {
+        super();
+        opts = opts || {};
+        this.w = opts.width  || 280;
+        this.h = opts.height || 48;
+        this.btn = new SimpleButton(label, { width: this.w, height: this.h, fontSize: opts.fontSize || 18 });
+        this.addChild(this.btn);
+        this.onClick = null;
+        var self = this;
+        this.btn.onClick = function() { if (self.onClick) self.onClick(); };
+    }
+    setFocused(b) { this.btn.setFocused(b); }
+    handleLeft()  {}
+    handleRight() {}
+    handleConfirm() { if (this.onClick) this.onClick(); }
+}
+
 class SettingsScene extends Scene {
     enter() {
         this.container = new PIXI.Container();
@@ -293,64 +464,103 @@ class SettingsScene extends Scene {
         var hdr = new PIXI.Text("SETTINGS", {
             fontFamily: "Arial", fontSize: 36, fill: 0xffffff, fontWeight: "bold",
         });
-        hdr.x = 80; hdr.y = 60;
+        hdr.x = 80; hdr.y = 50;
         this.container.addChild(hdr);
 
-        // ボリューム表示 (簡易、← → で増減)
-        this.volume = Math.round((Assets.audioContext ? Assets.audioContext.destination ? 1.0 : 1.0 : 1.0) * 100);
-        var saved = parseFloat(localStorage.getItem("demo11_volume"));
-        if (!isNaN(saved)) this.volume = Math.round(saved * 100);
-        this.volText = new PIXI.Text("Master Volume: " + this.volume + "%   (← →)", {
-            fontFamily: "Arial", fontSize: 22, fill: 0xffffff,
-        });
-        this.volText.x = 80; this.volText.y = 150;
-        this.container.addChild(this.volText);
-        this._applyVolume();
+        var hint = new PIXI.Text(
+            "↑↓: row    ←→: slider value    Enter: button    Esc: back",
+            { fontFamily: "Arial", fontSize: 14, fill: 0x80909a });
+        hint.x = 80; hint.y = 100;
+        this.container.addChild(hint);
 
-        // キーバインド一覧 (固定表示、Settings のサンプルとして)
-        var lines = [
-            "Key bindings (固定表示):",
-            "  confirm : Space / Enter / Gamepad A",
-            "  cancel  : Esc / Backspace / Gamepad B",
-            "  up/down/left/right : Arrows / WASD / DPad / Left Stick",
-            "  fire    : X / Gamepad X (GameScene でスコア +1)",
-            "  menu    : Esc / Gamepad Start (GameScene で Pause)",
+        // 現在の音量を読み込み
+        this.vols = getStoredVolumes();
+        applyAllVolumes(this.vols, 0);  // 起動時点との整合
+
+        // 3 スライダー
+        var self = this;
+        var sliderRows = [
+            new SliderRow("Master Volume", this.vols.master, function(v) {
+                self.vols.master = v;
+                rampGain(Assets.masterGain, v, 60);
+                setStoredVolumes(self.vols);
+            }),
+            new SliderRow("BGM Volume",    this.vols.bgm,    function(v) {
+                self.vols.bgm = v;
+                rampGain(Assets.bgmGain, v, 60);
+                setStoredVolumes(self.vols);
+            }),
+            new SliderRow("SE Volume",     this.vols.se,     function(v) {
+                self.vols.se = v;
+                rampGain(Assets.seGain, v, 60);
+                setStoredVolumes(self.vols);
+            }),
         ];
-        for (var i = 0; i < lines.length; i++) {
-            var t = new PIXI.Text(lines[i], { fontFamily: "Arial", fontSize: 16, fill: 0xa0b0c0 });
-            t.x = 80; t.y = 220 + i * 26;
-            this.container.addChild(t);
+        for (var i = 0; i < sliderRows.length; i++) {
+            sliderRows[i].x = 80;
+            sliderRows[i].y = 140 + i * 66;
+            this.container.addChild(sliderRows[i]);
         }
 
-        var back = new SimpleButton("Back  (Esc)", { width: 180, height: 48, fontSize: 18 });
-        back.x = 80; back.y = APP_H - 100;
-        back.onClick = function() { SceneManager.pop(); };
+        // テスト SE ボタン
+        var testBtn = new ButtonRow("Test SE (play confirm.wav)",
+            { width: 280, height: 44, fontSize: 16 });
+        testBtn.x = 80; testBtn.y = 350;
+        testBtn.onClick = function() { SoundManager.playSe("se_confirm"); };
+        this.container.addChild(testBtn);
+
+        // Back ボタン
+        var back = new ButtonRow("Back  (Esc)", { width: 200, height: 48, fontSize: 18 });
+        back.x = 80; back.y = 410;
+        back.onClick = function() {
+            SoundManager.playSe("se_cancel");
+            SceneManager.pop();
+        };
         this.container.addChild(back);
+
+        this.rows = sliderRows.concat([testBtn, back]);
+        this.focusIndex = 0;
+        this._refocus();
     }
     exit() {
         sceneRoot.removeChild(this.container);
         this.container.destroy({ children: true });
         this.container = null;
-        localStorage.setItem("demo11_volume", String(this.volume / 100));
+        setStoredVolumes(this.vols);
     }
+    pause(topOpts) { applyPause(this.container, topOpts); }
+    resume() { applyResume(this.container); }
     update(_dt) {
-        var changed = false;
-        if (Input.isJustPressed("left"))  { this.volume = Math.max(0, this.volume - 5); changed = true; }
-        if (Input.isJustPressed("right")) { this.volume = Math.min(100, this.volume + 5); changed = true; }
-        if (changed) {
-            this.volText.text = "Master Volume: " + this.volume + "%   (← →)";
-            this._applyVolume();
+        if (Input.isJustPressed("up"))   this._moveFocus(-1);
+        if (Input.isJustPressed("down")) this._moveFocus(+1);
+        if (Input.isJustPressed("left")) {
+            var rL = this.rows[this.focusIndex];
+            if (rL && rL.handleLeft) rL.handleLeft();
+            SoundManager.playSe("se_select", { volume: 0.5 });
         }
-        if (Input.isJustPressed("cancel")) SceneManager.pop();
+        if (Input.isJustPressed("right")) {
+            var rR = this.rows[this.focusIndex];
+            if (rR && rR.handleRight) rR.handleRight();
+            SoundManager.playSe("se_select", { volume: 0.5 });
+        }
+        if (Input.isJustPressed("confirm")) {
+            var rC = this.rows[this.focusIndex];
+            if (rC && rC.handleConfirm) rC.handleConfirm();
+        }
+        if (Input.isJustPressed("cancel")) {
+            SoundManager.playSe("se_cancel");
+            SceneManager.pop();
+        }
     }
-    _applyVolume() {
-        if (Assets.audioContext) {
-            // gain ノードがあれば本来そちらで調整するが、ここでは masterVolume を簡略採用
-            // (jsengine の AudioContext.masterVolume はエンジン全体の master)
-            // ※ Web Audio 標準にはこのプロパティは無いので jsengine 拡張依存
-            if (typeof Assets.audioContext.masterVolume !== "undefined") {
-                Assets.audioContext.masterVolume = this.volume / 100;
-            }
+    _moveFocus(d) {
+        var n = this.rows.length;
+        this.focusIndex = (this.focusIndex + d + n) % n;
+        this._refocus();
+        SoundManager.playSe("se_select", { volume: 0.7 });
+    }
+    _refocus() {
+        for (var i = 0; i < this.rows.length; i++) {
+            this.rows[i].setFocused(i === this.focusIndex);
         }
     }
 }
@@ -390,15 +600,19 @@ class GameScene extends Scene {
         this.container.addChild(hint);
 
         this.t = 0;
+
+        // ゲーム BGM へクロスフェード
+        SoundManager.playBgm("bgm_game", { fadeIn: 600, volume: 0.5 });
     }
     pause(topOpts) {
         // Pause シーンは hideBelow=false で push されるので Game の表示は残る
-        // (BGM フェード等を入れるならここ)
+        // BGM はダッキング (音量を下げてくぐもらせる)
         applyPause(this.container, topOpts);
+        SoundManager.pauseBgm(0.18, 200);
     }
     resume() {
         applyResume(this.container);
-        // (BGM フェードイン等)
+        SoundManager.resumeBgm(200);
     }
     exit() {
         sceneRoot.removeChild(this.container);
@@ -432,10 +646,12 @@ class GameScene extends Scene {
         if (Input.isJustPressed("fire")) {
             this.score++;
             this.scoreText.text = "SCORE: " + this.score;
+            SoundManager.playSe("se_fire");
         }
 
         // menu で Pause を被せる
         if (Input.isJustPressed("menu")) {
+            SoundManager.playSe("se_pause");
             SceneManager.push(new PauseScene({ score: this.score }), null, { pauseBelow: true });
         }
     }
@@ -473,7 +689,10 @@ class PauseScene extends Scene {
 
         var resume = new SimpleButton("Resume", { width: 280, height: 50, fontSize: 20 });
         resume.x = APP_W / 2 - 140; resume.y = APP_H / 2 - 60;
-        resume.onClick = function() { SceneManager.pop(); };
+        resume.onClick = function() {
+            SoundManager.playSe("se_confirm");
+            SceneManager.pop();
+        };
         this.container.addChild(resume);
 
         var save = new SimpleButton("Save", { width: 280, height: 50, fontSize: 20 });
@@ -482,12 +701,15 @@ class PauseScene extends Scene {
         save.onClick = function() {
             writeSave({ score: self.scoreSnapshot, savedAt: Date.now() });
             console.log("Demo11 saved: score=" + self.scoreSnapshot);
+            SoundManager.playSe("se_confirm");
         };
         this.container.addChild(save);
 
         var title2 = new SimpleButton("Title (discard)", { width: 280, height: 50, fontSize: 20 });
         title2.x = APP_W / 2 - 140; title2.y = APP_H / 2 + 60;
         title2.onClick = function() {
+            SoundManager.playSe("se_cancel");
+            // Title へ戻る: Game BGM → Title BGM へクロスフェード
             SceneManager.clear();
             SceneManager.push(new TitleScene());
         };
@@ -503,18 +725,95 @@ class PauseScene extends Scene {
         this.container = null;
     }
     update(_dt) {
-        if (Input.isJustPressed("up"))   { this.focusIndex = (this.focusIndex + this.buttons.length - 1) % this.buttons.length; this._refocus(); }
-        if (Input.isJustPressed("down")) { this.focusIndex = (this.focusIndex + 1) % this.buttons.length; this._refocus(); }
+        if (Input.isJustPressed("up")) {
+            this.focusIndex = (this.focusIndex + this.buttons.length - 1) % this.buttons.length;
+            this._refocus();
+            SoundManager.playSe("se_select", { volume: 0.7 });
+        }
+        if (Input.isJustPressed("down")) {
+            this.focusIndex = (this.focusIndex + 1) % this.buttons.length;
+            this._refocus();
+            SoundManager.playSe("se_select", { volume: 0.7 });
+        }
         if (Input.isJustPressed("confirm")) {
             var b = this.buttons[this.focusIndex];
             if (b && b.onClick) b.onClick();
         }
         if (Input.isJustPressed("cancel") || Input.isJustPressed("menu")) {
+            SoundManager.playSe("se_cancel");
             SceneManager.pop();
         }
     }
     _refocus() {
         for (var i = 0; i < this.buttons.length; i++) this.buttons[i].setFocused(i === this.focusIndex);
+    }
+}
+
+// ============================================================
+// BootScene — PIXI.Assets で音声をロードしてから Title へ
+// ============================================================
+//
+// PIXI.Assets.load を Promise で呼んで完了したら replace(Title)。
+// 完了率は表示しない (短くて表示する間もない) が、テキストだけ "Loading..."
+// を出す。Assets ロードが二度呼ばれても PIXI.Assets 側でキャッシュされる。
+class BootScene extends Scene {
+    enter() {
+        this.container = new PIXI.Container();
+        sceneRoot.addChild(this.container);
+
+        var msg = new PIXI.Text("Loading...", {
+            fontFamily: "Arial", fontSize: 28, fill: 0xffffff,
+        });
+        msg.anchor.set(0.5, 0.5);
+        msg.x = APP_W / 2; msg.y = APP_H / 2;
+        this.container.addChild(msg);
+
+        this.msg = msg;
+        this.t = 0;
+        this.done = false;
+        this.failed = false;
+
+        var self = this;
+        var bundle = {
+            "bgm_title":  "bgm/title.wav",
+            "bgm_game":   "bgm/game.wav",
+            "se_select":  "se/select.wav",
+            "se_confirm": "se/confirm.wav",
+            "se_cancel":  "se/cancel.wav",
+            "se_fire":    "se/fire.wav",
+            "se_pause":   "se/pause.wav",
+        };
+        Assets.preloadAudio(bundle)
+            .then(function(aliases) {
+                self.done = true;
+                if (aliases.length > 0) {
+                    console.log("Demo 11: assets loaded (" + aliases.length + " items)");
+                }
+            })
+            .catch(function(e) {
+                self.failed = true;
+                console.error("Demo 11: asset load failed:", e, e && e.stack);
+                if (self.msg) self.msg.text = "Asset load failed (see console)";
+            });
+
+        // 起動時に保存済み音量を反映
+        applyAllVolumes(getStoredVolumes(), 0);
+    }
+    exit() {
+        sceneRoot.removeChild(this.container);
+        this.container.destroy({ children: true });
+        this.container = null;
+    }
+    update(dt) {
+        this.t += dt;
+        // ドットアニメ
+        var n = (Math.floor(this.t / 250) % 4);
+        if (this.msg && !this.failed) {
+            this.msg.text = "Loading" + ".".repeat(n);
+        }
+        if (this.done) {
+            SceneManager.replace(new TitleScene());
+        }
     }
 }
 
@@ -525,19 +824,21 @@ class PauseScene extends Scene {
 
 globalThis.demo11 = {
     init: function() {
-        if (typeof PIXI === "undefined" || !globalThis.SceneManager || !globalThis.Input) {
-            console.error("Demo 11: framework が未ロード (scene_manager / input_action / pixi)");
+        if (typeof PIXI === "undefined" || !globalThis.SceneManager || !globalThis.Input
+            || !globalThis.SoundManager || !globalThis.Assets) {
+            console.error("Demo 11: framework が未ロード (scene_manager / input_action / sound_manager / assets_ext / pixi)");
             return;
         }
         if (!ensurePixi()) return;
         setupInput();
         if (!SceneManager.top()) {
-            SceneManager.push(new TitleScene());
+            SceneManager.push(new BootScene());
         }
     },
     update: function(dt) {
         if (!pixiApp) return;
         Input.update();
+        SoundManager.tick();
         SceneManager.update(dt);
     },
     render: function() {
@@ -548,6 +849,11 @@ globalThis.demo11 = {
     handleEvent: function(e) {
         if (!pixiApp) return;
         SceneManager.handleEvent(e);
+    },
+    // main.js が他デモへ切り替える直前に呼ぶ。BGM を止めるだけで pixiApp 自体は残置
+    // (Demo 11 に戻ったとき同じ pixiApp を再利用するため)
+    onLeave: function() {
+        if (globalThis.SoundManager) SoundManager.stopBgm(150);
     },
     // main.js 側で「Demo メニューに戻る」処理を関数として注入する
     // (loadScript される demo 側からは main.js のスコープが見えないため)

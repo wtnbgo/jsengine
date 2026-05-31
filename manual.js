@@ -514,12 +514,13 @@ addEventListener("touchcancel", function(e) {
 // オプショナル: JS フレームワーク（data/framework/）
 // ************************************************************
 // ゲーム制作の boilerplate を減らす薄い土台。loadScript で読み込むと
-// globalThis に Scene / SceneManager / Input / Assets が登録される。
+// globalThis に Scene / SceneManager / Input / Assets / SoundManager が登録される。
 // Demo 11 が利用例。
 //
 // loadScript("framework/scene_manager.js");
 // loadScript("framework/input_action.js");
-// loadScript("framework/assets_ext.js");  // PIXI が先にロード済みであること
+// loadScript("framework/assets_ext.js");   // PIXI が先にロード済みであること
+// loadScript("framework/sound_manager.js"); // assets_ext.js の後
 //
 // --- SceneManager (Cocos2d Director 風) ---
 // class MyScene extends Scene {
@@ -553,14 +554,37 @@ addEventListener("touchcancel", function(e) {
 //   "Gamepad:LeftStickX|Y|RightStickX|Y" (軸そのまま -1..1),
 //   "Gamepad:LeftStickUp|Down|Left|Right|RightStickUp|..." (半軸ボタン 0..1)
 //
-// --- Assets (PIXI.Assets 拡張) ---
-// PIXI.Assets が音声 (.mp3 .wav .ogg .flac .opus .m4a → AudioBuffer) と
-// フォント (.ttf .otf → Canvas2D.loadFont) を扱えるようになる。
-// PIXI.Assets.add({ alias: "bgm", src: "bgm.mp3" });
-// await PIXI.Assets.load(["bgm"]);
-// var buf = PIXI.Assets.get("bgm");        // AudioBuffer
-// Assets.play("bgm", { loop: true, volume: 0.5 });  // 即時再生ヘルパー
-// Assets.audioContext;                       // ローダー内部の AudioContext (共有)
+// --- Assets (PIXI.Assets 拡張 + 音声プリローダ + マスター GainNode) ---
+// フォント (.ttf .otf) は PIXI.Assets の LoadParser として登録され、
+// Canvas2D.loadFont を呼んで family/style を返す。
+//   PIXI.Assets.add({ alias: "ui_font", src: "fonts/Roboto.ttf" });
+//   await PIXI.Assets.load("ui_font");
+//   var info = PIXI.Assets.get("ui_font");   // { url, family, style }
+//   ctx.font = "24px " + info.family;
+//
+// 音声 (.mp3 .wav .ogg .flac .opus .m4a) は PIXI.Assets を経由せず
+// 自前 fetch + decodeAudioData でプリロードする (PIXI v7 のリゾルバが
+// ブラウザ標準 URL コンストラクタに依存しており jsengine のシムと非互換のため):
+//   await Assets.preloadAudio({ bgm: "bgm.mp3", se_ok: "se/ok.wav" });
+//   var buf = Assets.getAudio("bgm");       // AudioBuffer
+//   Assets.play("bgm", { loop: true, volume: 0.5 });
+//
+// 出力経路:
+//   source → (localGain) → bgmGain or seGain → masterGain → destination
+//   Settings 側で Assets.{masterGain,bgmGain,seGain}.gain.value を弄れば
+//   グループ単位でボリューム制御できる。
+//
+// --- SoundManager (BGM クロスフェード / SE) ---
+// SoundManager.playBgm(alias, { fadeIn, volume });
+//   - 同 alias を再生中なら no-op、別 alias ならクロスフェード
+// SoundManager.stopBgm(fadeOut);
+// SoundManager.pauseBgm(level, dur);   // ダッキング (Pause メニュー等)
+// SoundManager.resumeBgm(dur);
+// SoundManager.playSe(alias, { volume });
+// SoundManager.tick();                  // 毎フレーム呼んで終了 SE を掃除する
+// 注: 一発鳴らしの SE は呼び出し側で参照保持しないと QuickJS GC で localGain が
+//     回収されチェーンが切れ「マスター/グループ音量が SE に効かなくなる」現象が出る。
+//     SoundManager は内部リストで参照保持しており tick() でクリアする。
 
 // ************************************************************
 // ポリフィル / ブラウザシム（pixi.js 等のライブラリ動作用）
