@@ -198,8 +198,10 @@ globalThis.PerfHud = {
         }
         opts = opts || {};
         if (!pixiOverlay) {
+            // fontFamily 既定は "Arial" (jsengine では OpenSans-Regular に alias 済み)。
+            // "monospace" を指定するとフォント未解決でグリフが描かれず HUD が見えない。
             pixiOverlay = new PIXI.Text("", {
-                fontFamily: opts.fontFamily || "monospace",
+                fontFamily: opts.fontFamily || "Arial",
                 fontSize:   opts.fontSize   || 14,
                 fill:       (typeof opts.fill === "number") ? opts.fill : 0x00ff66,
                 stroke:     0x000000,
