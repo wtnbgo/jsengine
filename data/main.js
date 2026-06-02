@@ -1103,6 +1103,7 @@ function ensureDemo11Loaded() {
     loadScript("framework/sound_manager.js");
     loadScript("framework/save_data.js");
     loadScript("framework/i18n.js");
+    loadScript("framework/perf_hud.js");
     // デモ本体
     loadScript("demos/demo11_scene_showcase.js");
     demo11Loaded = true;

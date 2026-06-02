@@ -150,7 +150,7 @@ Demo 1 displays a HUD overlay showing controls, demo list, and system informatio
 | **8** | three.js r176 test (cube, sphere, floor plane, ESM) |
 | **9** | three-vrm v3 VRM avatar display (MToon shader, SkinnedMesh) |
 | **0** | pixi.ui v1.2.4 widget showcase (Button / CheckBox / Slider / ProgressBar / ScrollBox) |
-| **-** | Scene Showcase: SceneManager + Input + Assets + SoundManager + SaveData + I18n framework demo (Boot → Title / Menu / Settings / Game / Pause / SaveLoad / Keybind) with BGM, SE, a 3-slider volume settings page, 3-slot save with continue/load, a rebindable input UI (Input.captureNext), and live en/ja/zh-CN locale switching, all persisted in localStorage |
+| **-** | Scene Showcase: SceneManager + Input + Assets + SoundManager + SaveData + I18n + PerfHud framework demo (Boot → Title / Menu / Settings / Game / Pause / SaveLoad / Keybind) with BGM, SE, a 3-slider volume settings page, 3-slot save with continue/load, a rebindable input UI (Input.captureNext), live en/ja/zh-CN locale switching (all persisted in localStorage), and an F3-toggled FPS / ms / draw-call overlay |
 | **Space** | Play beep sound |
 | **R** | Reset |
 

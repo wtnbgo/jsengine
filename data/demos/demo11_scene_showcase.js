@@ -1508,15 +1508,22 @@ globalThis.demo11 = {
         initI18n();
         setupInput();
         initSaveData();
+        if (globalThis.PerfHud) {
+            PerfHud.init();
+            // sceneRoot より上の stage 直下に attach すれば、シーン切替で消えない
+            PerfHud.attachPixi(pixiApp.stage, { x: 8, y: 8, fontSize: 14 });
+        }
         if (!SceneManager.top()) {
             SceneManager.push(new BootScene());
         }
     },
     update: function(dt) {
         if (!pixiApp) return;
+        if (globalThis.PerfHud) PerfHud.update(dt);
         Input.update();
         SoundManager.tick();
         SceneManager.update(dt);
+        if (globalThis.PerfHud) PerfHud.refresh();
     },
     render: function() {
         if (!pixiApp) return;

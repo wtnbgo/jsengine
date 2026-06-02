@@ -676,6 +676,26 @@ addEventListener("touchcancel", function(e) {
 //
 // 辞書はフラットなキー (例: "menu.start", "game.score_time") を推奨。
 // 値内の {name} 形式は params.name で置換。見つからないキーは fallback → key そのまま。
+//
+// --- PerfHud (FPS / フレーム時間 / draw call の常駐 HUD) ---
+// PerfHud.init({
+//     instrumentGL: true,        // gl.drawArrays/Elements 系を monkey-patch して計測 (既定 true)
+//     hotkey: "F3",              // false で無効化
+// });
+// PerfHud.attachPixi(pixiApp.stage, { x: 8, y: 8, fontSize: 14 });   // PIXI オーバーレイ
+//
+// // 毎フレーム:
+// PerfHud.update(deltaMs);       // FPS / ms を集計、draw call をフレーム境界で確定
+// /* ゲームの処理 */
+// PerfHud.refresh();             // オーバーレイのテキスト/可視性を反映
+//
+// PerfHud.setDetail(2);          // 0=off / 1=FPS のみ / 2=full
+// PerfHud.toggle();              // 0→1→2→0 を循環 (F3 と同じ)
+// PerfHud.getDetail() / PerfHud.isVisible();
+// PerfHud.text();                // 現在の HUD 文字列 (改行入り、PIXI を使わない demo 向け)
+// PerfHud.stats();               // { fps, ms, msMax1s, drawCalls } 生値
+// PerfHud.set("Sources", 8);     // カスタム行 (Full 表示時のみ)
+// PerfHud.unset("Sources");
 
 // ************************************************************
 // ポリフィル / ブラウザシム（pixi.js 等のライブラリ動作用）
