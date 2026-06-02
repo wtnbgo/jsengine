@@ -1,5 +1,6 @@
 #include "AudioEngine.h"
 #include "AudioStream.h"
+#include <algorithm>
 
 #ifdef HAS_VORBIS
 #include "ma_libvorbis.h"
@@ -78,6 +79,15 @@ AudioEngine::~AudioEngine()
         }
     }
     m_groups.clear();
+
+    // 動的グループ破棄
+    for (ma_sound_group* g : m_dynamicGroups) {
+        if (g) {
+            ma_sound_group_uninit(g);
+            delete g;
+        }
+    }
+    m_dynamicGroups.clear();
 
     if (m_engineInited) {
         ma_engine_uninit(&m_engine);
@@ -192,6 +202,50 @@ ma_sound_group* AudioEngine::GetGroup(int groupId)
         return &it->second.group;
     }
     return nullptr;
+}
+
+ma_sound_group* AudioEngine::CreateGroupNode(ma_sound_group* parent)
+{
+    if (!m_engineInited) return nullptr;
+
+    std::lock_guard<std::mutex> lock(m_mutex);
+    ma_sound_group* group = new ma_sound_group();
+    ma_result r = ma_sound_group_init(&m_engine, 0, parent, group);
+    if (r != MA_SUCCESS) {
+        delete group;
+        return nullptr;
+    }
+    m_dynamicGroups.push_back(group);
+    return group;
+}
+
+void AudioEngine::DestroyGroupNode(ma_sound_group* group)
+{
+    if (!group) return;
+
+    std::lock_guard<std::mutex> lock(m_mutex);
+    // この group に attach されているストリームを endpoint に逃がす
+    // (ma_sound_group_uninit は子ノードの再 attach までは面倒見ない)
+    if (m_engineInited) {
+        ma_node* endpoint = ma_engine_get_endpoint(&m_engine);
+        for (AudioStream* stream : m_streams) {
+            if (stream && stream->m_soundInited) {
+                // 出力先が group のものを endpoint に切り替える
+                // (個別判定は AudioStream 側でやってもらうのが本来だが、
+                //  ma_node API では attach 先の問い合わせができないので
+                //  AudioStream に group ポインタを保持する形を取る)
+                if (stream->m_currentGroup == group) {
+                    ma_node_attach_output_bus(&stream->m_sound, 0, endpoint, 0);
+                    stream->m_currentGroup = nullptr;
+                }
+            }
+        }
+    }
+
+    ma_sound_group_uninit(group);
+    auto it = std::find(m_dynamicGroups.begin(), m_dynamicGroups.end(), group);
+    if (it != m_dynamicGroups.end()) m_dynamicGroups.erase(it);
+    delete group;
 }
 
 void AudioEngine::EnsureGroup(int groupId)

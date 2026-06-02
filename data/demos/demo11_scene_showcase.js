@@ -309,8 +309,10 @@ class MenuScene extends Scene {
 // SettingsScene
 // ============================================================
 //
-// Master / BGM / SE の 3 グループそれぞれ独立に音量調整。
-// 各 gain ノードは Assets.{masterGain,bgmGain,seGain} で公開済み。
+// Master / BGM / SE の 3 軸それぞれ独立に音量調整。
+//   Master → Assets.audioContext.masterVolume (AudioEngine master)
+//   BGM    → Assets.bgmGroup.volume           (ma_sound_group)
+//   SE     → Assets.seGroup.volume            (ma_sound_group)
 // localStorage の "demo11_volumes" に { master, bgm, se } を保存。
 // フォーカス: 上下で 5 行 (master/bgm/se スライダー + Test SE + Back) を循環、
 //             左右でスライダー値変更、confirm でボタンクリック、cancel で pop。
@@ -344,23 +346,12 @@ function setStoredVolumes(v) {
     try { localStorage.setItem(VOL_STORE_KEY, JSON.stringify(v)); } catch (_) {}
 }
 
-// AudioParam の linearRampToValueAtTime でなめらかに変更
-function rampGain(gainNode, vol, rampMs) {
-    if (!gainNode) return;
-    var t0 = Assets.audioContext.currentTime;
-    var t1 = t0 + Math.max(0.001, (rampMs || 60) / 1000);
-    try {
-        gainNode.gain.cancelScheduledValues(t0);
-        gainNode.gain.setValueAtTime(gainNode.gain.value, t0);
-        gainNode.gain.linearRampToValueAtTime(vol, t1);
-    } catch (_) {
-        gainNode.gain.value = vol;
-    }
-}
-function applyAllVolumes(v, rampMs) {
-    rampGain(Assets.masterGain, v.master, rampMs);
-    rampGain(Assets.bgmGain,    v.bgm,    rampMs);
-    rampGain(Assets.seGain,     v.se,     rampMs);
+// AudioGroup.volume と masterVolume はインスタント反映 (ramp 非対応)。
+// ramp が欲しい用途 (BGM のクロスフェード) は SoundManager 側で localGain にかける。
+function applyAllVolumes(v) {
+    Assets.audioContext.masterVolume = v.master;
+    if (Assets.bgmGroup) Assets.bgmGroup.volume = v.bgm;
+    if (Assets.seGroup)  Assets.seGroup.volume  = v.se;
 }
 
 // --- pixi.ui Slider 行 ----------------------------------------
@@ -475,24 +466,24 @@ class SettingsScene extends Scene {
 
         // 現在の音量を読み込み
         this.vols = getStoredVolumes();
-        applyAllVolumes(this.vols, 0);  // 起動時点との整合
+        applyAllVolumes(this.vols);  // 起動時点との整合
 
         // 3 スライダー
         var self = this;
         var sliderRows = [
             new SliderRow("Master Volume", this.vols.master, function(v) {
                 self.vols.master = v;
-                rampGain(Assets.masterGain, v, 60);
+                Assets.audioContext.masterVolume = v;
                 setStoredVolumes(self.vols);
             }),
             new SliderRow("BGM Volume",    this.vols.bgm,    function(v) {
                 self.vols.bgm = v;
-                rampGain(Assets.bgmGain, v, 60);
+                if (Assets.bgmGroup) Assets.bgmGroup.volume = v;
                 setStoredVolumes(self.vols);
             }),
             new SliderRow("SE Volume",     this.vols.se,     function(v) {
                 self.vols.se = v;
-                rampGain(Assets.seGain, v, 60);
+                if (Assets.seGroup) Assets.seGroup.volume = v;
                 setStoredVolumes(self.vols);
             }),
         ];
@@ -797,7 +788,7 @@ class BootScene extends Scene {
             });
 
         // 起動時に保存済み音量を反映
-        applyAllVolumes(getStoredVolumes(), 0);
+        applyAllVolumes(getStoredVolumes());
     }
     exit() {
         sceneRoot.removeChild(this.container);

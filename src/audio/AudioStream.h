@@ -97,6 +97,11 @@ public:
     // グループID取得 (内部用)
     int GetGroupId() const { return m_groupId; }
 
+    // 動的グループ切替 (ポインタベース)。nullptr で endpoint に戻す。
+    // AudioEngine::CreateGroupNode() で作成した ma_sound_group* を渡す想定。
+    void SetGroupNode(ma_sound_group* group);
+    ma_sound_group* GetGroupNode() const { return m_currentGroup; }
+
 private:
     /**
      * AudioStreamはAudioEngine::CreateStream()経由で作成される。
@@ -116,6 +121,7 @@ private:
 
     AudioEngine*  m_engine;
     int           m_groupId;
+    ma_sound_group* m_currentGroup;  // SetGroupNode() で動的に切り替えられる出力先
 
     ma_decoder    m_decoder;
     bool          m_decoderInited;

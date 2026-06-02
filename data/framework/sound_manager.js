@@ -2,15 +2,18 @@
 // SoundManager — BGM クロスフェード / SE 単発再生のヘルパー
 // ============================================================
 //
-// Assets.preloadAudio() でロード済みの AudioBuffer を前提とした
-// 薄いラッパー。すべての出力は Assets.masterGain → destination に流れる
-// ので、マスター音量制御は Settings 側で Assets.masterGain.gain.value を
-// 弄れば一括で効く。
+// Assets.preloadAudio() でロード済みの AudioBuffer を前提とした薄いラッパー。
+//
+// 出力経路:
+//   - BGM: source → localGain (フェード用) → Assets.bgmGroup → ctx master → destination
+//          localGain は currentBgm で参照保持しているため GC で消えない
+//   - SE : source → Assets.seGroup → ctx master → destination
+//          source は webaudio.cpp の selfHold で再生中は延命される (要 PR で実装)
 //
 // 提供 API (globalThis.SoundManager):
 //   playBgm(alias, opts)
 //     - opts.fadeIn   : ms (default 500)  立ち上がりの linear ramp
-//     - opts.volume   : 0..1 (default 1)  目標ボリューム
+//     - opts.volume   : 0..1 (default 1)  目標ボリューム (localGain.gain.value)
 //     - 既に同じ alias の BGM が鳴っていれば何もしない
 //     - 別 BGM が鳴っていればクロスフェード (前の BGM は fadeOut で消す)
 //   stopBgm(fadeOut)
@@ -42,12 +45,6 @@ var ctx = Assets.audioContext;
 var currentBgm = null;
 var isDucked = false;
 var savedVolumeBeforeDuck = 1.0;
-
-// 再生中の SE / ワンショット source のリスト。
-// 注: ここで参照を保持しないと QuickJS GC が JS の AudioBufferSourceNode / GainNode を
-//     回収して finalizer が走り、s.connectedGain が null 化されてチェーンが切れる
-//     (master/SE 音量が SE に効かなくなる)。再生終了 (source.ended==true) を見て掃除する。
-var activeSounds = [];
 
 function now() { return ctx.currentTime; }
 
@@ -96,9 +93,15 @@ globalThis.SoundManager = {
         var src = ctx.createBufferSource();
         src.buffer = buf;
         src.loop   = true;
+        // 実際のオーディオ経路は src.group = bgmGroup 経由で master に流れる (ma_node グラフ)。
+        // localGain は「ソフトウェア音量倍率」として src.connect(g) で結ぶことで効く
+        // (webaudio.cpp の apply_source_volume が src.localVolume × g.cachedValue × ... を計算)。
+        // クロスフェード等の動的フェードはこの gain で行う。currentBgm で参照保持しているため GC されない。
         var g = ctx.createGain();
         g.gain.value = 0.0;
-        src.connect(g).connect(Assets.bgmGain || Assets.masterGain);
+        src.connect(g);
+        g.connect(ctx.destination);   // keepalive 用 (destination 接続フラグを立てるだけ)
+        if (Assets.bgmGroup) src.group = Assets.bgmGroup;
         src.start();
         // フェードイン
         fadeGain(g, 0.0, targetVol, fadeIn);
@@ -143,27 +146,22 @@ globalThis.SoundManager = {
         if (!buf) { console.error("SoundManager.playSe: not loaded:", alias); return null; }
         var src = ctx.createBufferSource();
         src.buffer = buf;
-        var g = ctx.createGain();
-        g.gain.value = vol;
-        src.connect(g).connect(Assets.seGain || Assets.masterGain);
+        src.volume = vol;
+        // SE グループに attach。group 経由なら GainNode チェーン不要、
+        // C++ 側の selfHold で再生中は GC されないので参照保持も不要。
+        if (Assets.seGroup) src.group = Assets.seGroup;
         src.start();
-        var entry = { source: src, gain: g };
-        activeSounds.push(entry);  // GC されないよう参照保持。tick() で掃除
-        return entry;
+        return src;
     },
 
-    // 毎フレーム呼ぶ。再生終了した SE エントリを掃除する。
-    tick: function() {
-        for (var i = activeSounds.length - 1; i >= 0; i--) {
-            if (activeSounds[i].source.ended) activeSounds.splice(i, 1);
-        }
-    },
+    // 互換用 no-op (旧版で毎フレーム呼んでいた SE 参照保持の掃除)。
+    // AudioGroup + selfHold ベースになったので何もすることはない。
+    tick: function() {},
 
     // 内部用 (デバッグ向け)
     _current: function() { return currentBgm; },
-    _activeCount: function() { return activeSounds.length; },
 };
 
-console.log("framework/sound_manager.js loaded");
+console.log("framework/sound_manager.js loaded (AudioGroup-based, no GC band-aid)");
 
 })();

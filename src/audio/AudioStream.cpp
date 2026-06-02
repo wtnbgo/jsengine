@@ -68,6 +68,7 @@ namespace {
 AudioStream::AudioStream(AudioEngine* engine, int groupId)
     : m_engine(engine)
     , m_groupId(groupId)
+    , m_currentGroup(nullptr)
     , m_decoderInited(false)
     , m_soundInited(false)
     , m_state(SoundState_None)
@@ -184,8 +185,10 @@ bool AudioStream::InitSoundFromDecoder()
     // グループまたはエンドポイントに接続
     if (pGroup) {
         ma_node_attach_output_bus(&m_sound, 0, pGroup, 0);
+        m_currentGroup = pGroup;
     } else {
         ma_node_attach_output_bus(&m_sound, 0, ma_engine_get_endpoint(pEngine), 0);
+        m_currentGroup = nullptr;
     }
 
     // 終了コールバック設定
@@ -555,4 +558,25 @@ bool AudioStream::IsPlaying() const
 {
     if (!m_soundInited) return false;
     return ma_sound_is_playing(const_cast<ma_sound*>(&m_sound)) != MA_FALSE;
+}
+
+// ============================================================
+//  動的グループ切替
+// ============================================================
+void AudioStream::SetGroupNode(ma_sound_group* group)
+{
+    if (!m_soundInited) {
+        // まだ Open() 前。InitSoundFromDecoder で attach されるが、その時点では
+        // m_groupId ベースの古いパスが先に発火するため、開いた後に再度 SetGroupNode
+        // を呼ぶ運用にする。とりあえず希望値だけ覚えておく (Open() 後に手動で再呼出が必要)。
+        m_currentGroup = group;
+        return;
+    }
+
+    ma_engine* pEngine = m_engine ? m_engine->GetEngine() : nullptr;
+    if (!pEngine) return;
+
+    ma_node* target = group ? (ma_node*)group : (ma_node*)ma_engine_get_endpoint(pEngine);
+    ma_node_attach_output_bus(&m_sound, 0, target, 0);
+    m_currentGroup = group;
 }

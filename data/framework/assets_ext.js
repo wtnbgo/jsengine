@@ -1,13 +1,24 @@
 // ============================================================
-// Assets — 音声プリロード + Web Audio 出力経路 + PIXI フォントローダー
+// Assets — 音声プリロード + AudioGroup 出力経路 + PIXI フォントローダー
 // ============================================================
 //
 // 提供する globalThis.Assets:
 //   audioContext            — Web Audio の AudioContext
-//   masterGain              — 全出力が通る master GainNode (Settings で gain.value を弄る)
+//   bgmGroup                — BGM 用 AudioGroup (jsengine 拡張、ma_sound_group ラッパ)
+//   seGroup                 — SE 用 AudioGroup (同上)
 //   preloadAudio(map)       — { alias: "path/to.wav" } の map を受けて全部 decode、Promise を返す
 //   getAudio(alias)         — ロード済 AudioBuffer 取得
-//   play(alias, opts)       — 即時再生 (loop / volume / 既存 gain ノード差し替え可)
+//   play(alias, opts)       — 即時再生 (loop / volume / group 指定可)
+//
+// 出力グラフ:
+//   source ──┬─ bgmGroup ─┐
+//            └─ seGroup ──┴── ctx (master volume) ── destination
+//
+// 旧 API との違い:
+//   - 廃止: Assets.masterGain / bgmGain / seGain (GainNode 多段チェーン)
+//   - 追加: Assets.bgmGroup / Assets.seGroup (AudioGroup、ma_sound_group ベース)
+//   - master 音量は ctx.masterVolume を直接代入する (AudioEngine の master)
+//   - source.group = group で attach。GainNode 経由のグルーピングは不要
 //
 // 注: 音声は PIXI.Assets の LoadParser ではなく自前 preloadAudio で扱う。PIXI v7 のリゾルバが
 //     ブラウザ標準の URL コンストラクタに依存しており jsengine の URL シム (createObjectURL のみ)
@@ -15,7 +26,9 @@
 //
 // 使い方:
 //   await Assets.preloadAudio({ bgm_title: "bgm/title.wav", se_ok: "se/ok.wav" });
-//   var bgm = Assets.play("bgm_title", { loop: true, volume: 0.5 });
+//   var bgm = Assets.play("bgm_title", { loop: true, volume: 0.5, group: Assets.bgmGroup });
+//   Assets.bgmGroup.volume = 0.7;     // BGM だけ音量変更
+//   Assets.audioContext.masterVolume = 0.5;  // master 全体
 //
 //   // フォントは PIXI 経由:
 //   PIXI.Assets.add({ alias: "ui_font", src: "fonts/Roboto-Regular.ttf" });
@@ -32,20 +45,14 @@ if (typeof PIXI === "undefined" || !PIXI.Assets || !PIXI.extensions) {
 
 // ロードした AudioBuffer はこの AudioContext に紐づく。
 // 出力グラフ:
-//   source → (localGain) → bgmGain ┐
-//                                  ├→ masterGain → destination
-//   source → (localGain) → seGain ─┘
-// Settings 側で masterGain / bgmGain / seGain それぞれ gain.value を弄れる。
+//   source ──┬─ bgmGroup ─┐
+//            └─ seGroup ──┴── ctx master (= AudioEngine master) ── destination
+// master 音量は audioCtx.masterVolume を代入。bgm/se は AudioGroup.volume を代入。
 var audioCtx = new AudioContext();
-var masterGain = audioCtx.createGain();
-var bgmGain    = audioCtx.createGain();
-var seGain     = audioCtx.createGain();
-masterGain.gain.value = 1.0;
-bgmGain.gain.value    = 1.0;
-seGain.gain.value     = 1.0;
-masterGain.connect(audioCtx.destination);
-bgmGain.connect(masterGain);
-seGain.connect(masterGain);
+var bgmGroup = audioCtx.createGroup();
+var seGroup  = audioCtx.createGroup();
+bgmGroup.volume = 1.0;
+seGroup.volume  = 1.0;
 
 // 拡張子で判定するヘルパー
 function hasExt(url, exts) {
@@ -122,12 +129,11 @@ var fontLoader = {
 
 PIXI.extensions.add(fontLoader);
 
-// グローバルから AudioContext / masterGain にアクセスできるようにする
+// グローバルから AudioContext / グループにアクセスできるようにする
 globalThis.Assets = {
     audioContext: audioCtx,
-    masterGain:   masterGain,  // すべての再生はここを通る (Settings の master volume 制御点)
-    bgmGain:      bgmGain,     // BGM グループ (SoundManager.playBgm が経由)
-    seGain:       seGain,      // SE グループ (SoundManager.playSe が経由)
+    bgmGroup:     bgmGroup,    // BGM グループ (SoundManager.playBgm 経由)
+    seGroup:      seGroup,     // SE グループ (SoundManager.playSe 経由)
     // 音声プリロード (PIXI.Assets を経由しない自前ルート)。
     //   Assets.preloadAudio({ bgm_title: "bgm/title.wav", ... })
     //   .then(function(aliases) { ... });
@@ -135,24 +141,21 @@ globalThis.Assets = {
     // 音声バッファ取得 (alias → AudioBuffer)
     getAudio: function(alias) { return audioBuffers[alias]; },
     // 便利ヘルパー: ロード済 AudioBuffer を即再生
-    //   opts: { loop, volume, gain (既存 GainNode を流用) }
-    //   戻り値: { source, gain } — gain.gain.linearRampToValueAtTime() でフェード可能
+    //   opts: { loop, volume, group } — group 省略時は master 直結 (= bgm/se どちらでもない)
+    //   戻り値: source — JS 側で参照を捨てても再生中は GC されない (selfHold)
     play: function(alias, opts) {
         var buf = audioBuffers[alias];
         if (!buf) { console.error("Assets.play: not loaded:", alias); return null; }
         var src = audioCtx.createBufferSource();
         src.buffer = buf;
         src.loop   = !!(opts && opts.loop);
-        var gain = (opts && opts.gain) ? opts.gain : audioCtx.createGain();
-        if (!opts || !opts.gain) {
-            gain.gain.value = (opts && typeof opts.volume === "number") ? opts.volume : 1.0;
-        }
-        src.connect(gain).connect(masterGain);
+        if (opts && opts.group) src.group = opts.group;
+        if (opts && typeof opts.volume === "number") src.volume = opts.volume;
         src.start();
-        return { source: src, gain: gain };
+        return src;
     },
 };
 
-console.log("framework/assets_ext.js loaded (font parser registered, audio via preloadAudio)");
+console.log("framework/assets_ext.js loaded (font parser registered, audio via preloadAudio, bgm/se AudioGroups ready)");
 
 })();
