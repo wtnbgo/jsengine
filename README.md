@@ -134,7 +134,7 @@ See `manual.js` for a complete API listing in JavaScript-style documentation.
 
 ## Demos
 
-`data/main.js` includes 10 demos switchable by key press.
+`data/main.js` includes 11 demos switchable by key press.
 
 Demo 1 displays a HUD overlay showing controls, demo list, and system information.
 

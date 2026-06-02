@@ -36,8 +36,16 @@
 // 使用例:
 //   Input.bind("jump",   ["Space", "Gamepad:A"]);
 //   Input.bind("attack", ["KeyZ", "Mouse:Left", "Gamepad:X"]);
-//   Input.bind("moveX",  ["ArrowLeft|ArrowRight", "Gamepad:LeftStickX"]);
-//     // 補注: 軸系は単独の source 名で +/- 両方向を含む
+//
+//   // 左右方向は別アクションに分けて getValue の差を取る (一般的なパターン)
+//   Input.bind("left",  ["ArrowLeft",  "KeyA", "Gamepad:DpadLeft",  "Gamepad:LeftStickLeft"]);
+//   Input.bind("right", ["ArrowRight", "KeyD", "Gamepad:DpadRight", "Gamepad:LeftStickRight"]);
+//   var x = Input.getValue("right") - Input.getValue("left");   // -1..1
+//
+//   // アナログ軸そのままを 1 アクションで使いたい場合は full-axis source 名
+//   Input.bind("aimX", ["Gamepad:LeftStickX"]);   // -1..1 を getValue で取得
+//     // 注: 1 source あたりの「+/- 両方向」を 1 アクションにまとめる構文は無い。
+//     //     キー側 (ArrowLeft / ArrowRight) は単方向のみなので、上のように 2 アクションに分ける。
 //
 //   function update(dt) {
 //       Input.update();

@@ -10,7 +10,8 @@
 //                                                                                   → (pop)  → Game
 //                                                                                   → (clear → push Title)
 //   セーブデータは framework/save_data.js (3 スロット, namespace="demo11")。
-//   マスター音量は localStorage の "demo11_volume" に 0..1 で保存 (Settings 変更時)。
+//   音量は localStorage の "demo11_volumes" に { master, bgm, se } で保存。
+//   キーバインドは "demo11_keybinds"、ロケールは "demo11_locale" に保存。
 //
 // アセット:
 //   bgm/title.wav  bgm/game.wav        — ループ再生 (SoundManager.playBgm)

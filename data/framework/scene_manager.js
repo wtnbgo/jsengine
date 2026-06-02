@@ -7,8 +7,9 @@
 //   SceneManager.push(scene, args, opts)
 //   SceneManager.pop()
 //   SceneManager.replace(scene, args, opts)
-//   SceneManager.clear()
+//   SceneManager.clear()        — 全シーンを exit させて空にする (Demo 切替時に推奨)
 //   SceneManager.top()
+//   SceneManager.count()        — スタック深さ (leak 監視用)
 //   SceneManager.stack          (読み取り推奨、書き換えないこと)
 //   SceneManager.update(dt)     — 毎フレーム main.js から呼ぶ
 //   SceneManager.render()       — 毎フレーム main.js から呼ぶ
