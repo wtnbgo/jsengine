@@ -222,17 +222,19 @@ class MainScene extends Scene {
     _startPbLoop() {
         var self = this;
         function loop() {
-            new tweedle_js.Tween(self._pbValue)
+            if (!self.container) return;   // 既に exit 済みなら継続を打ち切る
+            self._pbTween = new tweedle_js.Tween(self._pbValue)
                 .to({ v: 100 }, 1600)
                 .easing(tweedle_js.Easing.Quadratic.InOut)
                 .onUpdate(function() { self._redrawPb(); })
                 .onComplete(function() {
-                    new tweedle_js.Tween(self._pbValue)
+                    if (!self.container) return;
+                    self._pbTween = new tweedle_js.Tween(self._pbValue)
                         .to({ v: 0 }, 1600)
                         .easing(tweedle_js.Easing.Quadratic.InOut)
                         .onUpdate(function() { self._redrawPb(); })
                         .onComplete(function() {
-                            if (self.container) loop();   // シーンが死んでなければ継続
+                            if (self.container) loop();
                         })
                         .start();
                 })
@@ -241,17 +243,22 @@ class MainScene extends Scene {
         loop();
     }
     _redrawPb() {
-        if (!this.pbFill) return;
+        // destroyed 後に onUpdate が一度だけ来るケースを弾く
         var g = this.pbFill;
+        if (!g || g._destroyed || g.destroyed) return;
         g.clear();
         var fillW = Math.max(0.1, (this._pbW - 2) * (this._pbValue.v / 100));
         g.beginFill(0x60a0ff, 1).drawRoundedRect(this._pbX + 1, this._pbY + 1, fillW, this._pbH - 2, 8).endFill();
     }
 
     exit() {
+        // ProgressBar の自動アニメ tween を確実に止めてから container を destroy
+        if (this._pbTween) { try { this._pbTween.stop(); } catch (_) {} this._pbTween = null; }
         sceneRoot.removeChild(this.container);
         this.container.destroy({ children: true });
         this.container = null;
+        this.pbFill = null;
+        this.pbBg = null;
     }
     update(_dt) {}
 }

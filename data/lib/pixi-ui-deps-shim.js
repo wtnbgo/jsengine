@@ -197,38 +197,73 @@ if (!globalThis.__pixi_ui_deps_shim_loaded) {
     // 数値プロパティを深さ優先で snapshot / interpolate するヘルパー。
     // toProps が {scale: {x: 1, y: 1}, alpha: 0} のようなネスト構造でも、
     // 数値リーフのみを処理して target を破壊しない (= scale を NaN にしない)。
+    // getter が throw する (= destroyed な PIXI ノード) ケースに備え、各読み書きを try/catch でガード。
+    function _isLive(node) {
+        // PIXI DisplayObject は destroy 後に _destroyed=true になる。それ以外の plain object は常に live。
+        if (!node) return false;
+        if (node._destroyed === true) return false;
+        if (typeof node.destroyed === "boolean" && node.destroyed) return false;
+        return true;
+    }
+    function _readNum(target, k) {
+        try {
+            var v = target[k];
+            return (typeof v === "number") ? v : 0;
+        } catch (_) { return null; }   // getter が throw した = target は実質死んでいる
+    }
+    function _readObj(target, k) {
+        try {
+            var v = target[k];
+            return (v !== null && typeof v === "object") ? v : null;
+        } catch (_) { return null; }
+    }
+    function _writeNum(target, k, v) {
+        try { target[k] = v; return true; }
+        catch (_) { return false; }
+    }
     function _snapshotValues(target, toProps) {
         var snap = {};
-        if (!target || !toProps) return snap;
+        if (!_isLive(target) || !toProps) return snap;
         for (var k in toProps) {
             if (!toProps.hasOwnProperty(k)) continue;
             var v = toProps[k];
             if (typeof v === "number") {
-                snap[k] = (k in target && typeof target[k] === "number") ? target[k] : 0;
-            } else if (v !== null && typeof v === "object" && target[k] && typeof target[k] === "object") {
-                snap[k] = _snapshotValues(target[k], v);
+                var n = _readNum(target, k);
+                snap[k] = (n == null) ? 0 : n;
+            } else if (v !== null && typeof v === "object") {
+                var child = _readObj(target, k);
+                if (child) snap[k] = _snapshotValues(child, v);
             }
         }
         return snap;
     }
+    // 戻り値 false なら target が「死亡」とみなして tween を停止すべき。
     function _applyValues(target, startValues, toProps, alpha) {
-        if (!target || !toProps) return;
+        if (!_isLive(target) || !toProps) return false;
         for (var k in toProps) {
             if (!toProps.hasOwnProperty(k)) continue;
             var to = toProps[k];
             var from = startValues ? startValues[k] : undefined;
             if (typeof to === "number") {
                 var s = (typeof from === "number") ? from : 0;
-                target[k] = s + (to - s) * alpha;
-            } else if (to !== null && typeof to === "object" && target[k] && typeof target[k] === "object") {
-                _applyValues(target[k], from, to, alpha);
+                if (!_writeNum(target, k, s + (to - s) * alpha)) return false;
+            } else if (to !== null && typeof to === "object") {
+                var child = _readObj(target, k);
+                if (!child) return false;
+                if (!_applyValues(child, from, to, alpha)) return false;
             }
         }
+        return true;
     }
 
     // group から呼ばれる内部 update。false を返すとリストから除去される。
     Tween.prototype._update = function (time) {
         if (!this._isPlaying) return false;
+        if (!_isLive(this._target)) {
+            // target が destroy 済み → 静かに終了
+            this._isPlaying = false;
+            return false;
+        }
         if (time < this._startTime) return true;   // delay 中
 
         // 初回 update で start 値を記憶 (ネストオブジェクトも辿る)
@@ -245,7 +280,12 @@ if (!globalThis.__pixi_ui_deps_shim_loaded) {
         if (elapsed > 1) elapsed = 1;
         var alpha = this._easing(this._reversed ? (1 - elapsed) : elapsed);
 
-        _applyValues(this._target, this._startValues, this._toProps, alpha);
+        var alive = _applyValues(this._target, this._startValues, this._toProps, alpha);
+        if (!alive) {
+            // 補間中に target が死亡 (getter throw / _destroyed) → 静かに終了
+            this._isPlaying = false;
+            return false;
+        }
 
         if (this._onUpdate) {
             try { this._onUpdate(this._target, elapsed); } catch (err) { console.error(err); }
