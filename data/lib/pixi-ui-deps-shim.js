@@ -194,30 +194,50 @@ if (!globalThis.__pixi_ui_deps_shim_loaded) {
 
     Tween.prototype.isPlaying = function () { return this._isPlaying; };
 
+    // 数値プロパティを深さ優先で snapshot / interpolate するヘルパー。
+    // toProps が {scale: {x: 1, y: 1}, alpha: 0} のようなネスト構造でも、
+    // 数値リーフのみを処理して target を破壊しない (= scale を NaN にしない)。
+    function _snapshotValues(target, toProps) {
+        var snap = {};
+        if (!target || !toProps) return snap;
+        for (var k in toProps) {
+            if (!toProps.hasOwnProperty(k)) continue;
+            var v = toProps[k];
+            if (typeof v === "number") {
+                snap[k] = (k in target && typeof target[k] === "number") ? target[k] : 0;
+            } else if (v !== null && typeof v === "object" && target[k] && typeof target[k] === "object") {
+                snap[k] = _snapshotValues(target[k], v);
+            }
+        }
+        return snap;
+    }
+    function _applyValues(target, startValues, toProps, alpha) {
+        if (!target || !toProps) return;
+        for (var k in toProps) {
+            if (!toProps.hasOwnProperty(k)) continue;
+            var to = toProps[k];
+            var from = startValues ? startValues[k] : undefined;
+            if (typeof to === "number") {
+                var s = (typeof from === "number") ? from : 0;
+                target[k] = s + (to - s) * alpha;
+            } else if (to !== null && typeof to === "object" && target[k] && typeof target[k] === "object") {
+                _applyValues(target[k], from, to, alpha);
+            }
+        }
+    }
+
     // group から呼ばれる内部 update。false を返すとリストから除去される。
     Tween.prototype._update = function (time) {
         if (!this._isPlaying) return false;
         if (time < this._startTime) return true;   // delay 中
 
-        // 初回 update で from プロパティを記憶 (現在値を始点に)
+        // 初回 update で start 値を記憶 (ネストオブジェクトも辿る)
         if (!this._hasStarted) {
             this._hasStarted = true;
-            var src = this._fromProps || this._target;
-            this._startValues = {};
-            for (var k in this._toProps) {
-                if (this._toProps.hasOwnProperty(k)) {
-                    this._startValues[k] = (src && k in src) ? src[k] : 0;
-                }
-            }
             if (this._fromProps) {
-                // from が指定されてれば target にも反映してから補間スタート
-                for (var k2 in this._fromProps) {
-                    if (this._fromProps.hasOwnProperty(k2)) {
-                        this._target[k2] = this._fromProps[k2];
-                    }
-                }
-                this._startValues = Object.assign({}, this._fromProps);
+                _applyValues(this._target, _snapshotValues(this._target, this._fromProps), this._fromProps, 1);
             }
+            this._startValues = _snapshotValues(this._target, this._toProps);
             if (this._onStart) try { this._onStart(this._target); } catch (e) { console.error(e); }
         }
 
@@ -225,13 +245,7 @@ if (!globalThis.__pixi_ui_deps_shim_loaded) {
         if (elapsed > 1) elapsed = 1;
         var alpha = this._easing(this._reversed ? (1 - elapsed) : elapsed);
 
-        for (var key in this._toProps) {
-            if (this._toProps.hasOwnProperty(key)) {
-                var s = this._startValues[key];
-                var e = this._toProps[key];
-                this._target[key] = s + (e - s) * alpha;
-            }
-        }
+        _applyValues(this._target, this._startValues, this._toProps, alpha);
 
         if (this._onUpdate) {
             try { this._onUpdate(this._target, elapsed); } catch (err) { console.error(err); }

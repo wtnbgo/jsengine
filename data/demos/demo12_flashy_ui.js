@@ -99,6 +99,10 @@ function fancy(label, w, h, theme) {
     var press  = theme.press  || 0x1d4cbf;
     var border = theme.border || 0x70a0ff;
 
+    // 注: animations.default を必ず指定すること。指定しないと FancyButton の
+    //     playAnimations("default") が「フォールバック tween で innerView を
+    //     originalInnerViewState (= setState 時点でまだ defaultView 未追加なので
+    //     width:0/height:0) へ縮める」挙動になり、ボタンが一瞬表示後に潰れる。
     var btn = new PIXI.ui.FancyButton({
         defaultView: makeRoundedBg(w, h, base,  { radius: 14, border: 1, borderColor: border }),
         hoverView:   makeRoundedBg(w, h, hover, { radius: 14, border: 2, borderColor: 0xffffff }),
@@ -107,6 +111,7 @@ function fancy(label, w, h, theme) {
             fontFamily: "Arial", fontSize: 20, fill: 0xffffff, fontWeight: "bold",
         }),
         animations: {
+            default: { props: { scale: { x: 1.00, y: 1.00 } }, duration: 100 },
             hover:   { props: { scale: { x: 1.05, y: 1.05 } }, duration: 120 },
             pressed: { props: { scale: { x: 0.93, y: 0.93 } }, duration: 90  },
         },
