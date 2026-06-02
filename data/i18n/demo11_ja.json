@@ -1,0 +1,52 @@
+{
+    "title.main": "Demo 11: シーンショーケース",
+    "title.sub": "SceneManager + Input + Assets + SoundManager + SaveData + I18n",
+    "title.prompt": "Enter / A ボタンで開始",
+
+    "menu.title": "メニュー",
+    "menu.new_game": "ニューゲーム",
+    "menu.continue": "つづきから",
+    "menu.continue_with_slot": "つづきから  (スロット {slot}: {label})",
+    "menu.load": "ロード",
+    "menu.settings": "設定",
+    "menu.back_to_demo_menu": "デモ一覧へ戻る",
+    "menu.hint": "↑↓ で項目移動、確定/キャンセル、マウスクリックも可",
+
+    "settings.title": "設定",
+    "settings.master": "マスター音量",
+    "settings.bgm": "BGM 音量",
+    "settings.se": "SE 音量",
+    "settings.test_se": "SE テスト (confirm.wav 再生)",
+    "settings.keybindings": "キー設定...",
+    "settings.language": "言語: {locale}",
+    "settings.back": "戻る  (Esc)",
+    "settings.hint": "↑↓: 行    ←→: スライダー値    Enter: ボタン    Esc: 戻る",
+
+    "keybind.title": "キー設定",
+    "keybind.hint": "↑↓: 行    Enter: 再割当 (上書き)    Backspace: 追加    Delete: 末尾削除    Esc: 戻る",
+    "keybind.reset": "デフォルトに戻す",
+    "keybind.back": "戻る  (Esc)",
+    "keybind.capture_replace": "「{action}」に割り当てたい入力を押してください\n(既存のバインドは上書きされます)",
+    "keybind.capture_add": "「{action}」に追加したい入力を押してください",
+    "keybind.capture_cancel": "Esc でキャンセル",
+    "keybind.unbound": "<未割当>",
+
+    "saveload.save_title": "セーブ",
+    "saveload.load_title": "ロード",
+    "saveload.hint_save": "↑↓: 行    Enter: セーブ    X / Delete: 削除    Esc: 戻る",
+    "saveload.hint_load": "↑↓: 行    Enter: ロード    X / Delete: 削除    Esc: 戻る",
+    "saveload.empty": "<空き>",
+    "saveload.saved": "セーブデータ",
+    "saveload.slot": "スロット {n}",
+    "saveload.label_score_time": "スコア {score} - {time}秒",
+
+    "game.score_time": "スコア: {score}    タイム: {time}秒",
+    "game.hint": "WASD / ←→↑↓ / スティックで移動、X / Gamepad X でスコア +1、Esc でポーズ",
+
+    "pause.title": "ポーズ",
+    "pause.resume": "再開",
+    "pause.save": "セーブ",
+    "pause.title_discard": "タイトル (破棄)",
+
+    "boot.loading": "読み込み中"
+}

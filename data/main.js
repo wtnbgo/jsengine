@@ -1102,6 +1102,7 @@ function ensureDemo11Loaded() {
     loadScript("framework/assets_ext.js");
     loadScript("framework/sound_manager.js");
     loadScript("framework/save_data.js");
+    loadScript("framework/i18n.js");
     // デモ本体
     loadScript("demos/demo11_scene_showcase.js");
     demo11Loaded = true;

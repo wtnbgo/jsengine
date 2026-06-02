@@ -653,6 +653,29 @@ addEventListener("touchcancel", function(e) {
 // 内部キー: {namespace}:slot:{n} / {namespace}:quick / {namespace}:meta
 // envelope: { version, savedAt, label, data }
 // schemaVersion 不一致時に migrate が無ければ load は null を返す。
+//
+// --- I18n (文字列辞書 + ロケール切替) ---
+// I18n.init({
+//     defaultLocale: "en",
+//     fallbackLocale: "en",          // 現在 locale でキーが見つからなければここを見る
+//     locales: { en: {...}, ja: {...}, "zh-CN": {...} },
+//     persistKey: "mygame_locale",   // 任意。localStorage キー
+//     autoRestore: true,             // 起動時に persistKey から locale 復元
+// });
+//
+// I18n.addLocale(locale, dict);                 // 辞書追加 (既存はマージ)
+// I18n.setLocale(locale);                       // 切替 (onChange 発火、persistKey なら保存)
+// I18n.getLocale();                             // "en"
+// I18n.getAvailable();                          // ["en", "ja", "zh-CN"]
+//
+// I18n.t("menu.start");                         // "New Game"
+// I18n.t("greet.hello", { name: "Alice" });     // "Hello, Alice!" (置換)
+//
+// I18n.onChange(callback);                      // locale 変更時に呼ばれる
+// I18n.offChange(callback);
+//
+// 辞書はフラットなキー (例: "menu.start", "game.score_time") を推奨。
+// 値内の {name} 形式は params.name で置換。見つからないキーは fallback → key そのまま。
 
 // ************************************************************
 // ポリフィル / ブラウザシム（pixi.js 等のライブラリ動作用）

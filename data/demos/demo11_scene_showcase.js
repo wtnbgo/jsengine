@@ -112,15 +112,68 @@ function initSaveData() {
 // セーブデータの最小単位 (GameScene.serialize / restore で使う)
 //   { score, playerX, playerY, playTime }
 function formatSaveLabel(d) {
-    if (!d) return "Empty";
-    return "Score " + (d.score | 0) + " · " + Math.floor((d.playTime || 0) / 1000) + "s";
+    if (!d) return I18n.t("saveload.empty");
+    return I18n.t("saveload.label_score_time", {
+        score: d.score | 0,
+        time:  Math.floor((d.playTime || 0) / 1000),
+    });
 }
 function formatSaveSubLabel(info) {
-    if (!info || !info.exists) return "<empty>";
+    if (!info || !info.exists) return I18n.t("saveload.empty");
     var d = new Date(info.savedAt);
     var pad = function(n) { return (n < 10 ? "0" : "") + n; };
     return d.getFullYear() + "/" + pad(d.getMonth() + 1) + "/" + pad(d.getDate())
         + " " + pad(d.getHours()) + ":" + pad(d.getMinutes());
+}
+
+// ---------- I18n 初期化 ----------
+// 起動時 (demo11.init) に 1 度だけ呼ぶ。同期で fs.readText して JSON parse。
+function initI18n() {
+    if (typeof I18n === "undefined") return;
+    if (I18n.getAvailable().length > 0) return;   // 既に init 済み (Demo 再入時)
+
+    function loadDict(path) {
+        try { return JSON.parse(fs.readText(path)); }
+        catch (e) { console.error("Demo 11 i18n: load failed:", path, e); return {}; }
+    }
+    I18n.init({
+        defaultLocale:  "en",
+        fallbackLocale: "en",
+        locales: {
+            "en":    loadDict("i18n/demo11_en.json"),
+            "ja":    loadDict("i18n/demo11_ja.json"),
+            "zh-CN": loadDict("i18n/demo11_zh-CN.json"),
+        },
+        persistKey:  "demo11_locale",
+        autoRestore: true,
+    });
+}
+
+// ---------- i18n テキストヘルパー ----------
+// 静的キー: i18nText(key, style) → PIXI.Text に _i18nKey をマークしておけば
+// locale 変更時に refreshI18nTexts() で一括更新できる。
+// 動的キー (params 変化あり): i18nText(key, style, params) して、後で _i18nParams を
+// 上書きしてから text を手で再評価。
+function i18nText(key, style, params) {
+    var t = new PIXI.Text(I18n.t(key, params), style);
+    t._i18nKey = key;
+    t._i18nParams = params || null;
+    return t;
+}
+function setI18nLabel(textObj, key, params) {
+    textObj._i18nKey = key;
+    textObj._i18nParams = params || null;
+    textObj.text = I18n.t(key, params);
+}
+function refreshI18nTexts(container) {
+    if (!container || !container.children) return;
+    for (var i = 0; i < container.children.length; i++) {
+        var c = container.children[i];
+        if (c._i18nKey != null) {
+            try { c.text = I18n.t(c._i18nKey, c._i18nParams); } catch (_) {}
+        }
+        refreshI18nTexts(c);
+    }
 }
 
 // ---------- 簡易 Button (pixi.ui 非依存) ----------
@@ -196,21 +249,21 @@ class TitleScene extends Scene {
         this.container = new PIXI.Container();
         sceneRoot.addChild(this.container);
 
-        var title = new PIXI.Text("Demo 11: Scene Showcase", {
+        var title = i18nText("title.main", {
             fontFamily: "Arial", fontSize: 48, fill: 0xffffff, fontWeight: "bold",
         });
         title.anchor.set(0.5, 0.5);
         title.x = APP_W / 2; title.y = APP_H * 0.35;
         this.container.addChild(title);
 
-        var sub = new PIXI.Text("SceneManager + Input + Assets + SoundManager サンプル", {
+        var sub = i18nText("title.sub", {
             fontFamily: "Arial", fontSize: 20, fill: 0xa0b0c0,
         });
         sub.anchor.set(0.5, 0.5);
         sub.x = APP_W / 2; sub.y = APP_H * 0.35 + 50;
         this.container.addChild(sub);
 
-        this.prompt = new PIXI.Text("Press SPACE / ENTER / Gamepad A to start", {
+        this.prompt = i18nText("title.prompt", {
             fontFamily: "Arial", fontSize: 22, fill: 0xffcc66,
         });
         this.prompt.anchor.set(0.5, 0.5);
@@ -221,8 +274,14 @@ class TitleScene extends Scene {
 
         // タイトル BGM (PauseScene 経由で来た場合はもう鳴ってるので playBgm が no-op)
         SoundManager.playBgm("bgm_title", { fadeIn: 800, volume: 0.5 });
+
+        // locale 切替時にラベル一括更新
+        var self = this;
+        this._i18nListener = function() { refreshI18nTexts(self.container); };
+        I18n.onChange(this._i18nListener);
     }
     exit() {
+        I18n.offChange(this._i18nListener);
         sceneRoot.removeChild(this.container);
         this.container.destroy({ children: true });
         this.container = null;
@@ -250,50 +309,47 @@ class MenuScene extends Scene {
         this.container = new PIXI.Container();
         sceneRoot.addChild(this.container);
 
-        var hdr = new PIXI.Text("MENU", {
+        var hdr = i18nText("menu.title", {
             fontFamily: "Arial", fontSize: 36, fill: 0xffffff, fontWeight: "bold",
         });
         hdr.x = 80; hdr.y = 60;
         this.container.addChild(hdr);
 
-        var latest = SaveData.loadLatest();   // { slot, data } or null
-        var hasAny = false;
-        var slots = SaveData.list();
-        for (var i = 0; i < slots.length; i++) if (slots[i].exists) { hasAny = true; break; }
-
+        // 項目: action と i18nKey、disabled 計算は別
         this.items = [
-            { label: "New Game",
-              action: this._onNewGame.bind(this) },
-            { label: "Continue" + (latest ? "  (slot " + (latest.slot + 1) + ": " + formatSaveLabel(latest.data) + ")" : ""),
-              action: this._onContinue.bind(this), disabled: !latest },
-            { label: "Load Game",
-              action: this._onLoad.bind(this), disabled: !hasAny },
-            { label: "Settings",
-              action: this._onSettings.bind(this) },
-            { label: "Back to Demo Menu",
-              action: this._onBack.bind(this) },
+            { i18nKey: "menu.new_game",          action: this._onNewGame.bind(this) },
+            { i18nKey: "menu.continue",          action: this._onContinue.bind(this) },
+            { i18nKey: "menu.load",              action: this._onLoad.bind(this) },
+            { i18nKey: "menu.settings",          action: this._onSettings.bind(this) },
+            { i18nKey: "menu.back_to_demo_menu", action: this._onBack.bind(this) },
         ];
         this.buttons = [];
         for (var i = 0; i < this.items.length; i++) {
-            var b = new SimpleButton(this.items[i].label, {
-                width: 360, height: 56,
-                disabled: !!this.items[i].disabled,
-            });
+            var b = new SimpleButton("", { width: 360, height: 56 });
+            setI18nLabel(b.label, this.items[i].i18nKey);
             b.x = 80; b.y = 140 + i * 72;
             b.onClick = this.items[i].action;
             this.container.addChild(b);
             this.buttons.push(b);
         }
+        this._applyContinueLoadState();
         this.focusIndex = 0;
         this._refocus();
 
-        this.helpText = new PIXI.Text(
-            "↑↓ / W S / DPad / Stick — confirm / cancel — mouse click も可",
+        this.helpText = i18nText("menu.hint",
             { fontFamily: "Arial", fontSize: 14, fill: 0x80909a });
         this.helpText.x = 80; this.helpText.y = APP_H - 40;
         this.container.addChild(this.helpText);
+
+        var self = this;
+        this._i18nListener = function() {
+            self._applyContinueLoadState();  // params 再計算
+            refreshI18nTexts(self.container);
+        };
+        I18n.onChange(this._i18nListener);
     }
     exit() {
+        I18n.offChange(this._i18nListener);
         sceneRoot.removeChild(this.container);
         this.container.destroy({ children: true });
         this.container = null;
@@ -302,17 +358,25 @@ class MenuScene extends Scene {
     resume() {
         applyResume(this.container);
         // Settings / SaveLoad から戻った時にセーブの有無で Continue / Load を再評価
+        this._applyContinueLoadState();
+    }
+    // セーブ有無で Continue/Load の文字列・有効状態を更新
+    _applyContinueLoadState() {
         var latest = SaveData.loadLatest();
         var hasAny = false;
         var slots = SaveData.list();
         for (var i = 0; i < slots.length; i++) if (slots[i].exists) { hasAny = true; break; }
+
         var continueBtn = this.buttons[1];
         if (latest) {
-            continueBtn.setText("Continue  (slot " + (latest.slot + 1) + ": " + formatSaveLabel(latest.data) + ")");
+            setI18nLabel(continueBtn.label, "menu.continue_with_slot", {
+                slot:  latest.slot + 1,
+                label: formatSaveLabel(latest.data),
+            });
             continueBtn.setDisabled(false);
             this.items[1].disabled = false;
         } else {
-            continueBtn.setText("Continue");
+            setI18nLabel(continueBtn.label, "menu.continue");
             continueBtn.setDisabled(true);
             this.items[1].disabled = true;
         }
@@ -521,14 +585,13 @@ class SettingsScene extends Scene {
         this.container = new PIXI.Container();
         sceneRoot.addChild(this.container);
 
-        var hdr = new PIXI.Text("SETTINGS", {
+        var hdr = i18nText("settings.title", {
             fontFamily: "Arial", fontSize: 36, fill: 0xffffff, fontWeight: "bold",
         });
         hdr.x = 80; hdr.y = 50;
         this.container.addChild(hdr);
 
-        var hint = new PIXI.Text(
-            "↑↓: row    ←→: slider value    Enter: button    Esc: back",
+        var hint = i18nText("settings.hint",
             { fontFamily: "Arial", fontSize: 14, fill: 0x80909a });
         hint.x = 80; hint.y = 100;
         this.container.addChild(hint);
@@ -537,42 +600,59 @@ class SettingsScene extends Scene {
         this.vols = getStoredVolumes();
         applyAllVolumes(this.vols);  // 起動時点との整合
 
-        // 3 スライダー
+        // 3 スライダー (label は SliderRow.labelText に _i18nKey をマークして翻訳)
         var self = this;
         var sliderRows = [
-            new SliderRow("Master Volume", this.vols.master, function(v) {
+            new SliderRow(I18n.t("settings.master"), this.vols.master, function(v) {
                 self.vols.master = v;
                 Assets.audioContext.masterVolume = v;
                 setStoredVolumes(self.vols);
             }),
-            new SliderRow("BGM Volume",    this.vols.bgm,    function(v) {
+            new SliderRow(I18n.t("settings.bgm"),    this.vols.bgm,    function(v) {
                 self.vols.bgm = v;
                 if (Assets.bgmGroup) Assets.bgmGroup.volume = v;
                 setStoredVolumes(self.vols);
             }),
-            new SliderRow("SE Volume",     this.vols.se,     function(v) {
+            new SliderRow(I18n.t("settings.se"),     this.vols.se,     function(v) {
                 self.vols.se = v;
                 if (Assets.seGroup) Assets.seGroup.volume = v;
                 setStoredVolumes(self.vols);
             }),
         ];
+        var sliderKeys = ["settings.master", "settings.bgm", "settings.se"];
         for (var i = 0; i < sliderRows.length; i++) {
             sliderRows[i].x = 80;
             sliderRows[i].y = 140 + i * 66;
+            sliderRows[i].labelText._i18nKey = sliderKeys[i];
             this.container.addChild(sliderRows[i]);
         }
 
         // テスト SE ボタン
-        var testBtn = new ButtonRow("Test SE (play confirm.wav)",
-            { width: 280, height: 44, fontSize: 16 });
+        var testBtn = new ButtonRow("", { width: 280, height: 44, fontSize: 16 });
+        setI18nLabel(testBtn.btn.label, "settings.test_se");
         testBtn.x = 80; testBtn.y = 350;
         testBtn.onClick = function() { SoundManager.playSe("se_confirm"); };
         this.container.addChild(testBtn);
 
+        // Language 切替ボタン (利用可能 locale を循環)
+        var availLocales = I18n.getAvailable();
+        this.langBtn = new ButtonRow("", { width: 280, height: 44, fontSize: 16 });
+        setI18nLabel(this.langBtn.btn.label, "settings.language", { locale: I18n.getLocale() });
+        this.langBtn.x = 80; this.langBtn.y = 400;
+        this.langBtn.onClick = function() {
+            var cur = I18n.getLocale();
+            var idx = availLocales.indexOf(cur);
+            var next = availLocales[(idx + 1) % availLocales.length];
+            I18n.setLocale(next);
+            SoundManager.playSe("se_confirm");
+            // _i18nListener が走るので明示的な再描画は不要
+        };
+        this.container.addChild(this.langBtn);
+
         // Keybindings ボタン
-        var kbBtn = new ButtonRow("Keybindings...",
-            { width: 280, height: 44, fontSize: 16 });
-        kbBtn.x = 80; kbBtn.y = 405;
+        var kbBtn = new ButtonRow("", { width: 280, height: 44, fontSize: 16 });
+        setI18nLabel(kbBtn.btn.label, "settings.keybindings");
+        kbBtn.x = 80; kbBtn.y = 450;
         kbBtn.onClick = function() {
             SoundManager.playSe("se_confirm");
             SceneManager.push(new KeybindScene(), null, { hideBelow: true, pauseBelow: true });
@@ -580,19 +660,28 @@ class SettingsScene extends Scene {
         this.container.addChild(kbBtn);
 
         // Back ボタン
-        var back = new ButtonRow("Back  (Esc)", { width: 200, height: 48, fontSize: 18 });
-        back.x = 80; back.y = 470;
+        var back = new ButtonRow("", { width: 200, height: 48, fontSize: 18 });
+        setI18nLabel(back.btn.label, "settings.back");
+        back.x = 80; back.y = 520;
         back.onClick = function() {
             SoundManager.playSe("se_cancel");
             SceneManager.pop();
         };
         this.container.addChild(back);
 
-        this.rows = sliderRows.concat([testBtn, kbBtn, back]);
+        this.rows = sliderRows.concat([testBtn, this.langBtn, kbBtn, back]);
+
+        // locale 変更時に Language ボタンの params も更新してから一括 refresh
+        this._i18nListener = function() {
+            self.langBtn.btn.label._i18nParams = { locale: I18n.getLocale() };
+            refreshI18nTexts(self.container);
+        };
+        I18n.onChange(this._i18nListener);
         this.focusIndex = 0;
         this._refocus();
     }
     exit() {
+        I18n.offChange(this._i18nListener);
         sceneRoot.removeChild(this.container);
         this.container.destroy({ children: true });
         this.container = null;
@@ -689,7 +778,7 @@ class KeybindRow extends PIXI.Container {
     setFocused(b) { this._focused = !!b; this._redraw(); }
     _formatBindings() {
         var arr = Input.bindings[this.action] || [];
-        return arr.length === 0 ? "<unbound>" : arr.join(", ");
+        return arr.length === 0 ? I18n.t("keybind.unbound") : arr.join(", ");
     }
     _redraw() {
         var g = this.frame;
@@ -707,14 +796,13 @@ class KeybindScene extends Scene {
         this.container = new PIXI.Container();
         sceneRoot.addChild(this.container);
 
-        var hdr = new PIXI.Text("KEYBINDINGS", {
+        var hdr = i18nText("keybind.title", {
             fontFamily: "Arial", fontSize: 36, fill: 0xffffff, fontWeight: "bold",
         });
         hdr.x = 80; hdr.y = 30;
         this.container.addChild(hdr);
 
-        var hint = new PIXI.Text(
-            "↑↓: row    Enter: rebind (REPLACE)    Backspace: ADD    Delete: remove last    Esc: back",
+        var hint = i18nText("keybind.hint",
             { fontFamily: "Arial", fontSize: 14, fill: 0x80909a });
         hint.x = 80; hint.y = 80;
         this.container.addChild(hint);
@@ -731,7 +819,8 @@ class KeybindScene extends Scene {
         // Reset / Back ボタン
         var btnY = 110 + KEYBIND_ACTIONS.length * 62 + 12;
         var self = this;
-        this.resetBtn = new SimpleButton("Reset to Defaults", { width: 220, height: 44, fontSize: 16 });
+        this.resetBtn = new SimpleButton("", { width: 220, height: 44, fontSize: 16 });
+        setI18nLabel(this.resetBtn.label, "keybind.reset");
         this.resetBtn.x = 80; this.resetBtn.y = btnY;
         this.resetBtn.onClick = function() {
             resetKeybindsToDefaults();
@@ -740,7 +829,8 @@ class KeybindScene extends Scene {
         };
         this.container.addChild(this.resetBtn);
 
-        this.backBtn = new SimpleButton("Back  (Esc)", { width: 180, height: 44, fontSize: 16 });
+        this.backBtn = new SimpleButton("", { width: 180, height: 44, fontSize: 16 });
+        setI18nLabel(this.backBtn.label, "keybind.back");
         this.backBtn.x = 320; this.backBtn.y = btnY;
         this.backBtn.onClick = function() {
             SoundManager.playSe("se_cancel");
@@ -752,7 +842,8 @@ class KeybindScene extends Scene {
         this._refocus();
 
         // キャプチャ状態
-        this._mode = null;   // null | "replace" | "add"
+        this._mode = null;        // null | "replace" | "add"
+        this._captureAction = "";
         this._buildOverlay();
 
         // Backspace (ADD) / Delete (remove last) は Input action を経由しない
@@ -767,9 +858,18 @@ class KeybindScene extends Scene {
             }
         };
         addEventListener("keydown", this._onKeyDown);
+
+        // i18n locale 切替: ラベル、KeybindRow の <unbound>、オーバーレイメッセージを更新
+        this._i18nListener = function() {
+            for (var k = 0; k < self.rows.length; k++) self.rows[k].refresh();
+            refreshI18nTexts(self.container);
+            if (self._mode) self._refreshOverlayText();
+        };
+        I18n.onChange(this._i18nListener);
     }
 
     exit() {
+        I18n.offChange(this._i18nListener);
         removeEventListener("keydown", this._onKeyDown);
         if (this._mode) Input.captureCancel();
         sceneRoot.removeChild(this.container);
@@ -871,7 +971,7 @@ class KeybindScene extends Scene {
         msg.x = APP_W / 2; msg.y = APP_H / 2 - 10;
         ov.addChild(msg);
 
-        var sub = new PIXI.Text("Esc to cancel", {
+        var sub = i18nText("keybind.capture_cancel", {
             fontFamily: "Arial", fontSize: 14, fill: 0xb0c0d0,
         });
         sub.anchor.set(0.5, 0.5);
@@ -884,11 +984,13 @@ class KeybindScene extends Scene {
     }
 
     _showOverlay(action, mode) {
-        var label = (mode === "replace")
-            ? 'Press any input to BIND for "' + action + '"\n(replaces existing)'
-            : 'Press any input to ADD a binding for "' + action + '"';
-        this._overlayMsg.text = label;
+        this._captureAction = action;
+        this._refreshOverlayText();
         this._overlay.visible = true;
+    }
+    _refreshOverlayText() {
+        var key = (this._mode === "replace") ? "keybind.capture_replace" : "keybind.capture_add";
+        this._overlayMsg.text = I18n.t(key, { action: this._captureAction });
     }
 
     _hideOverlay() {
@@ -924,9 +1026,9 @@ class SaveSlotRow extends PIXI.Container {
         this.frame = new PIXI.Graphics();
         this.addChild(this.frame);
 
-        this.title = new PIXI.Text("SLOT " + (slotIdx + 1), {
+        this.title = i18nText("saveload.slot", {
             fontFamily: "Arial", fontSize: 22, fill: 0xffffff, fontWeight: "bold",
-        });
+        }, { n: slotIdx + 1 });
         this.title.x = 16; this.title.y = 12;
         this.addChild(this.title);
 
@@ -946,21 +1048,19 @@ class SaveSlotRow extends PIXI.Container {
         this._redrawFrame();
     }
     _subText() {
-        if (!this.info || !this.info.exists) return "<empty>";
-        // info.label が data の中ではないので、load 後の data から再合成する手もあるが
-        // ここは label 優先 (SaveData.save 時に label 指定があればそれを使う)。
-        // demo 11 は label を指定しないので、簡略的に "saved" とだけ
-        return this.info.label || "saved data";
+        if (!this.info || !this.info.exists) return I18n.t("saveload.empty");
+        return this.info.label || I18n.t("saveload.saved");
     }
     setFocused(b) {
         this._focused = !!b;
         this._redrawFrame();
     }
     refresh() {
-        // 削除等で info が変わったときに UI 反映
+        // 削除等で info が変わったとき、または locale 切替時に呼ぶ
         this.info = SaveData.info(this.slotIdx);
         this.subText.text = this._subText();
         this.timeText.text = formatSaveSubLabel(this.info);
+        // title はキー固定 + slot 番号 params なので refreshI18nTexts 任せでも OK
     }
     _redrawFrame() {
         var g = this.frame;
@@ -984,14 +1084,15 @@ class SaveLoadScene extends Scene {
         this.container = new PIXI.Container();
         sceneRoot.addChild(this.container);
 
-        var hdr = new PIXI.Text(this.mode === "save" ? "SAVE" : "LOAD", {
+        var titleKey = (this.mode === "save") ? "saveload.save_title" : "saveload.load_title";
+        var hdr = i18nText(titleKey, {
             fontFamily: "Arial", fontSize: 36, fill: 0xffffff, fontWeight: "bold",
         });
         hdr.x = 80; hdr.y = 50;
         this.container.addChild(hdr);
 
-        var hint = new PIXI.Text(
-            "↑↓: row    Enter: " + (this.mode === "save" ? "save" : "load") + "    X / Delete: delete    Esc: back",
+        var hintKey = (this.mode === "save") ? "saveload.hint_save" : "saveload.hint_load";
+        var hint = i18nText(hintKey,
             { fontFamily: "Arial", fontSize: 14, fill: 0x80909a });
         hint.x = 80; hint.y = 100;
         this.container.addChild(hint);
@@ -1007,8 +1108,18 @@ class SaveLoadScene extends Scene {
 
         this.focusIndex = 0;
         this._refocus();
+
+        var self = this;
+        this._i18nListener = function() {
+            // 行内の subText / timeText は _i18nKey を持たない (動的内容のため) ので
+            // refresh() を呼んで <empty> / "saved data" の表示を locale 切替に追随させる
+            for (var k = 0; k < self.rows.length; k++) self.rows[k].refresh();
+            refreshI18nTexts(self.container);
+        };
+        I18n.onChange(this._i18nListener);
     }
     exit() {
+        I18n.offChange(this._i18nListener);
         sceneRoot.removeChild(this.container);
         this.container.destroy({ children: true });
         this.container = null;
@@ -1104,14 +1215,13 @@ class GameScene extends Scene {
 
         this.score = this.initialState.score;
         this.playTime = this.initialState.playTime;  // ms 累計
-        this.scoreText = new PIXI.Text(this._statusLine(), {
+        this.scoreText = i18nText("game.score_time", {
             fontFamily: "Arial", fontSize: 24, fill: 0xffffff, fontWeight: "bold",
-        });
+        }, this._statusParams());
         this.scoreText.x = 40; this.scoreText.y = 30;
         this.container.addChild(this.scoreText);
 
-        var hint = new PIXI.Text(
-            "WASD / Arrows / Stick で移動、X / Gamepad X でスコア +1、Esc で Pause",
+        var hint = i18nText("game.hint",
             { fontFamily: "Arial", fontSize: 14, fill: 0xa0b0c0 });
         hint.x = 40; hint.y = APP_H - 30;
         this.container.addChild(hint);
@@ -1120,10 +1230,21 @@ class GameScene extends Scene {
 
         // ゲーム BGM へクロスフェード
         SoundManager.playBgm("bgm_game", { fadeIn: 600, volume: 0.5 });
+
+        var self = this;
+        this._i18nListener = function() {
+            self.scoreText._i18nParams = self._statusParams();
+            refreshI18nTexts(self.container);
+        };
+        I18n.onChange(this._i18nListener);
     }
-    _statusLine() {
+    _statusParams() {
         var sec = Math.floor((this.playTime || 0) / 1000);
-        return "SCORE: " + this.score + "    TIME: " + sec + "s";
+        return { score: this.score, time: sec };
+    }
+    _updateStatusText() {
+        this.scoreText._i18nParams = this._statusParams();
+        this.scoreText.text = I18n.t("game.score_time", this.scoreText._i18nParams);
     }
     serialize() {
         return {
@@ -1144,6 +1265,7 @@ class GameScene extends Scene {
         SoundManager.resumeBgm(200);
     }
     exit() {
+        I18n.offChange(this._i18nListener);
         sceneRoot.removeChild(this.container);
         this.container.destroy({ children: true });
         this.container = null;
@@ -1184,7 +1306,7 @@ class GameScene extends Scene {
         var lastSec = Math.floor((this.playTime - dt) / 1000);
         var nowSec  = Math.floor(this.playTime / 1000);
         if (scoreChanged || lastSec !== nowSec) {
-            this.scoreText.text = this._statusLine();
+            this._updateStatusText();
         }
 
         // menu で Pause を被せる
@@ -1219,14 +1341,15 @@ class PauseScene extends Scene {
              .drawRoundedRect(APP_W / 2 - 180, APP_H / 2 - 160, 360, 320, 12).endFill();
         this.container.addChild(panel);
 
-        var title = new PIXI.Text("PAUSED", {
+        var title = i18nText("pause.title", {
             fontFamily: "Arial", fontSize: 32, fill: 0xffcc66, fontWeight: "bold",
         });
         title.anchor.set(0.5, 0.5);
         title.x = APP_W / 2; title.y = APP_H / 2 - 110;
         this.container.addChild(title);
 
-        var resume = new SimpleButton("Resume", { width: 280, height: 50, fontSize: 20 });
+        var resume = new SimpleButton("", { width: 280, height: 50, fontSize: 20 });
+        setI18nLabel(resume.label, "pause.resume");
         resume.x = APP_W / 2 - 140; resume.y = APP_H / 2 - 60;
         resume.onClick = function() {
             SoundManager.playSe("se_confirm");
@@ -1234,12 +1357,12 @@ class PauseScene extends Scene {
         };
         this.container.addChild(resume);
 
-        var save = new SimpleButton("Save", { width: 280, height: 50, fontSize: 20 });
+        var save = new SimpleButton("", { width: 280, height: 50, fontSize: 20 });
+        setI18nLabel(save.label, "pause.save");
         save.x = APP_W / 2 - 140; save.y = APP_H / 2;
         var self = this;
         save.onClick = function() {
             SoundManager.playSe("se_confirm");
-            // SaveLoadScene を save モードで重ねる。owner から最新状態を吸い出して渡す
             var payload = self.owner ? self.owner.serialize() : null;
             if (!payload) {
                 console.warn("Demo11 Pause Save: owner not available");
@@ -1252,11 +1375,11 @@ class PauseScene extends Scene {
         };
         this.container.addChild(save);
 
-        var title2 = new SimpleButton("Title (discard)", { width: 280, height: 50, fontSize: 20 });
+        var title2 = new SimpleButton("", { width: 280, height: 50, fontSize: 20 });
+        setI18nLabel(title2.label, "pause.title_discard");
         title2.x = APP_W / 2 - 140; title2.y = APP_H / 2 + 60;
         title2.onClick = function() {
             SoundManager.playSe("se_cancel");
-            // Title へ戻る: Game BGM → Title BGM へクロスフェード
             SceneManager.clear();
             SceneManager.push(new TitleScene());
         };
@@ -1265,8 +1388,12 @@ class PauseScene extends Scene {
         this.buttons = [resume, save, title2];
         this.focusIndex = 0;
         this._refocus();
+
+        this._i18nListener = function() { refreshI18nTexts(self.container); };
+        I18n.onChange(this._i18nListener);
     }
     exit() {
+        I18n.offChange(this._i18nListener);
         sceneRoot.removeChild(this.container);
         this.container.destroy({ children: true });
         this.container = null;
@@ -1308,7 +1435,7 @@ class BootScene extends Scene {
         this.container = new PIXI.Container();
         sceneRoot.addChild(this.container);
 
-        var msg = new PIXI.Text("Loading...", {
+        var msg = new PIXI.Text(I18n.t("boot.loading") + "...", {
             fontFamily: "Arial", fontSize: 28, fill: 0xffffff,
         });
         msg.anchor.set(0.5, 0.5);
@@ -1356,7 +1483,7 @@ class BootScene extends Scene {
         // ドットアニメ
         var n = (Math.floor(this.t / 250) % 4);
         if (this.msg && !this.failed) {
-            this.msg.text = "Loading" + ".".repeat(n);
+            this.msg.text = I18n.t("boot.loading") + ".".repeat(n);
         }
         if (this.done) {
             SceneManager.replace(new TitleScene());
@@ -1372,11 +1499,13 @@ class BootScene extends Scene {
 globalThis.demo11 = {
     init: function() {
         if (typeof PIXI === "undefined" || !globalThis.SceneManager || !globalThis.Input
-            || !globalThis.SoundManager || !globalThis.Assets || !globalThis.SaveData) {
-            console.error("Demo 11: framework が未ロード (scene_manager / input_action / sound_manager / assets_ext / save_data / pixi)");
+            || !globalThis.SoundManager || !globalThis.Assets || !globalThis.SaveData
+            || !globalThis.I18n) {
+            console.error("Demo 11: framework が未ロード (scene_manager / input_action / sound_manager / assets_ext / save_data / i18n / pixi)");
             return;
         }
         if (!ensurePixi()) return;
+        initI18n();
         setupInput();
         initSaveData();
         if (!SceneManager.top()) {

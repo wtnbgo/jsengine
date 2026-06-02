@@ -1,0 +1,52 @@
+{
+    "title.main": "Demo 11: 场景展示",
+    "title.sub": "SceneManager + Input + Assets + SoundManager + SaveData + I18n",
+    "title.prompt": "按 Enter / A 键开始",
+
+    "menu.title": "菜单",
+    "menu.new_game": "新游戏",
+    "menu.continue": "继续",
+    "menu.continue_with_slot": "继续  (槽位 {slot}: {label})",
+    "menu.load": "读取存档",
+    "menu.settings": "设置",
+    "menu.back_to_demo_menu": "返回 Demo 菜单",
+    "menu.hint": "↑↓ 选项移动,确认/取消,也可使用鼠标",
+
+    "settings.title": "设置",
+    "settings.master": "主音量",
+    "settings.bgm": "BGM 音量",
+    "settings.se": "SE 音量",
+    "settings.test_se": "测试音效 (播放 confirm.wav)",
+    "settings.keybindings": "按键设置...",
+    "settings.language": "语言: {locale}",
+    "settings.back": "返回  (Esc)",
+    "settings.hint": "↑↓: 行    ←→: 滑块值    Enter: 按钮    Esc: 返回",
+
+    "keybind.title": "按键设置",
+    "keybind.hint": "↑↓: 行    Enter: 重新绑定 (覆盖)    Backspace: 添加    Delete: 删除末尾    Esc: 返回",
+    "keybind.reset": "恢复默认",
+    "keybind.back": "返回  (Esc)",
+    "keybind.capture_replace": "请按下要绑定到「{action}」的输入\n(将覆盖原有绑定)",
+    "keybind.capture_add": "请按下要添加到「{action}」的输入",
+    "keybind.capture_cancel": "Esc 取消",
+    "keybind.unbound": "<未绑定>",
+
+    "saveload.save_title": "保存",
+    "saveload.load_title": "读取",
+    "saveload.hint_save": "↑↓: 行    Enter: 保存    X / Delete: 删除    Esc: 返回",
+    "saveload.hint_load": "↑↓: 行    Enter: 读取    X / Delete: 删除    Esc: 返回",
+    "saveload.empty": "<空>",
+    "saveload.saved": "存档数据",
+    "saveload.slot": "槽位 {n}",
+    "saveload.label_score_time": "得分 {score} - {time}秒",
+
+    "game.score_time": "得分: {score}    时间: {time}秒",
+    "game.hint": "WASD / ←→↑↓ / 摇杆移动,X / Gamepad X 得分 +1,Esc 暂停",
+
+    "pause.title": "已暂停",
+    "pause.resume": "继续",
+    "pause.save": "保存",
+    "pause.title_discard": "标题 (放弃)",
+
+    "boot.loading": "加载中"
+}

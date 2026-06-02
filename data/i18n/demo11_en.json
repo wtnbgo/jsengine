@@ -1,0 +1,52 @@
+{
+    "title.main": "Demo 11: Scene Showcase",
+    "title.sub": "SceneManager + Input + Assets + SoundManager + SaveData + I18n",
+    "title.prompt": "Press Enter / A button to start",
+
+    "menu.title": "MENU",
+    "menu.new_game": "New Game",
+    "menu.continue": "Continue",
+    "menu.continue_with_slot": "Continue  (slot {slot}: {label})",
+    "menu.load": "Load Game",
+    "menu.settings": "Settings",
+    "menu.back_to_demo_menu": "Back to Demo Menu",
+    "menu.hint": "Up/Down navigate, confirm to select, cancel to back out, mouse click also works",
+
+    "settings.title": "SETTINGS",
+    "settings.master": "Master Volume",
+    "settings.bgm": "BGM Volume",
+    "settings.se": "SE Volume",
+    "settings.test_se": "Test SE (play confirm.wav)",
+    "settings.keybindings": "Keybindings...",
+    "settings.language": "Language: {locale}",
+    "settings.back": "Back  (Esc)",
+    "settings.hint": "Up/Down: row    Left/Right: slider value    Enter: button    Esc: back",
+
+    "keybind.title": "KEYBINDINGS",
+    "keybind.hint": "Up/Down: row    Enter: rebind (REPLACE)    Backspace: ADD    Delete: remove last    Esc: back",
+    "keybind.reset": "Reset to Defaults",
+    "keybind.back": "Back  (Esc)",
+    "keybind.capture_replace": "Press any input to BIND for \"{action}\"\n(replaces existing)",
+    "keybind.capture_add": "Press any input to ADD a binding for \"{action}\"",
+    "keybind.capture_cancel": "Esc to cancel",
+    "keybind.unbound": "<unbound>",
+
+    "saveload.save_title": "SAVE",
+    "saveload.load_title": "LOAD",
+    "saveload.hint_save": "Up/Down: row    Enter: save    X / Delete: delete    Esc: back",
+    "saveload.hint_load": "Up/Down: row    Enter: load    X / Delete: delete    Esc: back",
+    "saveload.empty": "<empty>",
+    "saveload.saved": "saved data",
+    "saveload.slot": "SLOT {n}",
+    "saveload.label_score_time": "Score {score} - {time}s",
+
+    "game.score_time": "SCORE: {score}    TIME: {time}s",
+    "game.hint": "WASD / Arrows / Stick to move, X / Gamepad X for score +1, Esc for Pause",
+
+    "pause.title": "PAUSED",
+    "pause.resume": "Resume",
+    "pause.save": "Save",
+    "pause.title_discard": "Title (discard)",
+
+    "boot.loading": "Loading"
+}
