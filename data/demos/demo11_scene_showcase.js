@@ -1509,6 +1509,8 @@ globalThis.demo11 = {
         initI18n();
         setupInput();
         initSaveData();
+        // フェード対象を sceneRoot にセット (SceneManager.replaceWithFade で使う)
+        SceneManager.transitionTarget = sceneRoot;
         if (globalThis.PerfHud) {
             PerfHud.init();
             // sceneRoot より上の stage 直下に attach すれば、シーン切替で消えない
@@ -1523,11 +1525,13 @@ globalThis.demo11 = {
         if (globalThis.PerfHud) PerfHud.update(dt);
         Input.update();
         SoundManager.tick();
+        // tweedle の共有 Group を毎フレーム前進させる
+        // (FancyButton.animations / SceneTransition / ui_effects などが効くようになる)
+        if (globalThis.tweedle_js) tweedle_js.Group.shared.update();
         SceneManager.update(dt);
         if (globalThis.PerfHud) {
-            // フレームワーク内部のリソースカウントを表示 (Full モード時のみ可視)
-            PerfHud.set("Scenes",  SceneManager.count());
-            PerfHud.set("Audio",   Assets.audioBufferCount());
+            PerfHud.set("Scenes", SceneManager.count());
+            PerfHud.set("Audio",  Assets.audioBufferCount());
             PerfHud.refresh();
         }
     },

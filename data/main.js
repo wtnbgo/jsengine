@@ -1127,6 +1127,37 @@ function renderDemo11() {
 }
 
 // ============================================================
+// デモ12: 派手 UI ショーケース (FancyButton + tweedle + UIEffects + fade transition)
+// 実体は data/demos/demo12_flashy_ui.js
+// ============================================================
+
+var demo12Loaded = false;
+
+function ensureDemo12Loaded() {
+    if (demo12Loaded) return;
+    // Demo 11 と同じく pixi 一式を共用 (多重ガード済み)
+    loadScript("lib/polyfill.js");
+    loadScript("lib/browser_shim.js");
+    loadScript("lib/pixi.min.js");
+    loadScript("lib/pixi-ui-deps-shim.js");   // tweedle 本物実装入り
+    loadScript("lib/pixi-ui.js");
+    loadScript("framework/scene_manager.js");
+    loadScript("framework/ui_effects.js");
+    loadScript("demos/demo12_flashy_ui.js");
+    demo12Loaded = true;
+    if (globalThis.demo12) {
+        globalThis.demo12.exitToDemo1Hook = function() { demoMode = 1; };
+    }
+}
+
+function initDemo12() {
+    ensureDemo12Loaded();
+    if (globalThis.demo12) globalThis.demo12.init();
+}
+function updateDemo12(dt) { if (globalThis.demo12) globalThis.demo12.update(dt); }
+function renderDemo12()   { if (globalThis.demo12) globalThis.demo12.render(); }
+
+// ============================================================
 // デモ6: Canvas2D drawImage / getImageData / putImageData テスト
 // ============================================================
 
@@ -1771,6 +1802,7 @@ if (initialDemo > 0) {
     if (demoMode === 9) initDemo9();
     if (demoMode === 10) initDemo10();
     if (demoMode === 11) initDemo11();
+    if (demoMode === 12) initDemo12();
 }
 
 // ============================================================
@@ -1786,23 +1818,28 @@ addEventListener("keydown", function(e) {
         beep.start();
     }
 
-    // デモ切り替え (Demo 11 から離れる時は BGM を止める)
-    function _leaveDemo11IfNeeded(newMode) {
+    // デモ切り替え (Demo 11/12 から離れる時はクリーンアップフックを呼ぶ)
+    function _leaveFrameworkDemoIfNeeded(newMode) {
         if (demoMode === 11 && newMode !== 11 && globalThis.demo11 && globalThis.demo11.onLeave) {
             globalThis.demo11.onLeave();
         }
+        if (demoMode === 12 && newMode !== 12 && globalThis.demo12 && globalThis.demo12.onLeave) {
+            globalThis.demo12.onLeave();
+        }
     }
-    if (e.key === "1") { _leaveDemo11IfNeeded(1);  demoMode = 1;  console.log("Demo 1: Triangle + Texture"); }
-    if (e.key === "2") { _leaveDemo11IfNeeded(2);  demoMode = 2;  console.log("Demo 2: Canvas2D Shapes"); }
-    if (e.key === "3") { _leaveDemo11IfNeeded(3);  demoMode = 3;  console.log("Demo 3: Canvas2D Text"); }
-    if (e.key === "4") { _leaveDemo11IfNeeded(4);  demoMode = 4;  console.log("Demo 4: Canvas2D Animation"); }
-    if (e.key === "5") { _leaveDemo11IfNeeded(5);  demoMode = 5;  initDemo5(); console.log("Demo 5: pixi.js"); }
-    if (e.key === "6") { _leaveDemo11IfNeeded(6);  demoMode = 6;  console.log("Demo 6: drawImage/ImageData"); }
-    if (e.key === "7") { _leaveDemo11IfNeeded(7);  demoMode = 7;  demo7Inited = false; console.log("Demo 7: Dirty Rect"); }
-    if (e.key === "8") { _leaveDemo11IfNeeded(8);  demoMode = 8;  initDemo8(); console.log("Demo 8: three.js"); }
-    if (e.key === "9") { _leaveDemo11IfNeeded(9);  demoMode = 9;  initDemo9(); console.log("Demo 9: three-vrm"); }
-    if (e.key === "0") { _leaveDemo11IfNeeded(10); demoMode = 10; initDemo10(); console.log("Demo 10: pixi.ui"); }
-    if (e.key === "-" || e.code === "Minus") { demoMode = 11; initDemo11(); console.log("Demo 11: Scene Showcase"); }
+    var _leaveDemo11IfNeeded = _leaveFrameworkDemoIfNeeded;  // 旧名互換
+    if (e.key === "1") { _leaveFrameworkDemoIfNeeded(1);  demoMode = 1;  console.log("Demo 1: Triangle + Texture"); }
+    if (e.key === "2") { _leaveFrameworkDemoIfNeeded(2);  demoMode = 2;  console.log("Demo 2: Canvas2D Shapes"); }
+    if (e.key === "3") { _leaveFrameworkDemoIfNeeded(3);  demoMode = 3;  console.log("Demo 3: Canvas2D Text"); }
+    if (e.key === "4") { _leaveFrameworkDemoIfNeeded(4);  demoMode = 4;  console.log("Demo 4: Canvas2D Animation"); }
+    if (e.key === "5") { _leaveFrameworkDemoIfNeeded(5);  demoMode = 5;  initDemo5(); console.log("Demo 5: pixi.js"); }
+    if (e.key === "6") { _leaveFrameworkDemoIfNeeded(6);  demoMode = 6;  console.log("Demo 6: drawImage/ImageData"); }
+    if (e.key === "7") { _leaveFrameworkDemoIfNeeded(7);  demoMode = 7;  demo7Inited = false; console.log("Demo 7: Dirty Rect"); }
+    if (e.key === "8") { _leaveFrameworkDemoIfNeeded(8);  demoMode = 8;  initDemo8(); console.log("Demo 8: three.js"); }
+    if (e.key === "9") { _leaveFrameworkDemoIfNeeded(9);  demoMode = 9;  initDemo9(); console.log("Demo 9: three-vrm"); }
+    if (e.key === "0") { _leaveFrameworkDemoIfNeeded(10); demoMode = 10; initDemo10(); console.log("Demo 10: pixi.ui"); }
+    if (e.key === "-" || e.code === "Minus") { _leaveFrameworkDemoIfNeeded(11); demoMode = 11; initDemo11(); console.log("Demo 11: Scene Showcase"); }
+    if (e.key === "=" || e.code === "Equal")  { _leaveFrameworkDemoIfNeeded(12); demoMode = 12; initDemo12(); console.log("Demo 12: Fancy UI Showcase"); }
 
     if (e.key === "r" || e.key === "R") {
         offsetX = 0.0; offsetY = 0.0; alpha = 1.0;
@@ -1877,6 +1914,8 @@ function update(dt) {
         if (offsetY < -1) offsetY = -1; if (offsetY > 1) offsetY = 1;
     } else if (demoMode === 11) {
         updateDemo11(dt);
+    } else if (demoMode === 12) {
+        updateDemo12(dt);
     }
 }
 
@@ -1911,6 +1950,8 @@ function render() {
         renderDemo10();
     } else if (demoMode === 11) {
         renderDemo11();
+    } else if (demoMode === 12) {
+        renderDemo12();
     }
 }
 

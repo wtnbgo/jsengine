@@ -15,6 +15,14 @@
 //   SceneManager.render()       — 毎フレーム main.js から呼ぶ
 //   SceneManager.handleEvent(e) — addEventListener から渡す
 //
+//   トランジション:
+//     SceneManager.transitionTarget   — fade 対象 (PIXI.Container 想定)。
+//                                        Demo 側で sceneRoot 等をセットしておく
+//     SceneManager.isTransitioning()  — fade 中なら true (入力ロックに使う)
+//     SceneManager.replaceWithFade(scene, { duration, args, sceneOpts })
+//                                     — fade out → replace → fade in を Promise で完了通知
+//     SceneManager.pushWithFade(scene, { ... })   — push 版 (現シーンは pause される)
+//
 // シーンライフサイクル:
 //   enter(args) : push / replace で stack に積まれた直後 (1 回)
 //   exit()      : pop / replace で stack から外れる直前 (1 回)
@@ -56,9 +64,27 @@ class Scene {
     handleEvent(_e) {}
 }
 
+// alpha 補間 Promise (tweedle が無ければ即時に到達)
+function _tweenAlpha(target, from, to, duration) {
+    if (!target) return Promise.resolve();
+    target.alpha = from;
+    if (typeof tweedle_js === "undefined" || !tweedle_js.Tween || duration <= 0) {
+        target.alpha = to;
+        return Promise.resolve();
+    }
+    return new Promise(function(resolve) {
+        new tweedle_js.Tween(target)
+            .to({ alpha: to }, duration)
+            .onComplete(function() { resolve(); })
+            .start();
+    });
+}
+
 class SceneManagerImpl {
     constructor() {
         this.stack = [];
+        this.transitionTarget = null;   // Demo 側で sceneRoot 等を入れる
+        this._locked = false;
     }
 
     top() {
@@ -107,6 +133,40 @@ class SceneManagerImpl {
             var s = this.stack.pop();
             try { s.exit(); } catch (e) { console.error("Scene.exit() error:", e); }
         }
+    }
+
+    isTransitioning() { return this._locked; }
+
+    // fade out → replace → fade in を Promise で待てる形にした replace。
+    // opts: { duration: ms (既定 300), args, sceneOpts, target (省略時 this.transitionTarget) }
+    replaceWithFade(scene, opts) {
+        return this._fadeSwap("replace", scene, opts);
+    }
+    pushWithFade(scene, opts) {
+        return this._fadeSwap("push", scene, opts);
+    }
+
+    _fadeSwap(kind, scene, opts) {
+        opts = opts || {};
+        var self = this;
+        var duration = (typeof opts.duration === "number") ? opts.duration : 300;
+        var target = opts.target || this.transitionTarget;
+        // 既にトランジション中なら拒否 (二重発火防止)
+        if (this._locked) return Promise.resolve();
+        this._locked = true;
+        var half = duration / 2;
+        return _tweenAlpha(target, target ? target.alpha : 1, 0, half).then(function() {
+            if (kind === "replace") self.replace(scene, opts.args, opts.sceneOpts);
+            else                    self.push(scene,   opts.args, opts.sceneOpts);
+            return _tweenAlpha(target, 0, 1, half);
+        }).then(function() {
+            self._locked = false;
+            if (target) target.alpha = 1;
+        }, function(err) {
+            self._locked = false;
+            if (target) target.alpha = 1;
+            throw err;
+        });
     }
 
     // 内部用: index i のシーンが「上の pauseBelow / hideBelow に塞がれてる」か判定

@@ -551,14 +551,17 @@ addEventListener("touchcancel", function(e) {
 // 推奨ロード順 (依存関係順):
 //   loadScript("lib/polyfill.js");
 //   loadScript("lib/browser_shim.js");
-//   loadScript("lib/pixi.min.js");                // assets_ext は PIXI に依存
+//   loadScript("lib/pixi.min.js");                  // assets_ext / ui_effects は PIXI に依存
+//   loadScript("lib/pixi-ui-deps-shim.js");          // typed-signals + tweedle 実装
+//   loadScript("lib/pixi-ui.js");                    // FancyButton / Slider / ProgressBar 等
 //   loadScript("framework/scene_manager.js");
 //   loadScript("framework/input_action.js");
 //   loadScript("framework/assets_ext.js");
-//   loadScript("framework/sound_manager.js");      // assets_ext.js の後
+//   loadScript("framework/sound_manager.js");        // assets_ext.js の後
 //   loadScript("framework/save_data.js");
 //   loadScript("framework/i18n.js");
-//   loadScript("framework/perf_hud.js");           // PIXI overlay 利用なら PIXI 後
+//   loadScript("framework/perf_hud.js");             // PIXI overlay 利用なら PIXI 後
+//   loadScript("framework/ui_effects.js");           // PIXI + tweedle 必須
 //
 // --- SceneManager (Cocos2d Director 風) ---
 // class MyScene extends Scene {
@@ -576,6 +579,13 @@ addEventListener("touchcancel", function(e) {
 // SceneManager.clear();                    // 全シーン破棄 (Demo 切替時など、各 exit が走る)
 // SceneManager.top();
 // SceneManager.count();                    // スタック深さ (leak 監視用)
+//
+// // フェード遷移 (tweedle_js が必要)
+// SceneManager.transitionTarget = sceneRoot;  // 起動時 1 回。fade 対象 (alpha を弄る)
+// await SceneManager.replaceWithFade(new NextScene(), { duration: 400 });
+// await SceneManager.pushWithFade(new ModalScene(), { duration: 300 });
+// SceneManager.isTransitioning();          // 遷移中なら true (ボタン連打防止に使う)
+//
 // SceneManager.update(dt);                 // 毎フレーム呼ぶ
 // SceneManager.render();
 // SceneManager.handleEvent(e);
@@ -735,6 +745,38 @@ addEventListener("touchcancel", function(e) {
 // PerfHud.set("Sources", 8);     // カスタム行 (Full 表示時のみ)
 // PerfHud.unset("Sources");
 // PerfHud.detach();              // pixiOverlay を親から外す (Demo 切替時等)
+//
+// --- UIEffects (tweedle + PIXI ベースの UI 演出ヘルパー) ---
+// 前提: pixi-ui-deps-shim.js (tweedle 実装) と PIXI が先にロード済、
+//       ホスト側が毎フレーム tweedle_js.Group.shared.update() を呼ぶこと。
+//
+// UIEffects.flash(container, { color, alpha, duration, easing, bounds });
+//   container 全体を半透明色で覆い、フェードアウトで消す。タップフラッシュ等に。
+//
+// UIEffects.ripple(container, x, y, { color, startAlpha, maxRadius, duration, easing });
+//   (x, y) から円を広げつつフェードアウト (Material Design 風)。
+//
+// UIEffects.bounce(target, { downScale, upScale, downDur, upDur, easing });
+//   target.scale を down → up にバウンドさせる。FancyButton 無しの SimpleButton にも使える。
+//
+// UIEffects.toast(parent, "message", { duration, bgColor, textColor, fontSize, bottom });
+//   下からスライドイン + 自動フェードアウトする通知ラベル。戻り値は生成 Container。
+//
+// 全ヘルパーは完了時に PIXI オブジェクトを自動 destroy する。
+//
+// --- tweedle_js (Tween 実装、pixi-ui-deps-shim.js が提供) ---
+// 任意のオブジェクトの数値プロパティを時間補間する。pixi.ui FancyButton が内部で使う。
+// new tweedle_js.Tween(target)
+//     .to({ alpha: 0, x: 100 }, durationMs)
+//     .delay(100)
+//     .easing(tweedle_js.Easing.Cubic.Out)   // Linear/Quadratic/Cubic/Quartic/Sinusoidal/Exponential/Back/Elastic
+//     .repeat(2)                              // n 回繰り返し
+//     .yoyo(true)                             // 反転再生
+//     .onStart(fn).onUpdate(fn).onComplete(fn).onStop(fn)
+//     .chain(anotherTween)                    // 完了後に anotherTween.start()
+//     .start();
+// tweedle_js.Group.shared.update();           // 毎フレーム呼ぶ (これ呼ばないとアニメが進まない)
+// tweedle_js.Group.shared.getAll();           // アクティブ Tween 一覧 (PerfHud で件数表示等)
 
 // ************************************************************
 // ポリフィル / ブラウザシム（pixi.js 等のライブラリ動作用）
