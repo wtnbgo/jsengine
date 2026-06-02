@@ -559,8 +559,9 @@ addEventListener("touchcancel", function(e) {
 // SceneManager.push(scene, args, opts);    // opts: { pauseBelow, hideBelow }
 // SceneManager.pop();
 // SceneManager.replace(scene, args, opts);
-// SceneManager.clear();
+// SceneManager.clear();                    // 全シーン破棄 (Demo 切替時など、各 exit が走る)
 // SceneManager.top();
+// SceneManager.count();                    // スタック深さ (leak 監視用)
 // SceneManager.update(dt);                 // 毎フレーム呼ぶ
 // SceneManager.render();
 // SceneManager.handleEvent(e);
@@ -605,6 +606,10 @@ addEventListener("touchcancel", function(e) {
 //   await Assets.preloadAudio({ bgm: "bgm.mp3", se_ok: "se/ok.wav" });
 //   var buf = Assets.getAudio("bgm");       // AudioBuffer
 //   Assets.play("bgm", { loop: true, volume: 0.5, group: Assets.bgmGroup });
+//   Assets.unloadAudio("bgm");              // 個別解放
+//   Assets.unloadAllAudio();                // 全解放 (Demo 切替時等)
+//   Assets.audioBufferCount();              // キャッシュ件数 (PerfHud 等の監視用)
+//   Assets.listAudioAliases();              // [alias, ...]
 //
 // 出力経路:
 //   source ──┬─ bgmGroup ─┐

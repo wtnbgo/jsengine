@@ -1523,7 +1523,12 @@ globalThis.demo11 = {
         Input.update();
         SoundManager.tick();
         SceneManager.update(dt);
-        if (globalThis.PerfHud) PerfHud.refresh();
+        if (globalThis.PerfHud) {
+            // フレームワーク内部のリソースカウントを表示 (Full モード時のみ可視)
+            PerfHud.set("Scenes",  SceneManager.count());
+            PerfHud.set("Audio",   Assets.audioBufferCount());
+            PerfHud.refresh();
+        }
     },
     render: function() {
         if (!pixiApp) return;
@@ -1534,10 +1539,19 @@ globalThis.demo11 = {
         if (!pixiApp) return;
         SceneManager.handleEvent(e);
     },
-    // main.js が他デモへ切り替える直前に呼ぶ。BGM を止めるだけで pixiApp 自体は残置
-    // (Demo 11 に戻ったとき同じ pixiApp を再利用するため)
+    // main.js が他デモへ切り替える直前に呼ぶ。
+    //   - BGM を止める
+    //   - SceneManager.clear() で全シーンの exit を走らせる
+    //     (I18n.offChange / removeEventListener 等のリスナー解除を確実に)
+    //   - pixiApp 自体は残置 (Demo 11 に戻ったとき再利用)
+    //   - PerfHud のカスタム行も掃除
     onLeave: function() {
         if (globalThis.SoundManager) SoundManager.stopBgm(150);
+        if (globalThis.SceneManager) SceneManager.clear();
+        if (globalThis.PerfHud) {
+            PerfHud.unset("Scenes");
+            PerfHud.unset("Audio");
+        }
     },
     // main.js 側で「Demo メニューに戻る」処理を関数として注入する
     // (loadScript される demo 側からは main.js のスコープが見えないため)

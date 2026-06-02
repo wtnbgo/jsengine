@@ -140,6 +140,18 @@ globalThis.Assets = {
     preloadAudio: preloadAudio,
     // 音声バッファ取得 (alias → AudioBuffer)
     getAudio: function(alias) { return audioBuffers[alias]; },
+    // 音声バッファ解放 (Demo 切替時のメモリ削減用)
+    unloadAudio: function(alias) {
+        if (audioBuffers[alias]) delete audioBuffers[alias];
+    },
+    unloadAllAudio: function() {
+        for (var k in audioBuffers) {
+            if (audioBuffers.hasOwnProperty(k)) delete audioBuffers[k];
+        }
+    },
+    // キャッシュ済 alias 一覧 (PerfHud 表示や leak 監視用)
+    listAudioAliases: function() { return Object.keys(audioBuffers); },
+    audioBufferCount: function() { return Object.keys(audioBuffers).length; },
     // 便利ヘルパー: ロード済 AudioBuffer を即再生
     //   opts: { loop, volume, group } — group 省略時は master 直結 (= bgm/se どちらでもない)
     //   戻り値: source — JS 側で参照を捨てても再生中は GC されない (selfHold)

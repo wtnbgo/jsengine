@@ -64,6 +64,9 @@ class SceneManagerImpl {
         return this.stack.length > 0 ? this.stack[this.stack.length - 1] : null;
     }
 
+    // スタック深さ (PerfHud 等の計測用)
+    count() { return this.stack.length; }
+
     push(scene, args, opts) {
         var newOpts = opts || {};
         // pause(topOpts) で「自分の上に乗ったシーンの opts」を渡すと、
