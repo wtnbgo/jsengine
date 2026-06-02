@@ -609,6 +609,37 @@ addEventListener("touchcancel", function(e) {
 // SoundManager.resumeBgm(dur);
 // SoundManager.playSe(alias, { volume });   // Assets.seGroup に attach するだけ
 // SoundManager.tick();                  // AudioGroup ベース化で no-op に。互換のため残置
+//
+// --- SaveData (localStorage 上のセーブスロット管理) ---
+// SaveData.init({
+//     namespace: "mygame",
+//     slots: 3,
+//     schemaVersion: 1,
+//     migrate: function(data, fromVer, toVer) {     // 任意
+//         // 旧スキーマから新スキーマへ変換 (null 返却で「読めない」扱い)
+//         return data;
+//     },
+// });
+//
+// SaveData.save(slot, data, { label: "..." });      // スロットに保存
+// var d  = SaveData.load(slot);                     // スロットから読込 (無ければ null)
+// SaveData.delete(slot);                            // 削除
+// SaveData.exists(slot);                            // 真偽
+// SaveData.info(slot);                              // { exists, savedAt, label, schemaVersion }
+// SaveData.list();                                  // info の配列 (各エントリに slot 番号も含む)
+// SaveData.latestSlot();                            // 直近に save した slot (delete で追随、無ければ -1)
+// SaveData.loadLatest();                            // { slot, data } or null (Continue 用)
+//
+// SaveData.quickSave(data, opts);                   // slot とは独立した 1 枠
+// SaveData.quickLoad();
+// SaveData.quickInfo();
+// SaveData.quickDelete();
+//
+// SaveData.wipeAll();                               // 全消去 (デバッグ用)
+//
+// 内部キー: {namespace}:slot:{n} / {namespace}:quick / {namespace}:meta
+// envelope: { version, savedAt, label, data }
+// schemaVersion 不一致時に migrate が無ければ load は null を返す。
 
 // ************************************************************
 // ポリフィル / ブラウザシム（pixi.js 等のライブラリ動作用）

@@ -9,7 +9,7 @@
 //                                                   → (replace) → Game     → (push) → Pause
 //                                                                                   → (pop)  → Game
 //                                                                                   → (clear → push Title)
-//   セーブデータは localStorage の "demo11_save" キーに JSON で保存。
+//   セーブデータは framework/save_data.js (3 スロット, namespace="demo11")。
 //   マスター音量は localStorage の "demo11_volume" に 0..1 で保存 (Settings 変更時)。
 //
 // アセット:
@@ -67,19 +67,35 @@ function setupInput() {
     Input.bind("fire",    ["KeyX", "Gamepad:X"]);
 }
 
-// ---------- セーブデータ ----------
-var SAVE_KEY = "demo11_save";
-function loadSave() {
-    try {
-        var raw = localStorage.getItem(SAVE_KEY);
-        if (!raw) return null;
-        return JSON.parse(raw);
-    } catch (_) { return null; }
+// ---------- セーブデータ初期化 ----------
+// 3 スロットの localStorage バックエンドを使う。schemaVersion を上げたら migrate を増やす想定。
+function initSaveData() {
+    if (typeof SaveData === "undefined") return;
+    SaveData.init({
+        namespace: "demo11",
+        slots: 3,
+        schemaVersion: 1,
+        migrate: function(data, fromVer, toVer) {
+            // 旧 ver → 新 ver の変換例 (現状は no-op)
+            console.log("Demo11 SaveData: migrating " + fromVer + " -> " + toVer);
+            return data;
+        },
+    });
 }
-function writeSave(data) {
-    try { localStorage.setItem(SAVE_KEY, JSON.stringify(data)); } catch (_) {}
+
+// セーブデータの最小単位 (GameScene.serialize / restore で使う)
+//   { score, playerX, playerY, playTime }
+function formatSaveLabel(d) {
+    if (!d) return "Empty";
+    return "Score " + (d.score | 0) + " · " + Math.floor((d.playTime || 0) / 1000) + "s";
 }
-function clearSave() { try { localStorage.removeItem(SAVE_KEY); } catch (_) {} }
+function formatSaveSubLabel(info) {
+    if (!info || !info.exists) return "<empty>";
+    var d = new Date(info.savedAt);
+    var pad = function(n) { return (n < 10 ? "0" : "") + n; };
+    return d.getFullYear() + "/" + pad(d.getMonth() + 1) + "/" + pad(d.getDate())
+        + " " + pad(d.getHours()) + ":" + pad(d.getMinutes());
+}
 
 // ---------- 簡易 Button (pixi.ui 非依存) ----------
 class SimpleButton extends PIXI.Container {
@@ -214,14 +230,22 @@ class MenuScene extends Scene {
         hdr.x = 80; hdr.y = 60;
         this.container.addChild(hdr);
 
-        var save = loadSave();
+        var latest = SaveData.loadLatest();   // { slot, data } or null
+        var hasAny = false;
+        var slots = SaveData.list();
+        for (var i = 0; i < slots.length; i++) if (slots[i].exists) { hasAny = true; break; }
 
         this.items = [
-            { label: "New Game",          action: this._onNewGame.bind(this) },
-            { label: "Continue" + (save ? "  (score: " + save.score + ")" : ""),
-              action: this._onContinue.bind(this), disabled: !save },
-            { label: "Settings",          action: this._onSettings.bind(this) },
-            { label: "Back to Demo Menu", action: this._onBack.bind(this) },
+            { label: "New Game",
+              action: this._onNewGame.bind(this) },
+            { label: "Continue" + (latest ? "  (slot " + (latest.slot + 1) + ": " + formatSaveLabel(latest.data) + ")" : ""),
+              action: this._onContinue.bind(this), disabled: !latest },
+            { label: "Load Game",
+              action: this._onLoad.bind(this), disabled: !hasAny },
+            { label: "Settings",
+              action: this._onSettings.bind(this) },
+            { label: "Back to Demo Menu",
+              action: this._onBack.bind(this) },
         ];
         this.buttons = [];
         for (var i = 0; i < this.items.length; i++) {
@@ -251,16 +275,24 @@ class MenuScene extends Scene {
     pause(topOpts) { applyPause(this.container, topOpts); }
     resume() {
         applyResume(this.container);
-        // Settings から戻った時にセーブの有無で Continue を再評価
-        var save = loadSave();
-        var btn = this.buttons[1];
-        if (save) {
-            btn.setText("Continue  (score: " + save.score + ")");
-            btn.setDisabled(false);
+        // Settings / SaveLoad から戻った時にセーブの有無で Continue / Load を再評価
+        var latest = SaveData.loadLatest();
+        var hasAny = false;
+        var slots = SaveData.list();
+        for (var i = 0; i < slots.length; i++) if (slots[i].exists) { hasAny = true; break; }
+        var continueBtn = this.buttons[1];
+        if (latest) {
+            continueBtn.setText("Continue  (slot " + (latest.slot + 1) + ": " + formatSaveLabel(latest.data) + ")");
+            continueBtn.setDisabled(false);
+            this.items[1].disabled = false;
         } else {
-            btn.setText("Continue");
-            btn.setDisabled(true);
+            continueBtn.setText("Continue");
+            continueBtn.setDisabled(true);
+            this.items[1].disabled = true;
         }
+        var loadBtn = this.buttons[2];
+        loadBtn.setDisabled(!hasAny);
+        this.items[2].disabled = !hasAny;
     }
     update(_dt) {
         // 上下移動 (justPressed 連打)
@@ -292,8 +324,19 @@ class MenuScene extends Scene {
             this.buttons[i].setFocused(i === this.focusIndex);
         }
     }
-    _onNewGame()  { clearSave(); SceneManager.replace(new GameScene({ score: 0 })); }
-    _onContinue() { var s = loadSave(); if (s) SceneManager.replace(new GameScene({ score: s.score })); }
+    _onNewGame()  {
+        // 既存セーブは消さない (前作品のセーブと共存させる典型)。
+        // 純粋に新規データから Game シーンへ
+        SceneManager.replace(new GameScene({}));
+    }
+    _onContinue() {
+        var latest = SaveData.loadLatest();
+        if (latest) SceneManager.replace(new GameScene(latest.data));
+    }
+    _onLoad() {
+        // Load 専用モードで SaveLoadScene を被せる。GameScene に切り替えるのは SaveLoadScene 側
+        SceneManager.push(new SaveLoadScene({ mode: "load" }), null, { hideBelow: true, pauseBelow: true });
+    }
     // Settings は Menu を完全に覆うフルスクリーン (透過モーダルではない) なので
     // hideBelow=true で Menu の描画を止め、pauseBelow=true で update も止める
     _onSettings() { SceneManager.push(new SettingsScene(), null, { hideBelow: true, pauseBelow: true }); }
@@ -557,12 +600,196 @@ class SettingsScene extends Scene {
 }
 
 // ============================================================
+// SaveLoadScene — 3 スロット選択 UI
+// ============================================================
+//
+// args:
+//   mode:    "save" | "load"
+//   payload: (save 時のみ) ゲーム状態のオブジェクト。SaveData.save() に渡す
+//
+// 動作:
+//   - 上下でスロット行選択、確認で確定
+//   - save: 確定で SaveData.save(slot, payload) → pop して呼出元 (Pause) に戻る
+//   - load: 確定で SaveData.load(slot) → SceneManager.clear() → push GameScene(data)
+//   - cancel/Esc で pop
+//   - X / Delete (KeyDelete) でフォーカス行のセーブを削除 (確認ダイアログ無しの簡易版)
+//
+// セーブ済みスロットには label / 日時を表示。未セーブスロットは "<empty>" 表示。
+
+class SaveSlotRow extends PIXI.Container {
+    constructor(slotIdx, info) {
+        super();
+        this.w = 720;
+        this.h = 80;
+        this.slotIdx = slotIdx;
+        this.info = info;
+
+        this.frame = new PIXI.Graphics();
+        this.addChild(this.frame);
+
+        this.title = new PIXI.Text("SLOT " + (slotIdx + 1), {
+            fontFamily: "Arial", fontSize: 22, fill: 0xffffff, fontWeight: "bold",
+        });
+        this.title.x = 16; this.title.y = 12;
+        this.addChild(this.title);
+
+        this.subText = new PIXI.Text(this._subText(), {
+            fontFamily: "Arial", fontSize: 16, fill: 0xb0c0d0,
+        });
+        this.subText.x = 16; this.subText.y = 44;
+        this.addChild(this.subText);
+
+        this.timeText = new PIXI.Text(formatSaveSubLabel(info), {
+            fontFamily: "Arial", fontSize: 14, fill: 0x80909a,
+        });
+        this.timeText.anchor.set(1, 0);
+        this.timeText.x = this.w - 16; this.timeText.y = 14;
+        this.addChild(this.timeText);
+
+        this._redrawFrame();
+    }
+    _subText() {
+        if (!this.info || !this.info.exists) return "<empty>";
+        // info.label が data の中ではないので、load 後の data から再合成する手もあるが
+        // ここは label 優先 (SaveData.save 時に label 指定があればそれを使う)。
+        // demo 11 は label を指定しないので、簡略的に "saved" とだけ
+        return this.info.label || "saved data";
+    }
+    setFocused(b) {
+        this._focused = !!b;
+        this._redrawFrame();
+    }
+    refresh() {
+        // 削除等で info が変わったときに UI 反映
+        this.info = SaveData.info(this.slotIdx);
+        this.subText.text = this._subText();
+        this.timeText.text = formatSaveSubLabel(this.info);
+    }
+    _redrawFrame() {
+        var g = this.frame;
+        g.clear();
+        if (this._focused) {
+            g.lineStyle(2, 0xffcc66, 1).beginFill(0x182030, 0.7).drawRoundedRect(0, 0, this.w, this.h, 8).endFill();
+        } else {
+            g.lineStyle(1, 0x303848, 1).beginFill(0x101820, 0.45).drawRoundedRect(0, 0, this.w, this.h, 8).endFill();
+        }
+    }
+}
+
+class SaveLoadScene extends Scene {
+    constructor(args) {
+        super();
+        args = args || {};
+        this.mode = (args.mode === "save") ? "save" : "load";
+        this.payload = args.payload || null;   // save モード時のみ使う
+    }
+    enter() {
+        this.container = new PIXI.Container();
+        sceneRoot.addChild(this.container);
+
+        var hdr = new PIXI.Text(this.mode === "save" ? "SAVE" : "LOAD", {
+            fontFamily: "Arial", fontSize: 36, fill: 0xffffff, fontWeight: "bold",
+        });
+        hdr.x = 80; hdr.y = 50;
+        this.container.addChild(hdr);
+
+        var hint = new PIXI.Text(
+            "↑↓: row    Enter: " + (this.mode === "save" ? "save" : "load") + "    X / Delete: delete    Esc: back",
+            { fontFamily: "Arial", fontSize: 14, fill: 0x80909a });
+        hint.x = 80; hint.y = 100;
+        this.container.addChild(hint);
+
+        this.rows = [];
+        var slots = SaveData.list();
+        for (var i = 0; i < slots.length; i++) {
+            var row = new SaveSlotRow(i, slots[i]);
+            row.x = 80; row.y = 140 + i * 92;
+            this.container.addChild(row);
+            this.rows.push(row);
+        }
+
+        this.focusIndex = 0;
+        this._refocus();
+    }
+    exit() {
+        sceneRoot.removeChild(this.container);
+        this.container.destroy({ children: true });
+        this.container = null;
+    }
+    update(_dt) {
+        if (Input.isJustPressed("up"))   this._moveFocus(-1);
+        if (Input.isJustPressed("down")) this._moveFocus(+1);
+        if (Input.isJustPressed("confirm")) this._onConfirm();
+        if (Input.isJustPressed("cancel")) {
+            SoundManager.playSe("se_cancel");
+            SceneManager.pop();
+        }
+        if (Input.isJustPressed("fire")) this._onDelete();   // X = delete
+    }
+    _moveFocus(d) {
+        var n = this.rows.length;
+        this.focusIndex = (this.focusIndex + d + n) % n;
+        this._refocus();
+        SoundManager.playSe("se_select", { volume: 0.7 });
+    }
+    _refocus() {
+        for (var i = 0; i < this.rows.length; i++) {
+            this.rows[i].setFocused(i === this.focusIndex);
+        }
+    }
+    _onConfirm() {
+        var slot = this.focusIndex;
+        if (this.mode === "save") {
+            if (!this.payload) {
+                console.error("SaveLoadScene save: no payload"); return;
+            }
+            SaveData.save(slot, this.payload, { label: formatSaveLabel(this.payload) });
+            SoundManager.playSe("se_confirm");
+            this.rows[slot].refresh();
+            // 保存したら pop して Pause に戻る
+            SceneManager.pop();
+        } else {
+            // load
+            var info = SaveData.info(slot);
+            if (!info.exists) {
+                SoundManager.playSe("se_cancel");
+                return;
+            }
+            var data = SaveData.load(slot);
+            if (data == null) {
+                console.error("SaveLoadScene load: data null (migrate failed?)");
+                SoundManager.playSe("se_cancel");
+                return;
+            }
+            SoundManager.playSe("se_confirm");
+            SceneManager.clear();
+            SceneManager.push(new GameScene(data));
+        }
+    }
+    _onDelete() {
+        var slot = this.focusIndex;
+        var info = SaveData.info(slot);
+        if (!info.exists) return;
+        SaveData.delete(slot);
+        SoundManager.playSe("se_cancel");
+        this.rows[slot].refresh();
+    }
+}
+
+// ============================================================
 // GameScene (ダミーゲーム)
 // ============================================================
 class GameScene extends Scene {
     constructor(args) {
         super();
-        this.initialScore = (args && typeof args.score === "number") ? args.score : 0;
+        // セーブから復帰 / 新規開始のどちらでも args をそのまま受け取る
+        // args: { score, playerX, playerY, playTime }
+        this.initialState = Object.assign({
+            score:    0,
+            playerX:  200,
+            playerY:  APP_H / 2,
+            playTime: 0,
+        }, args || {});
     }
     enter() {
         this.container = new PIXI.Container();
@@ -574,12 +801,14 @@ class GameScene extends Scene {
 
         this.player = new PIXI.Graphics();
         this.player.beginFill(0xff6644).drawCircle(0, 0, 28).endFill();
-        this.player.x = 200; this.player.y = APP_H / 2;
+        this.player.x = this.initialState.playerX;
+        this.player.y = this.initialState.playerY;
         this.container.addChild(this.player);
 
-        this.score = this.initialScore;
-        this.scoreText = new PIXI.Text("SCORE: " + this.score, {
-            fontFamily: "Arial", fontSize: 28, fill: 0xffffff, fontWeight: "bold",
+        this.score = this.initialState.score;
+        this.playTime = this.initialState.playTime;  // ms 累計
+        this.scoreText = new PIXI.Text(this._statusLine(), {
+            fontFamily: "Arial", fontSize: 24, fill: 0xffffff, fontWeight: "bold",
         });
         this.scoreText.x = 40; this.scoreText.y = 30;
         this.container.addChild(this.scoreText);
@@ -594,6 +823,18 @@ class GameScene extends Scene {
 
         // ゲーム BGM へクロスフェード
         SoundManager.playBgm("bgm_game", { fadeIn: 600, volume: 0.5 });
+    }
+    _statusLine() {
+        var sec = Math.floor((this.playTime || 0) / 1000);
+        return "SCORE: " + this.score + "    TIME: " + sec + "s";
+    }
+    serialize() {
+        return {
+            score:    this.score,
+            playerX:  this.player ? this.player.x : this.initialState.playerX,
+            playerY:  this.player ? this.player.y : this.initialState.playerY,
+            playTime: this.playTime,
+        };
     }
     pause(topOpts) {
         // Pause シーンは hideBelow=false で push されるので Game の表示は残る
@@ -612,6 +853,7 @@ class GameScene extends Scene {
     }
     update(dt) {
         this.t += dt;
+        this.playTime += dt;
 
         // 背景線アニメ
         var g = this.bgLines;
@@ -634,16 +876,24 @@ class GameScene extends Scene {
         if (this.player.y > APP_H - 30) this.player.y = APP_H - 30;
 
         // fire でスコア +1
+        var scoreChanged = false;
         if (Input.isJustPressed("fire")) {
             this.score++;
-            this.scoreText.text = "SCORE: " + this.score;
+            scoreChanged = true;
             SoundManager.playSe("se_fire");
+        }
+
+        // playTime 表示は 1 秒刻みで更新
+        var lastSec = Math.floor((this.playTime - dt) / 1000);
+        var nowSec  = Math.floor(this.playTime / 1000);
+        if (scoreChanged || lastSec !== nowSec) {
+            this.scoreText.text = this._statusLine();
         }
 
         // menu で Pause を被せる
         if (Input.isJustPressed("menu")) {
             SoundManager.playSe("se_pause");
-            SceneManager.push(new PauseScene({ score: this.score }), null, { pauseBelow: true });
+            SceneManager.push(new PauseScene({ owner: this }), null, { pauseBelow: true });
         }
     }
 }
@@ -654,7 +904,8 @@ class GameScene extends Scene {
 class PauseScene extends Scene {
     constructor(args) {
         super();
-        this.scoreSnapshot = (args && typeof args.score === "number") ? args.score : 0;
+        // owner: GameScene 本体 (serialize() を呼ぶ)
+        this.owner = (args && args.owner) ? args.owner : null;
     }
     enter() {
         this.container = new PIXI.Container();
@@ -690,9 +941,17 @@ class PauseScene extends Scene {
         save.x = APP_W / 2 - 140; save.y = APP_H / 2;
         var self = this;
         save.onClick = function() {
-            writeSave({ score: self.scoreSnapshot, savedAt: Date.now() });
-            console.log("Demo11 saved: score=" + self.scoreSnapshot);
             SoundManager.playSe("se_confirm");
+            // SaveLoadScene を save モードで重ねる。owner から最新状態を吸い出して渡す
+            var payload = self.owner ? self.owner.serialize() : null;
+            if (!payload) {
+                console.warn("Demo11 Pause Save: owner not available");
+                return;
+            }
+            SceneManager.push(new SaveLoadScene({
+                mode: "save",
+                payload: payload,
+            }), null, { hideBelow: true, pauseBelow: true });
         };
         this.container.addChild(save);
 
@@ -816,12 +1075,13 @@ class BootScene extends Scene {
 globalThis.demo11 = {
     init: function() {
         if (typeof PIXI === "undefined" || !globalThis.SceneManager || !globalThis.Input
-            || !globalThis.SoundManager || !globalThis.Assets) {
-            console.error("Demo 11: framework が未ロード (scene_manager / input_action / sound_manager / assets_ext / pixi)");
+            || !globalThis.SoundManager || !globalThis.Assets || !globalThis.SaveData) {
+            console.error("Demo 11: framework が未ロード (scene_manager / input_action / sound_manager / assets_ext / save_data / pixi)");
             return;
         }
         if (!ensurePixi()) return;
         setupInput();
+        initSaveData();
         if (!SceneManager.top()) {
             SceneManager.push(new BootScene());
         }
