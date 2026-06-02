@@ -578,6 +578,19 @@ addEventListener("touchcancel", function(e) {
 //   "Gamepad:LeftStickX|Y|RightStickX|Y" (軸そのまま -1..1),
 //   "Gamepad:LeftStickUp|Down|Left|Right|RightStickUp|..." (半軸ボタン 0..1)
 //
+// キーバインド設定 UI (リバインドフロー) 用:
+//   var src = await Input.captureNext();                     // 次の 1 入力を待つ
+//   var src = await Input.captureNext({ timeoutMs: 5000 });  // timeout 付き
+//   var src = await Input.captureNext({ cancelOnEsc: false }); // Esc も普通の入力として扱う
+//   Input.captureCancel();                                   // 進行中の capture を null で解決
+//   // src 例: "KeyZ" / "Mouse:Left" / "Gamepad:A" / "Gamepad:LeftStickRight" / null (キャンセル/timeout)
+//   // 注: 開始時点で押されているキー/ボタンは「離して再プレス」しないと拾われない
+//
+//   var snap = Input.snapshotBindings();        // 現在のバインドの deep copy
+//   Input.restoreBindings(snap);                // snapshot から一括復元
+//   var json = Input.serialize();               // localStorage 保存用
+//   Input.deserialize(json);                    // 起動時に復元
+//
 // --- Assets (PIXI.Assets 拡張 + 音声プリローダ + AudioGroup) ---
 // フォント (.ttf .otf) は PIXI.Assets の LoadParser として登録され、
 // Canvas2D.loadFont を呼んで family/style を返す。

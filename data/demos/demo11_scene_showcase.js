@@ -56,6 +56,11 @@ function ensurePixi() {
 }
 
 // ---------- Input バインド初期化 ----------
+// KeybindScene が編集対象とするアクション一覧 (この順番で表示)
+var KEYBIND_ACTIONS = ["confirm", "cancel", "menu", "up", "down", "left", "right", "fire"];
+var KEYBIND_STORE   = "demo11_keybinds";
+var defaultBindings = null;   // setupInput() で 1 度だけスナップショット
+
 function setupInput() {
     Input.bind("confirm", ["Space", "Enter", "NumpadEnter", "Gamepad:A"]);
     Input.bind("cancel",  ["Escape", "Backspace", "Gamepad:B"]);
@@ -65,6 +70,27 @@ function setupInput() {
     Input.bind("left",    ["ArrowLeft", "KeyA", "Gamepad:DpadLeft", "Gamepad:LeftStickLeft"]);
     Input.bind("right",   ["ArrowRight", "KeyD", "Gamepad:DpadRight", "Gamepad:LeftStickRight"]);
     Input.bind("fire",    ["KeyX", "Gamepad:X"]);
+
+    // デフォルト snapshot (Reset to Defaults で使う)
+    if (!defaultBindings) defaultBindings = Input.snapshotBindings();
+
+    // ユーザー保存済みバインドがあれば復元
+    try {
+        var raw = localStorage.getItem(KEYBIND_STORE);
+        if (raw) {
+            var obj = JSON.parse(raw);
+            Input.deserialize(obj);
+        }
+    } catch (_) {}
+}
+
+function saveKeybinds() {
+    try { localStorage.setItem(KEYBIND_STORE, JSON.stringify(Input.serialize())); } catch (_) {}
+}
+
+function resetKeybindsToDefaults() {
+    if (defaultBindings) Input.restoreBindings(defaultBindings);
+    saveKeybinds();
 }
 
 // ---------- セーブデータ初期化 ----------
@@ -543,16 +569,26 @@ class SettingsScene extends Scene {
         testBtn.onClick = function() { SoundManager.playSe("se_confirm"); };
         this.container.addChild(testBtn);
 
+        // Keybindings ボタン
+        var kbBtn = new ButtonRow("Keybindings...",
+            { width: 280, height: 44, fontSize: 16 });
+        kbBtn.x = 80; kbBtn.y = 405;
+        kbBtn.onClick = function() {
+            SoundManager.playSe("se_confirm");
+            SceneManager.push(new KeybindScene(), null, { hideBelow: true, pauseBelow: true });
+        };
+        this.container.addChild(kbBtn);
+
         // Back ボタン
         var back = new ButtonRow("Back  (Esc)", { width: 200, height: 48, fontSize: 18 });
-        back.x = 80; back.y = 410;
+        back.x = 80; back.y = 470;
         back.onClick = function() {
             SoundManager.playSe("se_cancel");
             SceneManager.pop();
         };
         this.container.addChild(back);
 
-        this.rows = sliderRows.concat([testBtn, back]);
+        this.rows = sliderRows.concat([testBtn, kbBtn, back]);
         this.focusIndex = 0;
         this._refocus();
     }
@@ -596,6 +632,267 @@ class SettingsScene extends Scene {
         for (var i = 0; i < this.rows.length; i++) {
             this.rows[i].setFocused(i === this.focusIndex);
         }
+    }
+}
+
+// ============================================================
+// KeybindScene — Input action ごとのキー/パッド割当編集
+// ============================================================
+//
+// UI:
+//   行: アクション名 + 現在のバインド列 (comma-separated)
+//   Reset to Defaults / Back ボタン
+//
+// 操作:
+//   ↑↓:        行/ボタン移動
+//   Confirm:   アクション行ならリバインド (REPLACE: 旧バインドを全消去して 1 件登録)
+//              Reset/Back ボタンならクリック
+//   Backspace: フォーカス行のバインドに新規追加 (ADD)
+//   Delete:    フォーカス行の最後のバインドを削除
+//   Esc:       戻る
+//
+// キャプチャモード:
+//   "Press any input to BIND/ADD for [action]..." モーダルを表示し、
+//   Input.captureNext() で次の入力 (キー/マウス/パッド) を 1 回拾う。
+//   Esc でキャンセル。既に押されているキーは「離して再プレス」しないと捕まらない
+//   (rebind 入口の Enter を即座にキャプチャしてしまわないため)。
+//
+// 永続化:
+//   バインド変更時に localStorage の "demo11_keybinds" に JSON で保存。
+//   setupInput() の末尾でロードして起動時に反映。
+
+class KeybindRow extends PIXI.Container {
+    constructor(action) {
+        super();
+        this.w = 1080;
+        this.h = 54;
+        this.action = action;
+
+        this.frame = new PIXI.Graphics();
+        this.addChild(this.frame);
+
+        this.label = new PIXI.Text(action, {
+            fontFamily: "Arial", fontSize: 18, fill: 0xffffff, fontWeight: "bold",
+        });
+        this.label.x = 16; this.label.y = 8;
+        this.addChild(this.label);
+
+        this.bindText = new PIXI.Text(this._formatBindings(), {
+            fontFamily: "Arial", fontSize: 14, fill: 0xb0c0d0,
+        });
+        this.bindText.x = 16; this.bindText.y = 30;
+        this.addChild(this.bindText);
+
+        this._redraw();
+    }
+    refresh() { this.bindText.text = this._formatBindings(); }
+    setFocused(b) { this._focused = !!b; this._redraw(); }
+    _formatBindings() {
+        var arr = Input.bindings[this.action] || [];
+        return arr.length === 0 ? "<unbound>" : arr.join(", ");
+    }
+    _redraw() {
+        var g = this.frame;
+        g.clear();
+        if (this._focused) {
+            g.lineStyle(2, 0xffcc66, 1).beginFill(0x182030, 0.7).drawRoundedRect(0, 0, this.w, this.h, 8).endFill();
+        } else {
+            g.lineStyle(1, 0x303848, 1).beginFill(0x101820, 0.45).drawRoundedRect(0, 0, this.w, this.h, 8).endFill();
+        }
+    }
+}
+
+class KeybindScene extends Scene {
+    enter() {
+        this.container = new PIXI.Container();
+        sceneRoot.addChild(this.container);
+
+        var hdr = new PIXI.Text("KEYBINDINGS", {
+            fontFamily: "Arial", fontSize: 36, fill: 0xffffff, fontWeight: "bold",
+        });
+        hdr.x = 80; hdr.y = 30;
+        this.container.addChild(hdr);
+
+        var hint = new PIXI.Text(
+            "↑↓: row    Enter: rebind (REPLACE)    Backspace: ADD    Delete: remove last    Esc: back",
+            { fontFamily: "Arial", fontSize: 14, fill: 0x80909a });
+        hint.x = 80; hint.y = 80;
+        this.container.addChild(hint);
+
+        // アクション行を並べる
+        this.rows = [];
+        for (var i = 0; i < KEYBIND_ACTIONS.length; i++) {
+            var row = new KeybindRow(KEYBIND_ACTIONS[i]);
+            row.x = 80; row.y = 110 + i * 62;
+            this.container.addChild(row);
+            this.rows.push(row);
+        }
+
+        // Reset / Back ボタン
+        var btnY = 110 + KEYBIND_ACTIONS.length * 62 + 12;
+        var self = this;
+        this.resetBtn = new SimpleButton("Reset to Defaults", { width: 220, height: 44, fontSize: 16 });
+        this.resetBtn.x = 80; this.resetBtn.y = btnY;
+        this.resetBtn.onClick = function() {
+            resetKeybindsToDefaults();
+            SoundManager.playSe("se_confirm");
+            for (var k = 0; k < self.rows.length; k++) self.rows[k].refresh();
+        };
+        this.container.addChild(this.resetBtn);
+
+        this.backBtn = new SimpleButton("Back  (Esc)", { width: 180, height: 44, fontSize: 16 });
+        this.backBtn.x = 320; this.backBtn.y = btnY;
+        this.backBtn.onClick = function() {
+            SoundManager.playSe("se_cancel");
+            SceneManager.pop();
+        };
+        this.container.addChild(this.backBtn);
+
+        this.focusIndex = 0;
+        this._refocus();
+
+        // キャプチャ状態
+        this._mode = null;   // null | "replace" | "add"
+        this._buildOverlay();
+
+        // Backspace (ADD) / Delete (remove last) は Input action を経由しない
+        // (cancel = Backspace と衝突するため、scene 限定の raw keydown で拾う)
+        this._onKeyDown = function(e) {
+            if (self._mode) return;   // キャプチャ中は無視
+            if (self.focusIndex < 0 || self.focusIndex >= self.rows.length) return;
+            if (e.code === "Backspace") {
+                self._startCapture("add");
+            } else if (e.code === "Delete") {
+                self._removeLast();
+            }
+        };
+        addEventListener("keydown", this._onKeyDown);
+    }
+
+    exit() {
+        removeEventListener("keydown", this._onKeyDown);
+        if (this._mode) Input.captureCancel();
+        sceneRoot.removeChild(this.container);
+        this.container.destroy({ children: true });
+        this.container = null;
+    }
+
+    update(_dt) {
+        if (this._mode) return;  // キャプチャ中は他の入力を無視
+
+        if (Input.isJustPressed("up"))   this._moveFocus(-1);
+        if (Input.isJustPressed("down")) this._moveFocus(+1);
+        if (Input.isJustPressed("confirm")) {
+            var n = this.rows.length;
+            if (this.focusIndex < n) {
+                this._startCapture("replace");
+            } else if (this.focusIndex === n) {
+                this.resetBtn.onClick();
+            } else if (this.focusIndex === n + 1) {
+                this.backBtn.onClick();
+            }
+        }
+        if (Input.isJustPressed("cancel")) {
+            SoundManager.playSe("se_cancel");
+            SceneManager.pop();
+        }
+    }
+
+    _moveFocus(d) {
+        var n = this.rows.length + 2;   // rows + reset + back
+        this.focusIndex = (this.focusIndex + d + n) % n;
+        this._refocus();
+        SoundManager.playSe("se_select", { volume: 0.7 });
+    }
+
+    _refocus() {
+        for (var i = 0; i < this.rows.length; i++) {
+            this.rows[i].setFocused(i === this.focusIndex);
+        }
+        this.resetBtn.setFocused(this.focusIndex === this.rows.length);
+        this.backBtn.setFocused(this.focusIndex === this.rows.length + 1);
+    }
+
+    _startCapture(mode) {
+        if (this.focusIndex < 0 || this.focusIndex >= this.rows.length) return;
+        this._mode = mode;
+        var action = this.rows[this.focusIndex].action;
+        this._showOverlay(action, mode);
+        var self = this;
+        Input.captureNext().then(function(src) {
+            self._mode = null;
+            self._hideOverlay();
+            if (!src) {
+                SoundManager.playSe("se_cancel");
+                return;
+            }
+            if (mode === "replace") {
+                Input.bind(action, [src]);
+            } else {
+                var existing = (Input.bindings[action] || []).slice();
+                if (existing.indexOf(src) < 0) existing.push(src);
+                Input.bind(action, existing);
+            }
+            saveKeybinds();
+            SoundManager.playSe("se_confirm");
+            self.rows[self.focusIndex].refresh();
+        });
+    }
+
+    _removeLast() {
+        var action = this.rows[this.focusIndex].action;
+        var arr = (Input.bindings[action] || []).slice();
+        if (arr.length === 0) return;
+        arr.pop();
+        Input.bind(action, arr);
+        saveKeybinds();
+        SoundManager.playSe("se_cancel");
+        this.rows[this.focusIndex].refresh();
+    }
+
+    _buildOverlay() {
+        var ov = new PIXI.Container();
+        ov.visible = false;
+
+        var dim = new PIXI.Graphics();
+        dim.beginFill(0x000000, 0.7).drawRect(0, 0, APP_W, APP_H).endFill();
+        ov.addChild(dim);
+
+        var panel = new PIXI.Graphics();
+        panel.beginFill(0x182030, 1).lineStyle(2, 0xffcc66, 1)
+             .drawRoundedRect(APP_W / 2 - 340, APP_H / 2 - 80, 680, 160, 12).endFill();
+        ov.addChild(panel);
+
+        var msg = new PIXI.Text("", {
+            fontFamily: "Arial", fontSize: 22, fill: 0xffffff, align: "center",
+            wordWrap: true, wordWrapWidth: 640,
+        });
+        msg.anchor.set(0.5, 0.5);
+        msg.x = APP_W / 2; msg.y = APP_H / 2 - 10;
+        ov.addChild(msg);
+
+        var sub = new PIXI.Text("Esc to cancel", {
+            fontFamily: "Arial", fontSize: 14, fill: 0xb0c0d0,
+        });
+        sub.anchor.set(0.5, 0.5);
+        sub.x = APP_W / 2; sub.y = APP_H / 2 + 36;
+        ov.addChild(sub);
+
+        this.container.addChild(ov);
+        this._overlay = ov;
+        this._overlayMsg = msg;
+    }
+
+    _showOverlay(action, mode) {
+        var label = (mode === "replace")
+            ? 'Press any input to BIND for "' + action + '"\n(replaces existing)'
+            : 'Press any input to ADD a binding for "' + action + '"';
+        this._overlayMsg.text = label;
+        this._overlay.visible = true;
+    }
+
+    _hideOverlay() {
+        this._overlay.visible = false;
     }
 }
 
