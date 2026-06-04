@@ -249,7 +249,7 @@ function renderDemo1HUD() {
             "1..9, 0, -, =           : Direct select",
             "LB / RB                 : Prev / Next demo",
             "Pad Top-face            : Back to Demo 1",
-            "(Demo 3) [ / ] or DPad  : Page switch",
+            "(Demo 3) [ / ] or DPad L/R : Page switch",
             "",
             "--- System Info ---",
             "GL: " + (gl.getParameter(gl.RENDERER) || "?"),
@@ -1994,18 +1994,11 @@ function _padHandleEdge() {
     // 上面ボタン (W3C 3) = Demo 1 へ戻る
     if (_padPressed(3) && demoMode !== 1) _switchDemo(1);
 
-    // LB/RB
-    if (demoMode === 3) {
-        // Demo 3 中はページ切替
-        if (_padPressed(4)) _changeDemo3Page(-1);
-        if (_padPressed(5)) _changeDemo3Page(+1);
-    } else {
-        // それ以外はデモ循環
-        if (_padPressed(4)) _cycleDemo(-1);
-        if (_padPressed(5)) _cycleDemo(+1);
-    }
+    // LB/RB は常にデモ循環 (Demo 3 から抜けるためにも維持)
+    if (_padPressed(4)) _cycleDemo(-1);
+    if (_padPressed(5)) _cycleDemo(+1);
 
-    // DPad L/R: Demo 3 ページ (Demo 3 中のみ)
+    // DPad L/R: Demo 3 ページ切替 (Demo 3 中のみ)
     if (demoMode === 3) {
         if (_padPressed(14)) _changeDemo3Page(-1);
         if (_padPressed(15)) _changeDemo3Page(+1);
