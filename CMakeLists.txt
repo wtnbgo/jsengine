@@ -10,9 +10,30 @@ set(PROJECT_VERSION 1.00)
 
 option(SDL3_DYNAMIC "use dynamic SDL3" OFF)
 
+# ----------------------------------------------------
+# プラットフォーム差し替えフック
+#
+# 親プロジェクト (jsengine_nx 等) が SDL や main を自前で用意するための
+# キャッシュ変数群。スタンドアロンビルドでは全部 OFF / 空でよい。
+# ----------------------------------------------------
+option(JSENGINE_PLATFORM_OVERRIDE
+    "Skip default platform setup (FetchContent SDL, DLL copy, etc.) and let parent project drive it" OFF)
+option(JSENGINE_SDL_PROVIDED
+    "SDL3 / SDL3_image targets are provided by parent project (skip FetchContent)"
+    ${JSENGINE_PLATFORM_OVERRIDE})
+option(JSENGINE_SKIP_DEFAULT_MAIN
+    "Skip default src/main.cpp (replaced via JSENGINE_SRC_PLATFORM)"
+    ${JSENGINE_PLATFORM_OVERRIDE})
+set(JSENGINE_SRC_PLATFORM "" CACHE STRING
+    "Additional platform-specific sources injected by parent project")
+set(JSENGINE_DEFINES_PLATFORM "" CACHE STRING
+    "Additional platform-specific compile definitions")
+
 project(${PROJECT_NAME} VERSION ${PROJECT_VERSION})
 
 include(FetchContent)
+
+if(NOT JSENGINE_SDL_PROVIDED)
 
 # ----------------------------------------------------
 # SDL (shared)
@@ -59,6 +80,8 @@ set(SDLIMAGE_VENDORED OFF CACHE BOOL "Use vendored third-party libraries" FORCE)
 
 FetchContent_MakeAvailable(SDL3)
 FetchContent_MakeAvailable(SDL3_image)
+
+endif() # NOT JSENGINE_SDL_PROVIDED
 
 # ----------------------------------------------------
 # glad
@@ -157,6 +180,15 @@ if(OpusFile_FOUND)
 	list(APPEND SOURCES src/audio/ma_libopus.c)
 endif()
 
+# 親プロジェクトが main を差し替える場合は src/main.cpp を除外
+if(JSENGINE_SKIP_DEFAULT_MAIN)
+	list(REMOVE_ITEM SOURCES src/main.cpp)
+endif()
+# 親プロジェクト経由で追加された機種固有ソース
+if(JSENGINE_SRC_PLATFORM)
+	list(APPEND SOURCES ${JSENGINE_SRC_PLATFORM})
+endif()
+
 # ----------------------------------------------------
 # executable
 # ----------------------------------------------------
@@ -167,8 +199,14 @@ add_executable(${PROJECT_NAME}
 )
 
 target_include_directories(${PROJECT_NAME} PRIVATE
+	"${CMAKE_CURRENT_SOURCE_DIR}/src"
 	"${thorvg_SOURCE_DIR}/inc"
 )
+
+# 親プロジェクトから注入された機種固有 define
+if(JSENGINE_DEFINES_PLATFORM)
+	target_compile_definitions(${PROJECT_NAME} PRIVATE ${JSENGINE_DEFINES_PLATFORM})
+endif()
 
 # OS スレッドスタックサイズを増やす（GLTFLoader の再帰的ノード読み込みに必要）
 if(MSVC)
@@ -197,6 +235,9 @@ if(OpusFile_FOUND)
 endif()
 
 
+# SDL3 / SDL3_image を dynamic でビルドしたときに実行ファイル横にコピー。
+# 親プロジェクトが SDL を提供する場合 (静的 / プラットフォーム固有配置) は不要。
+if(NOT JSENGINE_PLATFORM_OVERRIDE)
 add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
 	COMMAND ${CMAKE_COMMAND} -E copy_if_different
 		$<TARGET_FILE:SDL3::SDL3>
@@ -206,5 +247,6 @@ add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
 		$<TARGET_FILE:SDL3_image::SDL3_image>
 		$<TARGET_FILE_DIR:${PROJECT_NAME}>
 )
+endif()
 
 
