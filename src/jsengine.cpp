@@ -1371,10 +1371,15 @@ static void fs_register(JSContext *ctx) {
     JS_SetPropertyStr(ctx, obj, "readBinary", JS_NewCFunction(ctx, fs_readBinary, "readBinary", 1));
     JS_SetPropertyStr(ctx, obj, "writeText", JS_NewCFunction(ctx, fs_writeText, "writeText", 2));
 
-    // fs.basePath を設定
+    // システム提供のパス群を fs に公開
+    //   basePath: データ参照のベース (絶対パス、末尾 / つき)
+    //   tempPath: テンポラリ領域 (絶対パス、末尾 / つき。未提供なら空文字)
+    //   prefPath: 設定/セーブデータ用 (SDL_GetPrefPath 相当、絶対パス、末尾 / つき)
     JsEngine *engine = JsEngine::getInstance();
     if (engine) {
         JS_SetPropertyStr(ctx, obj, "basePath", JS_NewString(ctx, engine->getBasePath().c_str()));
+        JS_SetPropertyStr(ctx, obj, "tempPath", JS_NewString(ctx, engine->getTempPath().c_str()));
+        JS_SetPropertyStr(ctx, obj, "prefPath", JS_NewString(ctx, engine->getPrefPath().c_str()));
     }
 
     JSValue global = JS_GetGlobalObject(ctx);
@@ -1388,12 +1393,20 @@ static void fs_register(JSContext *ctx) {
 // ============================================================
 
 static char* get_storage_path() {
-    char *pref = SDL_GetPrefPath("jsengine", "jsengine");
-    if (!pref) return nullptr;
-    size_t len = strlen(pref) + 32;
+    // JsEngine が prefPath を保持していればそれを使う (NX で save: マウントを
+    // 明示的に渡す経路)。未設定なら SDL_GetPrefPath にフォールバック。
+    JsEngine *engine = JsEngine::getInstance();
+    const std::string &pref = engine ? engine->getPrefPath() : std::string();
+    if (!pref.empty()) {
+        std::string path = pref + "localStorage.json";
+        return SDL_strdup(path.c_str());
+    }
+    char *p = SDL_GetPrefPath("jsengine", "jsengine");
+    if (!p) return nullptr;
+    size_t len = strlen(p) + 32;
     char *path = (char*)SDL_malloc(len);
-    snprintf(path, len, "%slocalStorage.json", pref);
-    SDL_free(pref);
+    snprintf(path, len, "%slocalStorage.json", p);
+    SDL_free(p);
     return path;
 }
 
@@ -1622,6 +1635,15 @@ JsEngine* JsEngine::instance_ = nullptr;
 
 JsEngine::JsEngine() : rt_(nullptr), ctx_(nullptr) {
     instance_ = this;
+
+    // prefPath を SDL のデフォルト (環境別の savedata dir) で初期化。
+    // NX では SDL3-switch が save: マウントを返す。プラットフォーム側で
+    // override したい場合は init 前に setPrefPath() を呼ぶ。
+    char *p = SDL_GetPrefPath("jsengine", "jsengine");
+    if (p) {
+        setPrefPath(p);
+        SDL_free(p);
+    }
 }
 
 JsEngine::~JsEngine() {
@@ -1629,22 +1651,32 @@ JsEngine::~JsEngine() {
     instance_ = nullptr;
 }
 
-void JsEngine::setBasePath(const char *path) {
-    basePath_ = path;
-    // 末尾に / がなければ追加
-    if (!basePath_.empty() && basePath_.back() != '/' && basePath_.back() != '\\') {
-        basePath_ += '/';
+static void _setPathField(std::string &dst, const char *path) {
+    if (!path) { dst.clear(); return; }
+    dst = path;
+    if (!dst.empty() && dst.back() != '/' && dst.back() != '\\') {
+        dst += '/';
     }
 }
 
+void JsEngine::setBasePath(const char *path) { _setPathField(basePath_, path); }
+void JsEngine::setTempPath(const char *path) { _setPathField(tempPath_, path); }
+void JsEngine::setPrefPath(const char *path) { _setPathField(prefPath_, path); }
+
 std::string JsEngine::resolvePath(const char *path) const {
     if (!path || path[0] == '\0') return basePath_;
-    // 絶対パスならそのまま返す
+    // POSIX / Windows 絶対パス
     if (path[0] == '/' || path[0] == '\\') return path;
-#ifdef _WIN32
-    // ドライブレター付き (C:\... 等)
-    if (path[1] == ':') return path;
-#endif
+    // scheme:/ や scheme:\ も絶対扱い:
+    //   Windows ドライブレター (C:\...)
+    //   NX マウント (rom:/, host:/, save:/, temp:/ 等)
+    for (const char *p = path; *p; ++p) {
+        if (*p == '/' || *p == '\\') break;
+        if (*p == ':') {
+            if (p[1] == '/' || p[1] == '\\') return path;
+            break;
+        }
+    }
     return basePath_ + path;
 }
 

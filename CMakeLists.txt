@@ -90,10 +90,14 @@ endif() # NOT JSENGINE_SDL_PROVIDED
 add_subdirectory(glad ${CMAKE_CURRENT_BINARY_DIR}/glad)
 
 # ----------------------------------------------------
-# QuickJS-ng (vcpkg)
+# QuickJS-ng (vcpkg, または親プロジェクトの FetchContent)
 # ----------------------------------------------------
 
-find_package(qjs CONFIG REQUIRED)
+# 親プロジェクトが quickjs-ng を構築済みの場合 (例: jsengine_nx の ext/quickjs-ng)
+# は find_package をスキップ。
+if(NOT TARGET qjs AND NOT TARGET qjs::qjs)
+	find_package(qjs CONFIG REQUIRED)
+endif()
 
 # ----------------------------------------------------
 # thorvg + (freetype vcpkg) + harfbuzz 
@@ -116,10 +120,17 @@ set(TVG_ENGINE_SW ON CACHE BOOL "Enable Software Rasterizer Engine" FORCE)
 set(TVG_ENGINE_GL ON CACHE BOOL "Enable OpenGL Rasterizer Engine" FORCE)
 
 # --- FreeType (vcpkg) ---
-find_package(Freetype CONFIG REQUIRED)
+# 親プロジェクトで既に find_package 済み / add_subdirectory 済みなら再実行しない
+if(NOT TARGET freetype AND NOT TARGET Freetype::Freetype)
+	find_package(Freetype CONFIG REQUIRED)
+endif()
 
-# --- HarfBuzz (vcpkg) ---
-find_package(harfbuzz CONFIG REQUIRED)
+# --- HarfBuzz (vcpkg, または親プロジェクトの FetchContent) ---
+# 親プロジェクトが harfbuzz を構築済みの場合 (例: jsengine_nx の ext/harfbuzz)
+# は find_package をスキップする。
+if(NOT TARGET harfbuzz AND NOT TARGET harfbuzz::harfbuzz)
+	find_package(harfbuzz CONFIG REQUIRED)
+endif()
 
 # --- ThorVG ---
 # 開発用: USE_LOCAL_THORVG=ON で ../thorvg のローカルチェックアウトを直接使う。

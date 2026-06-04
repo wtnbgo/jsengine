@@ -54,6 +54,14 @@ bool App::init(int argc, char *argv[])
     SDL_Log("Loaded GLES %d.%d.\n",
            GLAD_VERSION_MAJOR(gles_version), GLAD_VERSION_MINOR(gles_version));
 
+#ifdef JSENGINE_USE_THORVG_GL_INITPROC
+    // thorvg を TVG_GL_INITPROC=ON でビルドしている環境 (NX 等) では、
+    // GL 関数取得を SDL の GetProcAddress に委ねる必要がある。
+    // 内部 API なので forward 宣言して直接呼ぶ (静的リンク前提)。
+    extern void glInitProc(void* (*getProcAddress)(const char*));
+    glInitProc(reinterpret_cast<void* (*)(const char*)>(SDL_GL_GetProcAddress));
+#endif
+
 #ifndef NDEBUG
     // KHR_debug が使える場合は GL エラーの詳細メッセージを取得（Debug ビルドのみ）
     if (GLAD_GL_KHR_debug && glad_glDebugMessageCallbackKHR) {

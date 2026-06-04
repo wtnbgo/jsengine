@@ -10,11 +10,20 @@ public:
     JsEngine();
     ~JsEngine();
 
-    // ベースパスを設定（init 前に呼ぶ）
+    // ベースパスを設定（init 前に呼ぶ）。データ参照の起点。
     void setBasePath(const char *path);
     const std::string& getBasePath() const { return basePath_; }
 
-    // ベースパスからの相対パスをフルパスに解決
+    // テンポラリ領域のパス (環境別: 例 NX なら "temp:/")
+    void setTempPath(const char *path);
+    const std::string& getTempPath() const { return tempPath_; }
+
+    // 設定/セーブデータ用パス (SDL_GetPrefPath 相当, NX なら save: マウント)
+    void setPrefPath(const char *path);
+    const std::string& getPrefPath() const { return prefPath_; }
+
+    // ベースパスからの相対パスをフルパスに解決。
+    // 絶対パス (/, \, scheme:/, scheme:\) はそのまま返す。
     std::string resolvePath(const char *path) const;
 
     bool init(int argc = 0, char **argv = nullptr);
@@ -42,6 +51,8 @@ private:
     JSRuntime* rt_;
     JSContext* ctx_;
     std::string basePath_;
+    std::string tempPath_;
+    std::string prefPath_;
 
     static JsEngine* instance_;
     JSValue pushKeyboardEvent(const SDL_Event *event, const char *type);
