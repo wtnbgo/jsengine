@@ -239,28 +239,22 @@ function renderDemo1HUD() {
         var y = 55;
         var lines = [
             "--- Demo 1: Triangle ---",
-            "WASD / Arrow Keys : Move triangle",
-            "Mouse Drag        : Drag triangle",
-            "Wheel             : Change alpha",
-            "R                 : Reset position",
-            "Space             : Play beep",
+            "WASD / Arrows / L-Stick : Move triangle",
+            "Mouse Drag              : Drag triangle",
+            "Wheel / LT / RT         : Change alpha",
+            "R / Pad Left-face       : Reset position",
+            "Space / Pad Bottom-face : Play beep",
             "",
-            "--- Switch Demo ---",
-            "1 : Triangle (this)",
-            "2 : Canvas2D Shapes",
-            "3 : Canvas2D Text",
-            "4 : Canvas2D Animation",
-            "5 : pixi.js v7",
-            "6 : drawImage / ImageData",
-            "7 : Dirty Rect Update",
-            "8 : three.js r176",
-            "9 : three-vrm (VRM avatar)",
-            "0 : pixi.ui widgets",
-            "- : Scene Showcase (NEW)",
+            "--- Demo Switch ---",
+            "1..9, 0, -, =           : Direct select",
+            "LB / RB                 : Prev / Next demo",
+            "Pad Top-face            : Back to Demo 1",
+            "(Demo 3) [ / ] or DPad  : Page switch",
             "",
             "--- System Info ---",
             "GL: " + (gl.getParameter(gl.RENDERER) || "?"),
             "GLES: " + (gl.getParameter(gl.VERSION) || "?"),
+            "Pad: " + (padState.connected ? "connected" : "none"),
         ];
         for (var i = 0; i < lines.length; i++) {
             if (lines[i].indexOf("---") === 0) {
@@ -1806,55 +1800,83 @@ if (initialDemo > 0) {
 }
 
 // ============================================================
+// デモ切替ヘルパ (キーボード / パッドから共用)
+// ============================================================
+
+function _leaveFrameworkDemoIfNeeded(newMode) {
+    if (demoMode === 11 && newMode !== 11 && globalThis.demo11 && globalThis.demo11.onLeave) {
+        globalThis.demo11.onLeave();
+    }
+    if (demoMode === 12 && newMode !== 12 && globalThis.demo12 && globalThis.demo12.onLeave) {
+        globalThis.demo12.onLeave();
+    }
+}
+
+function _switchDemo(newMode) {
+    _leaveFrameworkDemoIfNeeded(newMode);
+    demoMode = newMode;
+    if (newMode === 5)  initDemo5();
+    if (newMode === 7)  demo7Inited = false;  // 背景再描画トリガ
+    if (newMode === 8)  initDemo8();
+    if (newMode === 9)  initDemo9();
+    if (newMode === 10) initDemo10();
+    if (newMode === 11) initDemo11();
+    if (newMode === 12) initDemo12();
+    hudDirty = true;  // Demo 1 HUD 再描画
+    console.log("Demo " + newMode);
+}
+
+function _cycleDemo(delta) {
+    var nm = demoMode + delta;
+    if (nm < 1) nm = 12;
+    if (nm > 12) nm = 1;
+    _switchDemo(nm);
+}
+
+function _playBeep() {
+    var beep = audioCtx.createBufferSource("beep.wav");
+    beep.volume = 0.5;
+    beep.start();
+}
+
+function _resetDemo1() {
+    offsetX = 0.0; offsetY = 0.0; alpha = 1.0;
+}
+
+function _changeDemo3Page(delta) {
+    if (delta > 0) demo3Page = demo3Page % demo3PageMax + 1;
+    else           demo3Page = (demo3Page - 2 + demo3PageMax) % demo3PageMax + 1;
+    console.log("Demo 3 page: " + demo3Page);
+}
+
+// ============================================================
 // イベント
 // ============================================================
 
 addEventListener("keydown", function(e) {
     keysDown[e.code] = true;
 
-    if (e.code === "Space" && !e.repeat) {
-        var beep = audioCtx.createBufferSource("beep.wav");
-        beep.volume = 0.5;
-        beep.start();
-    }
+    if (e.code === "Space" && !e.repeat) _playBeep();
 
-    // デモ切り替え (Demo 11/12 から離れる時はクリーンアップフックを呼ぶ)
-    function _leaveFrameworkDemoIfNeeded(newMode) {
-        if (demoMode === 11 && newMode !== 11 && globalThis.demo11 && globalThis.demo11.onLeave) {
-            globalThis.demo11.onLeave();
-        }
-        if (demoMode === 12 && newMode !== 12 && globalThis.demo12 && globalThis.demo12.onLeave) {
-            globalThis.demo12.onLeave();
-        }
-    }
-    var _leaveDemo11IfNeeded = _leaveFrameworkDemoIfNeeded;  // 旧名互換
-    if (e.key === "1") { _leaveFrameworkDemoIfNeeded(1);  demoMode = 1;  console.log("Demo 1: Triangle + Texture"); }
-    if (e.key === "2") { _leaveFrameworkDemoIfNeeded(2);  demoMode = 2;  console.log("Demo 2: Canvas2D Shapes"); }
-    if (e.key === "3") { _leaveFrameworkDemoIfNeeded(3);  demoMode = 3;  console.log("Demo 3: Canvas2D Text"); }
-    if (e.key === "4") { _leaveFrameworkDemoIfNeeded(4);  demoMode = 4;  console.log("Demo 4: Canvas2D Animation"); }
-    if (e.key === "5") { _leaveFrameworkDemoIfNeeded(5);  demoMode = 5;  initDemo5(); console.log("Demo 5: pixi.js"); }
-    if (e.key === "6") { _leaveFrameworkDemoIfNeeded(6);  demoMode = 6;  console.log("Demo 6: drawImage/ImageData"); }
-    if (e.key === "7") { _leaveFrameworkDemoIfNeeded(7);  demoMode = 7;  demo7Inited = false; console.log("Demo 7: Dirty Rect"); }
-    if (e.key === "8") { _leaveFrameworkDemoIfNeeded(8);  demoMode = 8;  initDemo8(); console.log("Demo 8: three.js"); }
-    if (e.key === "9") { _leaveFrameworkDemoIfNeeded(9);  demoMode = 9;  initDemo9(); console.log("Demo 9: three-vrm"); }
-    if (e.key === "0") { _leaveFrameworkDemoIfNeeded(10); demoMode = 10; initDemo10(); console.log("Demo 10: pixi.ui"); }
-    if (e.key === "-" || e.code === "Minus") { _leaveFrameworkDemoIfNeeded(11); demoMode = 11; initDemo11(); console.log("Demo 11: Scene Showcase"); }
-    if (e.key === "=" || e.code === "Equal")  { _leaveFrameworkDemoIfNeeded(12); demoMode = 12; initDemo12(); console.log("Demo 12: Fancy UI Showcase"); }
+    if (e.key === "1") _switchDemo(1);
+    if (e.key === "2") _switchDemo(2);
+    if (e.key === "3") _switchDemo(3);
+    if (e.key === "4") _switchDemo(4);
+    if (e.key === "5") _switchDemo(5);
+    if (e.key === "6") _switchDemo(6);
+    if (e.key === "7") _switchDemo(7);
+    if (e.key === "8") _switchDemo(8);
+    if (e.key === "9") _switchDemo(9);
+    if (e.key === "0") _switchDemo(10);
+    if (e.key === "-" || e.code === "Minus") _switchDemo(11);
+    if (e.key === "=" || e.code === "Equal") _switchDemo(12);
 
-    if (e.key === "r" || e.key === "R") {
-        offsetX = 0.0; offsetY = 0.0; alpha = 1.0;
-    }
+    if (e.key === "r" || e.key === "R") _resetDemo1();
 
     // Demo 3 ページ切替 ([ / ])
     if (demoMode === 3) {
-        if (e.key === "[") {
-            demo3Page = (demo3Page - 2 + demo3PageMax) % demo3PageMax + 1;
-            console.log("Demo 3 page: " + demo3Page);
-        }
-        if (e.key === "]") {
-            demo3Page = demo3Page % demo3PageMax + 1;
-            console.log("Demo 3 page: " + demo3Page);
-        }
+        if (e.key === "[") _changeDemo3Page(-1);
+        if (e.key === "]") _changeDemo3Page(+1);
     }
 });
 
@@ -1899,11 +1921,154 @@ addEventListener("wheel", function(e) {
 });
 
 // ============================================================
+// ゲームパッド入力 (Switch / Xbox / PS 共通)
+// ============================================================
+// 既存のキーボード/マウス入力はそのまま残し、パッド入力は同等の動作を起こす。
+// 物理ボタン位置は W3C 標準 (Gamepad API) に従う:
+//   buttons[0] = 下面ボタン (Xbox A / Nintendo B / PS ×)  → Space (beep)
+//   buttons[1] = 右面ボタン (Xbox B / Nintendo A / PS ○)  → デモ確定 (現状未使用)
+//   buttons[2] = 左面ボタン (Xbox X / Nintendo Y / PS □)  → R (reset)
+//   buttons[3] = 上面ボタン (Xbox Y / Nintendo X / PS △)  → Demo 1 へ戻る
+//   buttons[4] = L1/LB                                     → 前 Demo (Demo 3 中はページ前)
+//   buttons[5] = R1/RB                                     → 次 Demo (Demo 3 中はページ次)
+//   buttons[6] = L2/LT (analog)                            → alpha down / VRM zoom out
+//   buttons[7] = R2/RT (analog)                            → alpha up   / VRM zoom in
+//   buttons[12-15] = DPad U/D/L/R                          → Demo 1 移動 / Demo 3 ページ
+//   axes[0/1]  = 左スティック X/Y                          → Demo 1 移動 / 三角形ドラッグ
+//   axes[2/3]  = 右スティック X/Y                          → Demo 9 VRM カメラ
+
+var padState = {
+    prevButtons: [],
+    currButtons: [],
+    values: [],
+    pressedEdge: [],
+    axes: [0, 0, 0, 0],
+    connected: false,
+};
+
+function _padPoll() {
+    var pads = navigator.getGamepads();
+    var pad = null;
+    for (var i = 0; i < pads.length; i++) if (pads[i]) { pad = pads[i]; break; }
+    padState.prevButtons = padState.currButtons;
+    padState.currButtons = [];
+    padState.values = [];
+    padState.pressedEdge = [];
+    var wasConnected = padState.connected;
+    if (!pad) {
+        padState.axes = [0, 0, 0, 0];
+        padState.connected = false;
+        if (wasConnected) hudDirty = true;
+        return;
+    }
+    padState.connected = true;
+    if (!wasConnected) hudDirty = true;
+    for (var b = 0; b < pad.buttons.length; b++) {
+        var bt = pad.buttons[b];
+        var p = !!bt.pressed;
+        padState.currButtons[b] = p;
+        padState.values[b] = bt.value || (p ? 1 : 0);
+        if (p && !padState.prevButtons[b]) padState.pressedEdge[b] = true;
+    }
+    padState.axes = pad.axes;
+}
+
+function _padPressed(i) { return !!padState.pressedEdge[i]; }
+function _padHeld(i)    { return !!padState.currButtons[i]; }
+function _padValue(i)   { return padState.values[i] || 0; }
+function _padAxis(i) {
+    var v = padState.axes[i] || 0;
+    return (Math.abs(v) > 0.18) ? v : 0;   // デッドゾーン
+}
+
+// ボタンエッジ → アクション
+function _padHandleEdge() {
+    if (!padState.connected) return;
+
+    // 下面ボタン (W3C 0) = Space: beep
+    if (_padPressed(0)) _playBeep();
+
+    // 左面ボタン (W3C 2) = R: reset
+    if (_padPressed(2)) _resetDemo1();
+
+    // 上面ボタン (W3C 3) = Demo 1 へ戻る
+    if (_padPressed(3) && demoMode !== 1) _switchDemo(1);
+
+    // LB/RB
+    if (demoMode === 3) {
+        // Demo 3 中はページ切替
+        if (_padPressed(4)) _changeDemo3Page(-1);
+        if (_padPressed(5)) _changeDemo3Page(+1);
+    } else {
+        // それ以外はデモ循環
+        if (_padPressed(4)) _cycleDemo(-1);
+        if (_padPressed(5)) _cycleDemo(+1);
+    }
+
+    // DPad L/R: Demo 3 ページ (Demo 3 中のみ)
+    if (demoMode === 3) {
+        if (_padPressed(14)) _changeDemo3Page(-1);
+        if (_padPressed(15)) _changeDemo3Page(+1);
+    }
+}
+
+// 連続入力 (毎フレーム) → アナログ系 / 押下継続系
+function _padHandleAnalog() {
+    if (!padState.connected) return;
+
+    // LT (6) / RT (7) = alpha 調整 (Demo 9 では VRM zoom)
+    var trigDelta = _padValue(7) - _padValue(6);   // -1..+1
+    if (trigDelta !== 0) {
+        if (demoMode === 9) {
+            // RT で寄る (距離小)、LT で引く (距離大)
+            vrmCamDist -= trigDelta * 0.08;
+            if (vrmCamDist < 1.0) vrmCamDist = 1.0;
+            if (vrmCamDist > 10.0) vrmCamDist = 10.0;
+        } else {
+            alpha += trigDelta * 0.02;
+            if (alpha < 0.05) alpha = 0.05;
+            if (alpha > 1.0) alpha = 1.0;
+        }
+    }
+
+    // Demo 1: 左スティック / DPad で三角形移動
+    if (demoMode === 1) {
+        var lx = _padAxis(0);
+        var ly = _padAxis(1);
+        offsetX += lx * moveSpeed;
+        offsetY -= ly * moveSpeed;   // SDL Y は下が正
+        if (_padHeld(12)) offsetY += moveSpeed;   // DPad Up
+        if (_padHeld(13)) offsetY -= moveSpeed;   // DPad Down
+        if (_padHeld(14)) offsetX -= moveSpeed;   // DPad Left
+        if (_padHeld(15)) offsetX += moveSpeed;   // DPad Right
+        if (offsetX < -1) offsetX = -1; if (offsetX > 1) offsetX = 1;
+        if (offsetY < -1) offsetY = -1; if (offsetY > 1) offsetY = 1;
+    }
+
+    // Demo 9: 右スティックで VRM カメラ
+    if (demoMode === 9) {
+        var rx = _padAxis(2);
+        var ry = _padAxis(3);
+        if (rx !== 0) vrmCamAngle -= rx * 0.04;
+        if (ry !== 0) {
+            vrmCamPitch += ry * 0.04;
+            if (vrmCamPitch < -1.2) vrmCamPitch = -1.2;
+            if (vrmCamPitch > 1.2) vrmCamPitch = 1.2;
+        }
+    }
+}
+
+// ============================================================
 // 毎フレーム
 // ============================================================
 
 function update(dt) {
     time += dt;
+
+    // ゲームパッド毎フレーム処理 (デモ非依存のグローバル動作)
+    _padPoll();
+    _padHandleEdge();
+    _padHandleAnalog();
 
     if (demoMode === 1) {
         if (keysDown["KeyW"] || keysDown["ArrowUp"])    offsetY += moveSpeed;
