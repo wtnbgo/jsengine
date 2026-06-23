@@ -63,7 +63,9 @@ jsengine -quiet                # Warnings and errors only
 | ThorVG | FetchContent | 2D vector graphics (Canvas 2D API) |
 | FreeType / HarfBuzz | vcpkg | Multilingual text shaping (ThorVG FT loader) |
 | zlib / libpng | vcpkg | Shared between SDL3_image and FreeType to avoid vendored conflicts |
-| libvorbis / libopus | vcpkg (optional) | OGG Vorbis / Opus audio decoding |
+| libvorbis / libopus | vcpkg | OGG Vorbis / Opus audio decoding (also used by movie-player) |
+| libvpx | vcpkg | VP8 / VP9 video decoding (movie-player, optional via `JSENGINE_USE_MOVIE_PLAYER`) |
+| movie-player | FetchContent | WebM playback (wamsoft/movie-player) — VP8/VP9 + Vorbis/Opus via nestegg demux |
 
 ## Architecture
 

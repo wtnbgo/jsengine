@@ -25,6 +25,8 @@ savedata
 .claude/
 .venv/
 test/
+test2/
+data/title.webm
 node_modules/
 package.json
 package-lock.json

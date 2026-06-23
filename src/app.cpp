@@ -7,6 +7,9 @@
 #ifdef JSENGINE_USE_REPL
 #include "repl.h"
 #endif
+#ifdef JSENGINE_USE_MOVIE_PLAYER
+#include "video.h"
+#endif
 
 // 静的メンバ初期化
 App* App::instance_ = nullptr;
@@ -156,6 +159,13 @@ App::~App()
 #ifdef JSENGINE_USE_REPL
     // REPL ワーカーを止めてから JS エンジンを落とす (worker が JS 評価待ちなら起こす)。
     JsRepl::destroy();
+#endif
+
+#ifdef JSENGINE_USE_MOVIE_PLAYER
+    // 全 MoviePlayer に Stop() を投げる (decoder thread を停止して、 audio sink を
+    // 通じた SDL_AudioStream への書込が止まるようにする)。 JS の finalizer は
+    // jsEngine_.reset() の中で走るので、 ここでは delete はしない。
+    video_uninit();
 #endif
 
     // ★ オーディオシステムを先に止める。

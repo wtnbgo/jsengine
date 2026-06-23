@@ -262,26 +262,145 @@ HTMLCanvasElement.prototype.getAttribute = function(name) {
 window.HTMLCanvasElement = HTMLCanvasElement;
 
 // --- HTMLVideoElement / HTMLImageElement / HTMLAudioElement シム ---
-// 多くの WebFW (pixi/three/RPG Maker MV) が video/audio タグの API set を期待するので
-// 最小限の no-op 表面を生やしておく。 実音/実動画再生はネイティブ未対応。
+// 多くの WebFW (pixi/three/RPG Maker MV) が video/audio タグの API set を期待する。
+// ネイティブ MoviePlayer (WebM 再生) が利用可能ならそれをラップして本物として動かす。
+// 利用不可なら従来の no-op シム動作にフォールバック。
 if (typeof HTMLVideoElement === "undefined") {
     function HTMLVideoElement() {
         this.style = {};
-        this.volume = 1;
-        this.src = "";
+        this._src = "";
         this.id = "";
+        this._listeners = {};
+        this._player = null;       // ネイティブ MoviePlayer (生成は src setter)
+        this._pendingPlay = false;
+        // 標準プロパティ初期値 (player 未生成時に getter が触られた場合の戻り値)
+        this._loop = false;
+        this._volume = 1;
+        // 描画用キャッシュ。 pixi/three が video.videoWidth/Height や drawImage(video) を
+        // 触る前に、 ネイティブ MoviePlayer から情報を引いて _width/_height を埋める。
     }
-    HTMLVideoElement.prototype.play = function() { return Promise.resolve(); };
-    HTMLVideoElement.prototype.pause = function() {};
-    HTMLVideoElement.prototype.load = function() {};
-    HTMLVideoElement.prototype.canPlayType = function() { return ""; };
-    HTMLVideoElement.prototype.setAttribute = function() {};
-    HTMLVideoElement.prototype.getAttribute = function() { return null; };
-    HTMLVideoElement.prototype.addEventListener = function() {};
-    HTMLVideoElement.prototype.removeEventListener = function() {};
-    HTMLVideoElement.prototype.getBoundingClientRect = function() {
-        return {x:0, y:0, width:0, height:0, top:0, left:0, bottom:0, right:0};
+    var _hasNativeMoviePlayer = (typeof MoviePlayer !== "undefined");
+
+    HTMLVideoElement.prototype._dispatch = function(type) {
+        if (typeof this["on" + type] === "function") this["on" + type].call(this);
+        var cbs = this._listeners[type] || [];
+        for (var i = 0; i < cbs.length; i++) cbs[i].call(this);
     };
+    HTMLVideoElement.prototype.play = function() {
+        if (this._player) this._player.play(this._loop);
+        else this._pendingPlay = true;
+        var self = this;
+        setTimeout(function() { self._dispatch("play"); }, 0);
+        return Promise.resolve();
+    };
+    HTMLVideoElement.prototype.pause = function() {
+        if (this._player) this._player.pause();
+        this._pendingPlay = false;
+        var self = this;
+        setTimeout(function() { self._dispatch("pause"); }, 0);
+    };
+    HTMLVideoElement.prototype.load = function() {
+        // src setter が同期的に player を起こすので、 load() は no-op で OK。
+    };
+    HTMLVideoElement.prototype.canPlayType = function(type) {
+        if (!_hasNativeMoviePlayer) return "";
+        if (typeof type !== "string") return "";
+        var t = type.toLowerCase();
+        if (t.indexOf("webm") >= 0) return "probably";
+        if (t.indexOf("vp8") >= 0 || t.indexOf("vp9") >= 0) return "probably";
+        return "";
+    };
+    HTMLVideoElement.prototype.setAttribute = function(name, val) {
+        if (name === "src") this.src = val;
+        else this[name] = val;
+    };
+    HTMLVideoElement.prototype.getAttribute = function(name) {
+        return (name === "src") ? this._src : (this[name] !== undefined ? this[name] : null);
+    };
+    HTMLVideoElement.prototype.addEventListener = function(type, cb) {
+        if (!this._listeners[type]) this._listeners[type] = [];
+        this._listeners[type].push(cb);
+    };
+    HTMLVideoElement.prototype.removeEventListener = function(type, cb) {
+        if (this._listeners[type]) {
+            this._listeners[type] = this._listeners[type].filter(function(f) { return f !== cb; });
+        }
+    };
+    HTMLVideoElement.prototype.getBoundingClientRect = function() {
+        var w = this.videoWidth, h = this.videoHeight;
+        return {x:0, y:0, width:w, height:h, top:0, left:0, bottom:h, right:w};
+    };
+    // src 設定でネイティブ MoviePlayer を起動。 旧 src があれば破棄。
+    Object.defineProperty(HTMLVideoElement.prototype, "src", {
+        get: function() { return this._src; },
+        set: function(v) {
+            this._src = v || "";
+            if (this._player) {
+                try { this._player.stop(); } catch(e) {}
+                this._player = null;
+            }
+            if (!this._src || !_hasNativeMoviePlayer) return;
+            try {
+                this._player = new MoviePlayer(this._src, { loop: this._loop, volume: this._volume });
+                // メタデータが読めた相当の loadedmetadata/loadeddata を非同期発火
+                var self = this;
+                setTimeout(function() {
+                    self._dispatch("loadedmetadata");
+                    self._dispatch("loadeddata");
+                    if (self._pendingPlay) {
+                        self._pendingPlay = false;
+                        self._player.play(self._loop);
+                        self._dispatch("play");
+                    }
+                }, 0);
+            } catch(e) {
+                console.error("HTMLVideoElement: failed to open " + this._src + ": " + e);
+                var self = this;
+                setTimeout(function() { self._dispatch("error"); }, 0);
+            }
+        }
+    });
+    // 標準プロパティを player に直結 (player 未生成時は内部キャッシュへフォールバック)
+    Object.defineProperty(HTMLVideoElement.prototype, "videoWidth", {
+        get: function() { return this._player ? this._player.width : 0; }
+    });
+    Object.defineProperty(HTMLVideoElement.prototype, "videoHeight", {
+        get: function() { return this._player ? this._player.height : 0; }
+    });
+    Object.defineProperty(HTMLVideoElement.prototype, "width", {
+        get: function() { return this._player ? this._player.width : 0; },
+        set: function(v) { /* CSS サイズ。 ネイティブ側には影響しない (no-op) */ }
+    });
+    Object.defineProperty(HTMLVideoElement.prototype, "height", {
+        get: function() { return this._player ? this._player.height : 0; },
+        set: function(v) { /* same */ }
+    });
+    Object.defineProperty(HTMLVideoElement.prototype, "duration", {
+        get: function() { return this._player ? this._player.duration : 0; }
+    });
+    Object.defineProperty(HTMLVideoElement.prototype, "currentTime", {
+        get: function() { return this._player ? this._player.currentTime : 0; },
+        set: function(t) { if (this._player) this._player.currentTime = t; }
+    });
+    Object.defineProperty(HTMLVideoElement.prototype, "paused", {
+        get: function() { return this._player ? this._player.paused : true; }
+    });
+    Object.defineProperty(HTMLVideoElement.prototype, "ended", {
+        get: function() { return this._player ? this._player.ended : false; }
+    });
+    Object.defineProperty(HTMLVideoElement.prototype, "loop", {
+        get: function() { return this._loop; },
+        set: function(v) { this._loop = !!v; if (this._player) this._player.loop = !!v; }
+    });
+    Object.defineProperty(HTMLVideoElement.prototype, "volume", {
+        get: function() { return this._volume; },
+        set: function(v) { this._volume = v; if (this._player) this._player.volume = v; }
+    });
+    // gl.texImage2D(..., videoElement) 経路で webgl.cpp の qjs_get_pixels が data を読む。
+    // ネイティブ MoviePlayer が最新フレームの RGBA を ArrayBuffer で返す。
+    Object.defineProperty(HTMLVideoElement.prototype, "data", {
+        get: function() { return this._player ? this._player.data : null; }
+    });
     window.HTMLVideoElement = HTMLVideoElement;
 }
 if (typeof HTMLImageElement === "undefined") {

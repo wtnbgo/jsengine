@@ -6,6 +6,8 @@
     "libvorbis",
     "libogg",
     "opusfile",
+    "opus",
+    "libvpx",
     "zlib",
     "libpng",
     {

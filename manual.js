@@ -899,3 +899,60 @@ addEventListener("touchcancel", function(e) {
 //   jsengine -repl                 // 対話 REPL
 //   jsengine -replfile C:/tmp/ch   // AI 用 file channel
 //   jsengine -repl -replfile C:/tmp/ch  // 両方
+
+// ************************************************************
+// 動画再生 (WebM / VP8 / VP9 / Vorbis / Opus)
+// ************************************************************
+//
+// CMake オプション `JSENGINE_USE_MOVIE_PLAYER` (default ON) で有効化。
+// wamsoft/movie-player + libvpx + libvorbis + libopus を内部で使用。
+// 音声は内部の SDLAudioSink が SDL_AudioStream へ直接流す。
+
+// --- グローバル MoviePlayer クラス (jsengine 拡張) ---
+var mp = new MoviePlayer("path/to/video.webm");                  // 既定: loop=false, volume=1
+var mp = new MoviePlayer("video.webm", { loop: true, volume: 0.5 });
+
+mp.play();          // 引数 true で loop ON にして再生 (= mp.play(true))
+mp.pause();         // 一時停止 (※ state 反映は非同期: 同フレーム内に mp.paused を読んでも
+                    //   まだ false のことがある。 1 フレーム待ってから判定するのが安全)
+mp.resume();        // pause からの再開
+mp.stop();          // 停止 (Seek(0) ではなく STOP 状態へ)
+mp.seek(12.5);      // 秒指定の seek (前のキーフレームに snap される ※ Cue 間隔次第)
+
+mp.width;           // 動画ピクセル幅 (videoWidth と同値)
+mp.height;          // 動画ピクセル高さ (videoHeight と同値)
+mp.videoWidth;      // HTMLVideoElement 互換 alias
+mp.videoHeight;
+mp.duration;        // 秒 (Number)
+mp.currentTime;     // 現在再生位置 (秒、 setter で seek)
+mp.paused;          // bool
+mp.ended;           // bool (再生完了状態)
+mp.loop;            // bool getter/setter
+mp.volume;          // 0..1 getter/setter
+
+// 最新フレームの RGBA を ArrayBuffer で取得。 texImage2D に渡せる。
+var rgba = mp.data;   // ArrayBuffer (length = width*height*4) or null
+gl.bindTexture(gl.TEXTURE_2D, tex);
+gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, mp.width, mp.height, 0, gl.RGBA, gl.UNSIGNED_BYTE, mp);
+// ↑ `mp` を直接渡す (qjs_get_pixels が mp.data を読む)。 width/height は明示指定。
+// 二回目以降は同じテクスチャに texSubImage2D で更新する方が効率的:
+gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, mp.width, mp.height, gl.RGBA, gl.UNSIGNED_BYTE, mp);
+
+// --- ブラウザ互換 HTMLVideoElement (sim) ---
+// 内部で MoviePlayer を生成して透過的にラップ。 既存ブラウザコード (pixi の video texture
+// 等) がそのまま動く。
+var video = document.createElement("video");
+video.src = "path/to/video.webm";   // ← この時点で内部 MoviePlayer 生成
+video.loop = true;
+video.volume = 0.7;
+video.play();                        // Promise を返す (resolved)
+video.addEventListener("loadedmetadata", function(){ console.log("got", video.videoWidth); });
+video.addEventListener("ended", function(){ console.log("done"); });
+gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, video);
+// MoviePlayer 未ビルド時 (JSENGINE_USE_MOVIE_PLAYER=OFF) は HTMLVideoElement は no-op シム
+// として動き、 src 設定しても再生されない。 canPlayType() が "" を返すので feature 検出可。
+
+// --- 使用例 (Demo 13) ---
+// data/main.js の Demo 13 が実例:
+//   - \\ (Backslash) で Demo 13 起動: data/title.webm を全画面クワッドに texImage2D で表示
+//   - Shift + \\ で native (new MoviePlayer) と sim (HTMLVideoElement.src) を切替

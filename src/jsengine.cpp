@@ -4,6 +4,9 @@
 #include "webaudio.h"
 #include "webgamepad.h"
 #include "canvas2d.h"
+#ifdef JSENGINE_USE_MOVIE_PLAYER
+#include "video.h"
+#endif
 #include "glad/gles2.h"
 #include <quickjs.h>
 #include <SDL3/SDL.h>
@@ -1934,6 +1937,11 @@ bool JsEngine::init(int argc, char **argv) {
 
     // Canvas 2D API バインディング登録
     canvas2d_bind(ctx_);
+
+#ifdef JSENGINE_USE_MOVIE_PLAYER
+    // WebM 動画再生 (MoviePlayer クラス) バインディング登録
+    video_bind(ctx_);
+#endif
 
     SDL_Log("JsEngine initialized (QuickJS)");
     return true;

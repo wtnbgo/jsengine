@@ -15,6 +15,12 @@ option(SDL3_DYNAMIC "use dynamic SDL3" OFF)
 # stdin を持たない / バイナリを小さくしたい場合は OFF にする。
 option(JSENGINE_USE_REPL "Enable interactive console REPL and file-channel REPL" ON)
 
+# WebM 動画再生 (wamsoft/movie-player + libvpx/libvorbis/libopus)。 OFF にすると
+# 関連 JS API (MoviePlayer / HTMLVideoElement の native パス) が無効化される
+# (HTMLVideoElement は sysinit の no-op シムにフォールバック)。 libvpx を含む
+# vcpkg 依存が増えるので、 不要なターゲットは OFF を選ぶ。
+option(JSENGINE_USE_MOVIE_PLAYER "Enable WebM video playback via movie-player module" ON)
+
 # ----------------------------------------------------
 # プラットフォーム差し替えフック
 #
@@ -163,6 +169,27 @@ endif()
 
 
 # ----------------------------------------------------
+# movie-player (wamsoft/movie-player) — WebM 動画デコード
+#
+# 非 Windows / 非 Android では nestegg + libvpx + libvorbis + libopus で動く。
+# Android 経路は AMediaCodec ベース (今は jsengine では非対応)。
+# 静的ライブラリとしてリンクし、 IMoviePlayer / IAudioSink の 2 ヘッダだけ使う。
+# IAudioSink 実装は src/video.cpp 側で SDL_AudioStream ベースで自前実装。
+# ----------------------------------------------------
+if(JSENGINE_USE_MOVIE_PLAYER)
+	set(MOVIE_PLAYER_BUILD_TEST OFF CACHE BOOL "movie-player test (no, we drive it ourselves)" FORCE)
+	# movie-player CMake は BUILD_TEST という変数名なので念のため両方押さえる
+	set(BUILD_TEST OFF CACHE BOOL "movie-player test off" FORCE)
+	FetchContent_Declare(
+		movie_player
+		EXCLUDE_FROM_ALL
+		GIT_REPOSITORY https://github.com/wamsoft/movie-player.git
+		GIT_TAG main
+	)
+	FetchContent_MakeAvailable(movie_player)
+endif()
+
+# ----------------------------------------------------
 # other libraries
 # ----------------------------------------------------
 
@@ -191,6 +218,10 @@ set(SOURCES
 
 if(JSENGINE_USE_REPL)
 	list(APPEND SOURCES src/repl.cpp)
+endif()
+
+if(JSENGINE_USE_MOVIE_PLAYER)
+	list(APPEND SOURCES src/video.cpp)
 endif()
 
 # ----------------------------------------------------
@@ -258,6 +289,11 @@ endif()
 
 if(JSENGINE_USE_REPL)
 	target_compile_definitions(${PROJECT_NAME} PRIVATE JSENGINE_USE_REPL)
+endif()
+
+if(JSENGINE_USE_MOVIE_PLAYER)
+	target_compile_definitions(${PROJECT_NAME} PRIVATE JSENGINE_USE_MOVIE_PLAYER)
+	target_link_libraries(${PROJECT_NAME} PRIVATE movieplayer)
 endif()
 
 # OS スレッドスタックサイズを増やす（GLTFLoader の再帰的ノード読み込みに必要）

@@ -1144,6 +1144,93 @@ function updateDemo12(dt) { if (globalThis.demo12) globalThis.demo12.update(dt);
 function renderDemo12()   { if (globalThis.demo12) globalThis.demo12.render(); }
 
 // ============================================================
+// デモ13: WebM 動画再生 (MoviePlayer + WebGL テクスチャ)
+//
+// data/title.webm を MoviePlayer で開き、 毎フレーム video.data (ArrayBuffer)
+// を texImage2D で GL テクスチャに上げて、 全画面クワッドで描画する。
+// HTMLVideoElement 経由でも同じ挙動になることを次の demo13Sim() でも検証。
+// ============================================================
+var demo13Player = null;
+var demo13Tex    = null;
+var demo13LastW  = 0, demo13LastH = 0;
+var demo13Mode   = "native";   // "native" = new MoviePlayer / "sim" = HTMLVideoElement 経由
+
+function initDemo13() {
+    if (typeof MoviePlayer === "undefined") {
+        console.error("Demo 13: MoviePlayer not available (build without JSENGINE_USE_MOVIE_PLAYER?)");
+        return;
+    }
+    if (demo13Player) return;
+    try {
+        if (demo13Mode === "sim") {
+            // ブラウザ互換シム経由 (HTMLVideoElement)
+            demo13Player = document.createElement("video");
+            demo13Player.src = "title.webm";
+            demo13Player.loop = true;
+            demo13Player.volume = 1.0;
+            demo13Player.play();
+        } else {
+            demo13Player = new MoviePlayer("title.webm", { loop: true, volume: 1.0 });
+            demo13Player.play(true);
+        }
+    } catch(e) {
+        console.error("Demo 13: failed to open title.webm: " + e);
+        demo13Player = null;
+        return;
+    }
+    if (!demo13Tex) {
+        demo13Tex = gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_2D, demo13Tex);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    }
+    console.log("Demo 13 init: source=" + demo13Mode + " title.webm");
+}
+
+function renderDemo13() {
+    if (!demo13Player) return;
+    var p = demo13Player;
+    // HTMLVideoElement (sim) は videoWidth/Height、 MoviePlayer は width/height
+    var vw = (p.videoWidth || p.width) | 0;
+    var vh = (p.videoHeight || p.height) | 0;
+    if (vw <= 0 || vh <= 0) return;
+
+    var data = p.data;
+    if (!data) return;
+
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, demo13Tex);
+    if (vw !== demo13LastW || vh !== demo13LastH) {
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, vw, vh, 0, gl.RGBA, gl.UNSIGNED_BYTE, data);
+        demo13LastW = vw; demo13LastH = vh;
+    } else {
+        gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, vw, vh, gl.RGBA, gl.UNSIGNED_BYTE, data);
+    }
+
+    // アスペクト保持でレターボックス
+    var sw = screenW, sh = screenH;
+    var ar = vw / vh, sar = sw / sh;
+    var nx, ny;
+    if (ar > sar) { nx = 1.0; ny = sar / ar; }
+    else          { nx = ar / sar; ny = 1.0; }
+
+    var verts = new Float32Array([
+        -nx,  ny, 0, 0,
+         nx,  ny, 1, 0,
+         nx, -ny, 1, 1,
+        -nx, -ny, 0, 1,
+    ]);
+
+    gl.useProgram(texProgram);
+    gl.bindVertexArray(texVao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, texVbo);
+    gl.bufferSubData(gl.ARRAY_BUFFER, 0, verts);
+    gl.drawElements(gl.TRIANGLES, 6, gl.UNSIGNED_SHORT, 0);
+}
+
+// ============================================================
 // デモ6: Canvas2D drawImage / getImageData / putImageData テスト
 // ============================================================
 
@@ -1772,7 +1859,7 @@ console.log("Launch count: " + launchCount);
 // Audio
 var audioCtx = new AudioContext();
 
-console.log("Demo ready. Press 1-8 to switch demos, Space for beep, R to reset");
+console.log("Demo ready. Press 1-8/9/0/-/=/\\ to switch demos (\\=13 WebM video, Shift+\\ toggles sim mode), Space for beep, R to reset");
 
 // 正規表現テスト（-demo 8 で自動実行、THREE ロード後）
 
@@ -1811,14 +1898,15 @@ function _switchDemo(newMode) {
     if (newMode === 10) initDemo10();
     if (newMode === 11) initDemo11();
     if (newMode === 12) initDemo12();
+    if (newMode === 13) initDemo13();
     hudDirty = true;  // Demo 1 HUD 再描画
     console.log("Demo " + newMode);
 }
 
 function _cycleDemo(delta) {
     var nm = demoMode + delta;
-    if (nm < 1) nm = 12;
-    if (nm > 12) nm = 1;
+    if (nm < 1) nm = 13;
+    if (nm > 13) nm = 1;
     _switchDemo(nm);
 }
 
@@ -1859,6 +1947,22 @@ addEventListener("keydown", function(e) {
     if (e.key === "0") _switchDemo(10);
     if (e.key === "-" || e.code === "Minus") _switchDemo(11);
     if (e.key === "=" || e.code === "Equal") _switchDemo(12);
+    // Demo 13: WebM video playback. \ (Backslash) で起動。
+    // Shift+\ (= "|") で sim 経路 (HTMLVideoElement 経由) に切替えてから再起動。
+    if (e.key === "\\" || e.code === "Backslash") {
+        if (e.shiftKey) {
+            demo13Mode = (demo13Mode === "sim") ? "native" : "sim";
+            // 再初期化 (旧 player を捨てる)。 MoviePlayer は .stop()、 HTMLVideoElement は .pause()。
+            if (demo13Player) {
+                try {
+                    if (typeof demo13Player.stop === "function") demo13Player.stop();
+                    else if (typeof demo13Player.pause === "function") demo13Player.pause();
+                } catch(_) {}
+                demo13Player = null;
+            }
+        }
+        _switchDemo(13);
+    }
 
     if (e.key === "r" || e.key === "R") _resetDemo1();
 
@@ -2099,6 +2203,8 @@ function render() {
         renderDemo11();
     } else if (demoMode === 12) {
         renderDemo12();
+    } else if (demoMode === 13) {
+        renderDemo13();
     }
 }
 
