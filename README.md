@@ -37,11 +37,15 @@ cmake --preset x64-windows -DUSE_LOCAL_THORVG=ON
 ### Launch Options
 
 ```bash
-jsengine                    # Load main.js from data/ folder
-jsengine -data path/to/dir  # Load main.js from specified folder
-jsengine -debug             # Enable debug logging
-jsengine -quiet             # Warnings and errors only
+jsengine                       # Load main.js from data/ folder
+jsengine -data path/to/dir     # Load main.js from specified folder
+jsengine -sysinit path/to/file # Override built-in sysinit.js with an external file (dev convenience)
+jsengine -rpgmv path/to/proj   # Boot a RPG Maker MV project directly using the built-in rpgmv_main.js
+jsengine -debug                # Enable debug logging
+jsengine -quiet                # Warnings and errors only
 ```
+
+`-rpgmv` boots the built-in RPG Maker MV bootstrap (`src/rpgmv_main.js`) instead of `main.js`, with the supplied folder used as the data path. Use it to run any standard MV project (containing `data/System.json`, `js/`, `audio/`, `img/`, etc.) without copying a custom `main.js` into the project folder. Per-game save data is isolated under `%APPDATA%/jsengine_rpgmv/<gameTitle>/` (via `localStorage.setPath`).
 
 ## Dependencies
 
@@ -68,7 +72,8 @@ jsengine -quiet             # Warnings and errors only
 - `src/webaudio.h / webaudio.cpp` — Web Audio API bindings.
 - `src/canvas2d.h / canvas2d.cpp` — Canvas 2D API bindings (ThorVG-based).
 - `src/audio/` — AudioEngine / AudioStream (miniaudio + SDL3 audio).
-- `src/sysinit.js` — Built-in browser shim (window / document / HTMLCanvasElement / HTMLVideoElement / HTMLAudioElement / Image / XMLHttpRequest / fetch / document.fonts etc.). Embedded into the binary via CMake (`cmake/embed_sysinit.cmake`) and auto-evaluated before `main.js`. Override at runtime with `-sysinit <path>` (skip rebuild while iterating on the shim).
+- `src/sysinit.js` — Built-in browser shim (window / document / HTMLCanvasElement / HTMLVideoElement / HTMLAudioElement / Image / XMLHttpRequest / fetch / document.fonts etc.). Embedded into the binary via CMake (`cmake/embed_js.cmake`) and auto-evaluated before `main.js`. Override at runtime with `-sysinit <path>` (skip rebuild while iterating on the shim).
+- `src/rpgmv_main.js` — Built-in RPG Maker MV bootstrap (pixi.js v4 loader, `rpg_core/managers/objects/scenes/sprites/windows/system` loader, `Canvas2D.loadFont` for GameFont, `localStorage.setPath` for per-game save isolation, `SceneManager` startup). Embedded via the same `cmake/embed_js.cmake` and evaluated when `-rpgmv <project>` is given.
 
 ### JavaScript Lifecycle
 

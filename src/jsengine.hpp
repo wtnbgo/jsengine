@@ -44,6 +44,10 @@ public:
     // 全 binding (gl/Canvas2D/AudioContext/fs 等) 登録後、 main.js ロード前に呼ぶこと。
     bool loadSysinit(const char *overridePath);
 
+    // 内蔵 rpgmv_main.js (CMake で C++ に埋め込まれた RPG Maker MV ブートストラップ) を ES Module
+    // として評価。 main.js (= loadFile("main.js")) の代わりに -rpgmv <project-path> 指定時に呼ぶ。
+    bool loadRpgmvMain();
+
     JSContext* getContext() const { return ctx_; }
 
     // 任意の type と event オブジェクトを addEventListener で登録されたリスナへ配信。

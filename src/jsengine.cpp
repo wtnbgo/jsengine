@@ -1847,9 +1847,11 @@ bool JsEngine::init(int argc, char **argv) {
     return true;
 }
 
-// CMake が src/sysinit.js をバイト配列として埋め込む (cmake/embed_sysinit.cmake 経由)
+// CMake が src/sysinit.js と src/rpgmv_main.js をバイト配列として埋め込む (cmake/embed_js.cmake 経由)
 extern const unsigned char g_sysinit_js[];
 extern const unsigned int  g_sysinit_js_len;
+extern const unsigned char g_rpgmv_main_js[];
+extern const unsigned int  g_rpgmv_main_js_len;
 
 bool JsEngine::loadSysinit(const char *overridePath) {
     if (!ctx_) return false;
@@ -1884,6 +1886,44 @@ bool JsEngine::loadSysinit(const char *overridePath) {
         return false;
     }
     JS_FreeValue(ctx_, result);
+    return true;
+}
+
+// 内蔵 rpgmv_main.js (CMake で埋め込まれた RPG MV ブートストラップ) を ES Module として
+// 評価する。 main.js (= loadFile) と同等の TLA 待機ロジックを使う。
+bool JsEngine::loadRpgmvMain() {
+    if (!ctx_) return false;
+
+    const char *source = reinterpret_cast<const char*>(g_rpgmv_main_js);
+    size_t size = g_rpgmv_main_js_len;
+    const char *label = "<builtin:rpgmv_main.js>";
+
+    JSValue result = JS_Eval(ctx_, source, size, label, JS_EVAL_TYPE_MODULE);
+    if (JS_IsException(result)) {
+        log_exception(ctx_, label);
+        return false;
+    }
+    if (JS_IsPromise(result)) {
+        JSRuntime *rt = JS_GetRuntime(ctx_);
+        int max_iter = 10000000;
+        while (max_iter-- > 0) {
+            JSPromiseStateEnum state = JS_PromiseState(ctx_, result);
+            if (state == JS_PROMISE_FULFILLED) break;
+            if (state == JS_PROMISE_REJECTED) {
+                JSValue reason = JS_PromiseResult(ctx_, result);
+                log_exception(ctx_, "rpgmv_main evaluation rejected");
+                JS_FreeValue(ctx_, reason);
+                JS_FreeValue(ctx_, result);
+                return false;
+            }
+            JSContext *ctx2;
+            int ret = JS_ExecutePendingJob(rt, &ctx2);
+            if (ret < 0) { log_exception(ctx2 ? ctx2 : ctx_, "Pending job error"); break; }
+            if (ret == 0) break;
+        }
+    }
+    JS_FreeValue(ctx_, result);
+    SDL_Log("Loaded built-in rpgmv_main.js");
     return true;
 }
 

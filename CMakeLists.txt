@@ -185,22 +185,32 @@ set(SOURCES
 )
 
 # ----------------------------------------------------
-# 内蔵初期化スクリプト (sysinit.js → builtin_sysinit.cpp)
-# main.js のロード前に自動評価される。 開発時は -sysinit <path> で
-# 外部ファイルに差し替え可能 (ビルドし直しを避けるため)。
+# 内蔵 JS スクリプトの埋め込み (cmake/embed_js.cmake 経由)
+#  - sysinit.js: ブラウザシム。 main.js のロード前に自動評価される。
+#                開発時は -sysinit <path> で外部ファイルに差し替え可能。
+#  - rpgmv_main.js: RPG Maker MV プロジェクト起動用ブートストラップ。
+#                   -rpgmv <project-path> 指定時に通常の main.js の代わりに走る。
 # ----------------------------------------------------
-set(SYSINIT_JS_SRC ${CMAKE_CURRENT_SOURCE_DIR}/src/sysinit.js)
+function(jsengine_embed_js JS_SRC CPP_OUT SYMBOL)
+	add_custom_command(
+		OUTPUT ${CPP_OUT}
+		COMMAND ${CMAKE_COMMAND}
+			-DINPUT=${JS_SRC}
+			-DOUTPUT=${CPP_OUT}
+			-DSYMBOL=${SYMBOL}
+			-P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed_js.cmake
+		DEPENDS ${JS_SRC} ${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed_js.cmake
+		COMMENT "Embedding ${JS_SRC}"
+	)
+endfunction()
+
 set(SYSINIT_CPP_OUT ${CMAKE_CURRENT_BINARY_DIR}/builtin_sysinit.cpp)
-add_custom_command(
-	OUTPUT ${SYSINIT_CPP_OUT}
-	COMMAND ${CMAKE_COMMAND}
-		-DINPUT=${SYSINIT_JS_SRC}
-		-DOUTPUT=${SYSINIT_CPP_OUT}
-		-P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed_sysinit.cmake
-	DEPENDS ${SYSINIT_JS_SRC} ${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed_sysinit.cmake
-	COMMENT "Embedding sysinit.js"
-)
+jsengine_embed_js(${CMAKE_CURRENT_SOURCE_DIR}/src/sysinit.js ${SYSINIT_CPP_OUT} g_sysinit_js)
 list(APPEND SOURCES ${SYSINIT_CPP_OUT})
+
+set(RPGMV_MAIN_CPP_OUT ${CMAKE_CURRENT_BINARY_DIR}/builtin_rpgmv_main.cpp)
+jsengine_embed_js(${CMAKE_CURRENT_SOURCE_DIR}/src/rpgmv_main.js ${RPGMV_MAIN_CPP_OUT} g_rpgmv_main_js)
+list(APPEND SOURCES ${RPGMV_MAIN_CPP_OUT})
 
 if(Vorbis_FOUND)
 	list(APPEND SOURCES src/audio/ma_libvorbis.c)

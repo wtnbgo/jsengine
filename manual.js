@@ -830,3 +830,26 @@ addEventListener("touchcancel", function(e) {
 // 使用方法:
 //   loadScript("lib/pixi.min.js");  // pixi.js v7.4.3 動作確認済み
 //   var THREE = loadModule("lib/three.module.min.js");  // three.js r176 (ESM)
+
+// ************************************************************
+// 内蔵 rpgmv_main.js (RPG Maker MV ブートストラップ)
+// ************************************************************
+//
+// jsengine は src/rpgmv_main.js も内蔵しており、 `-rpgmv <project-path>`
+// オプション指定時に main.js の代わりに ES Module として評価する。
+// dataPath も同時に <project-path> に書き換わるので、 RPG MV プロジェクト
+// フォルダ (data/System.json, js/, audio/, img/ などを含む) を渡すだけで
+// そのまま起動できる (アプリ毎に main.js を用意しなくて良い)。
+//
+// 内容:
+//   - System.json の gameTitle を読み、 localStorage.setPath("jsengine_rpgmv", title)
+//     で SDL_GetPrefPath ベースの保存先を切り替え (ゲーム毎にセーブ分離)
+//   - GameFont (fonts/mplus-1m-regular.ttf) を Canvas2D.loadFont で登録
+//   - pixi.js v4.5.4 (lib/pixi.min.js) + rpg_core / managers / objects / scenes
+//     / sprites / windows / system を順次 loadScript
+//   - WindowLayer / Graphics の jsengine 向けパッチを適用
+//   - PluginManager.setup → SceneManager.run(Scene_Boot) で起動
+//
+// 使用例:
+//   jsengine -rpgmv path/to/rpgmv-project
+//   cd path/to/rpgmv-project && jsengine -rpgmv .

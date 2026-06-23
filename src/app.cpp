@@ -85,11 +85,17 @@ bool App::init(int argc, char *argv[])
     // データパス決定（デフォルト: data、-data オプションで変更可）
     const char *dataPath = "data";
     const char *sysinitOverride = nullptr;  // -sysinit <path> で内蔵 sysinit.js を差し替え
+    const char *rpgmvProject = nullptr;     // -rpgmv <project-path> で RPG MV ブート起動
     for (int i = 1; i < argc; i++) {
         if (SDL_strcmp(argv[i], "-data") == 0 && i + 1 < argc) {
             dataPath = argv[i + 1];
         } else if (SDL_strcmp(argv[i], "-sysinit") == 0 && i + 1 < argc) {
             sysinitOverride = argv[i + 1];
+        } else if (SDL_strcmp(argv[i], "-rpgmv") == 0 && i + 1 < argc) {
+            // -rpgmv <project> 指定時は dataPath を上書きして、 内蔵 rpgmv_main.js を main.js
+            // の代わりに評価する。 これで RPG Maker MV プロジェクトを直接起動できる。
+            rpgmvProject = argv[i + 1];
+            dataPath = rpgmvProject;
         }
     }
 
@@ -117,10 +123,19 @@ bool App::init(int argc, char *argv[])
         return false;
     }
 
-    // main.js を読み込み実行
-    if (!jsEngine_->loadFile("main.js")) {
-        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to load main.js");
-        return false;
+    // ブート方式の選択:
+    //   -rpgmv <project> 指定時は内蔵 rpgmv_main.js を ES Module で評価。
+    //   それ以外は dataPath 配下の main.js を評価 (= 従来通り)。
+    if (rpgmvProject) {
+        if (!jsEngine_->loadRpgmvMain()) {
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to load built-in rpgmv_main.js");
+            return false;
+        }
+    } else {
+        if (!jsEngine_->loadFile("main.js")) {
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to load main.js");
+            return false;
+        }
     }
 
     return true;
