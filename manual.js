@@ -490,6 +490,11 @@ addEventListener("touchcancel", function(e) {
 //     texStorage2D, texStorage3D,
 //     copyTexImage2D, copyTexSubImage2D,
 //     generateMipmap, pixelStorei, readPixels
+//     ※ pixelStorei(UNPACK_PREMULTIPLY_ALPHA_WEBGL, true) は本物処理。
+//        source が straight alpha (= HTMLCanvasElement 以外、 Image 等) の場合
+//        CPU 側で premultiply してから glTexImage2D に渡す。 Canvas は既に
+//        premultiplied (Canvas2D._getRGBA 由来) なので二重適用しない。
+//        UNPACK_FLIP_Y_WEBGL / UNPACK_COLORSPACE_CONVERSION_WEBGL は no-op。
 //
 //   フレームバッファ / レンダーバッファ
 //     createFramebuffer, deleteFramebuffer, isFramebuffer, bindFramebuffer,
