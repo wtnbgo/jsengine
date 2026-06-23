@@ -93,7 +93,8 @@ cmake --build build/x64-windows --config Release
 - `getExtension()` は GLES3 標準拡張に対して機能オブジェクトを返す（VAO 拡張メソッド含む）。
 - WebGL2 関数として `texStorage2D(target, levels, internalformat, w, h)` / `texStorage3D` をサポート（three.js r176 のボーンテクスチャ作成に必須）。
 - WebGL 固有 enum (`UNPACK_FLIP_Y_WEBGL` 0x9240, `UNPACK_PREMULTIPLY_ALPHA_WEBGL` 0x9241, `UNPACK_COLORSPACE_CONVERSION_WEBGL` 0x9243, `BROWSER_DEFAULT_WEBGL` 0x9244) は `gl` オブジェクトに定数登録済み。 `pixelStorei` で `UNPACK_FLIP_Y_WEBGL` / `UNPACK_COLORSPACE_CONVERSION_WEBGL` は GLES3 にないので no-op。 `UNPACK_PREMULTIPLY_ALPHA_WEBGL` は `g_unpack_premultiply_alpha` に保持し、 `texImage2D` / `texSubImage2D` で source が **straight alpha** (`_ctx2d` プロパティを持たないオブジェクト = Image/ImageBitmap) の場合に CPU 側で premultiply してから `glTexImage2D` に渡す。 canvas (`_ctx2d` 持ち) は `_getRGBA` が既に premultiplied で返すので二重適用を回避する。 これがないと RPG Maker MV の `Bitmap.decode` が初回 `_createBaseTexture(this._image)` で Image を直接テクスチャ化した時、 GPU には straight のまま入って pixi の premultiplied blend (`ONE, ONE_MINUS_SRC_ALPHA`) と不整合になり、 透過 PNG の `(255,255,255,α=0)` 領域が白不透明として描画される (キャラ周囲の白枠)。
-- `texImage2D` は WebGL2 の unsized internalformat (`RGBA + FLOAT` 等) を `fixInternalFormat()` で GLES3 の sized format (`RGBA32F` 等) に自動変換する。
+- `texImage2D` は WebGL2 の unsized internalformat (`RGBA + FLOAT` 等) を `fixInternalFormat()` で GLES3 の sized format (`RGBA32F` 等) に自動変換する。 同じく `DEPTH_COMPONENT + UNSIGNED_SHORT/UNSIGNED_INT/FLOAT` → `DEPTH_COMPONENT16/24/32F`、 `DEPTH_STENCIL + UNSIGNED_INT_24_8` → `DEPTH24_STENCIL8` 等の型推定翻訳も含む。 `texImage3D` も同様。
+- **`renderbufferStorage` / `texStorage2D` / `texStorage3D` / `copyTexImage2D` (type 引数を持たない経路)** は `fixSizedFormatNoType()` で WebGL1 の unsized `DEPTH_STENCIL` / `DEPTH_COMPONENT` を `DEPTH24_STENCIL8` / `DEPTH_COMPONENT16` に翻訳する。 これがないと pixi v2 の `FilterTexture` 構築で renderbuffer が incomplete になり、 FBO 全体が incomplete → filter pass で何も描けず Map が真っ黒になる症状を踏む (pixi v4/三系は最初から sized 形式を渡すので無症状)。 2026-06-23 解決。
 
 ### Web Audio (`src/webaudio.cpp`)
 

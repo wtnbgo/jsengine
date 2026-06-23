@@ -568,9 +568,15 @@ static JSValue js_generateMipmap(JSContext *ctx, JSValueConst this_val, int argc
     return JS_UNDEFINED;
 }
 
-// WebGL 2.0 → GLES 3.0 内部フォーマット自動変換
-// WebGL 2.0 では internalformat に GL_RGBA 等の unsized format を type=FLOAT で渡せるが、
-// GLES 3.0 では sized format (GL_RGBA32F 等) が必要
+// WebGL → GLES 3.0 内部フォーマット自動変換。
+//
+// type が分かるパス (texImage2D / texImage3D / texSubImage2D の WebGL1 経路相当):
+//   - WebGL 2.0 は FLOAT / HALF_FLOAT + unsized RGBA 等を受け付けるが GLES3 は sized が必須
+//   - WEBGL_depth_texture 経由の DEPTH_COMPONENT / DEPTH_STENCIL も同様 (型に合わせて
+//     DEPTH_COMPONENT16 / 24 / 32F、 DEPTH24_STENCIL8 等の sized に翻訳)
+//
+// type が無いパス (texStorage2D/3D / renderbufferStorage) は別の `sizedDepthFormat()` を
+// 使う (型の情報がないので「最も一般的」な sized を選ぶ)。
 static GLint fixInternalFormat(GLint internalformat, GLenum type) {
     GLint fixed = internalformat;
     if (type == GL_FLOAT) {
@@ -579,6 +585,7 @@ static GLint fixInternalFormat(GLint internalformat, GLenum type) {
         case GL_RGB:  fixed = GL_RGB32F; break;
         case GL_RG:   fixed = GL_RG32F; break;
         case GL_RED:  fixed = GL_R32F; break;
+        case GL_DEPTH_COMPONENT: fixed = GL_DEPTH_COMPONENT32F; break;
         }
     } else if (type == GL_HALF_FLOAT) {
         switch (internalformat) {
@@ -587,8 +594,28 @@ static GLint fixInternalFormat(GLint internalformat, GLenum type) {
         case GL_RG:   fixed = GL_RG16F; break;
         case GL_RED:  fixed = GL_R16F; break;
         }
+    } else if (type == GL_UNSIGNED_SHORT) {
+        if (internalformat == GL_DEPTH_COMPONENT) fixed = GL_DEPTH_COMPONENT16;
+    } else if (type == GL_UNSIGNED_INT) {
+        if (internalformat == GL_DEPTH_COMPONENT) fixed = GL_DEPTH_COMPONENT24;
+    } else if (type == GL_UNSIGNED_INT_24_8) {
+        if (internalformat == GL_DEPTH_STENCIL) fixed = GL_DEPTH24_STENCIL8;
+    } else if (type == GL_FLOAT_32_UNSIGNED_INT_24_8_REV) {
+        if (internalformat == GL_DEPTH_STENCIL) fixed = GL_DEPTH32F_STENCIL8;
     }
     return fixed;
+}
+
+// type が分からないパス (texStorage2D/3D / renderbufferStorage / renderbufferStorageMultisample)
+// 用の WebGL1 unsized → GLES3 sized 翻訳。 これがないと pixi v2 の FilterTexture 等で
+// gl.renderbufferStorage(RB, gl.DEPTH_STENCIL, w, h) が INVALID_ENUM になり、 FBO incomplete
+// → 子要素が全部黙って描画失敗する (Map 真っ黒の原因だった)。
+static GLenum fixSizedFormatNoType(GLenum internalformat) {
+    switch (internalformat) {
+    case GL_DEPTH_STENCIL:   return GL_DEPTH24_STENCIL8;
+    case GL_DEPTH_COMPONENT: return GL_DEPTH_COMPONENT16;
+    default: return internalformat;
+    }
 }
 
 // ============================================================
@@ -721,20 +748,23 @@ static JSValue js_texSubImage2D(JSContext *ctx, JSValueConst this_val, int argc,
 }
 
 static JSValue js_texStorage2D(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    // texStorage は GLES3 が sized format 必須。 WebGL の unsized DEPTH 系を翻訳。
+    GLenum internalformat = fixSizedFormatNoType((GLenum)arg_uint(ctx, argv[2]));
     glTexStorage2D(
         (GLenum)arg_uint(ctx, argv[0]),
         (GLsizei)arg_int(ctx, argv[1]),
-        (GLenum)arg_uint(ctx, argv[2]),
+        internalformat,
         (GLsizei)arg_int(ctx, argv[3]),
         (GLsizei)arg_int(ctx, argv[4]));
     return JS_UNDEFINED;
 }
 
 static JSValue js_texStorage3D(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    GLenum internalformat = fixSizedFormatNoType((GLenum)arg_uint(ctx, argv[2]));
     glTexStorage3D(
         (GLenum)arg_uint(ctx, argv[0]),
         (GLsizei)arg_int(ctx, argv[1]),
-        (GLenum)arg_uint(ctx, argv[2]),
+        internalformat,
         (GLsizei)arg_int(ctx, argv[3]),
         (GLsizei)arg_int(ctx, argv[4]),
         (GLsizei)arg_int(ctx, argv[5]));
@@ -753,15 +783,19 @@ static JSValue js_texImage3D(JSContext *ctx, JSValueConst this_val, int argc, JS
     GLenum type = (GLenum)arg_uint(ctx, argv[8]);
     JSValue pixelsHold = JS_UNDEFINED;
     void *pixels = qjs_get_pixels(ctx, argv[9], &pixelsHold);
+    internalformat = fixInternalFormat(internalformat, type);
     glTexImage3D(target, level, internalformat, width, height, depth, border, format, type, pixels);
     JS_FreeValue(ctx, pixelsHold);
     return JS_UNDEFINED;
 }
 
 static JSValue js_copyTexImage2D(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    // copyTexImage2D は framebuffer から内部フォーマットを推定するが、 WebGL の unsized DEPTH 系
+    // を渡された場合は sized に翻訳する (type 情報がないので fixSizedFormatNoType)。
+    GLenum internalformat = fixSizedFormatNoType((GLenum)arg_uint(ctx, argv[2]));
     glCopyTexImage2D(
         (GLenum)arg_uint(ctx, argv[0]), (GLint)arg_int(ctx, argv[1]),
-        (GLenum)arg_uint(ctx, argv[2]),
+        internalformat,
         (GLint)arg_int(ctx, argv[3]), (GLint)arg_int(ctx, argv[4]),
         (GLsizei)arg_int(ctx, argv[5]), (GLsizei)arg_int(ctx, argv[6]),
         (GLint)arg_int(ctx, argv[7]));
@@ -874,8 +908,9 @@ static JSValue js_bindRenderbuffer(JSContext *ctx, JSValueConst this_val, int ar
 }
 
 static JSValue js_renderbufferStorage(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-    glRenderbufferStorage(
-        (GLenum)arg_uint(ctx, argv[0]), (GLenum)arg_uint(ctx, argv[1]),
+    GLenum target = (GLenum)arg_uint(ctx, argv[0]);
+    GLenum internalformat = fixSizedFormatNoType((GLenum)arg_uint(ctx, argv[1]));
+    glRenderbufferStorage(target, internalformat,
         (GLsizei)arg_int(ctx, argv[2]), (GLsizei)arg_int(ctx, argv[3]));
     return JS_UNDEFINED;
 }
