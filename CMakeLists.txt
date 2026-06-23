@@ -180,13 +180,29 @@ if(JSENGINE_USE_MOVIE_PLAYER)
 	set(MOVIE_PLAYER_BUILD_TEST OFF CACHE BOOL "movie-player test (no, we drive it ourselves)" FORCE)
 	# movie-player CMake は BUILD_TEST という変数名なので念のため両方押さえる
 	set(BUILD_TEST OFF CACHE BOOL "movie-player test off" FORCE)
-	FetchContent_Declare(
-		movie_player
-		EXCLUDE_FROM_ALL
-		GIT_REPOSITORY https://github.com/wamsoft/movie-player.git
-		GIT_TAG main
-	)
-	FetchContent_MakeAvailable(movie_player)
+
+	# USE_LOCAL_THORVG と同じ流儀で、 開発時は ../krkrz/external/movie-player の
+	# ローカルチェックアウトを add_subdirectory する。 デフォルト OFF。
+	option(USE_LOCAL_MOVIE_PLAYER "Use local movie-player checkout instead of FetchContent" OFF)
+	set(JSENGINE_LOCAL_MOVIE_PLAYER_PATH "${CMAKE_SOURCE_DIR}/../../work/kirikiri/krkrz/external/movie-player"
+		CACHE STRING "Path to local movie-player checkout (only used if USE_LOCAL_MOVIE_PLAYER=ON)")
+
+	if(USE_LOCAL_MOVIE_PLAYER)
+		if(NOT EXISTS "${JSENGINE_LOCAL_MOVIE_PLAYER_PATH}/CMakeLists.txt")
+			message(FATAL_ERROR "USE_LOCAL_MOVIE_PLAYER=ON but ${JSENGINE_LOCAL_MOVIE_PLAYER_PATH}/CMakeLists.txt not found")
+		endif()
+		message(STATUS "Using local movie-player at ${JSENGINE_LOCAL_MOVIE_PLAYER_PATH}")
+		add_subdirectory("${JSENGINE_LOCAL_MOVIE_PLAYER_PATH}" movie_player_build EXCLUDE_FROM_ALL)
+		set(movie_player_SOURCE_DIR "${JSENGINE_LOCAL_MOVIE_PLAYER_PATH}")
+	else()
+		FetchContent_Declare(
+			movie_player
+			EXCLUDE_FROM_ALL
+			GIT_REPOSITORY https://github.com/wamsoft/movie-player.git
+			GIT_TAG main
+		)
+		FetchContent_MakeAvailable(movie_player)
+	endif()
 endif()
 
 # ----------------------------------------------------

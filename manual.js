@@ -909,8 +909,33 @@ addEventListener("touchcancel", function(e) {
 // 音声は内部の SDLAudioSink が SDL_AudioStream へ直接流す。
 
 // --- グローバル MoviePlayer クラス (jsengine 拡張) ---
-var mp = new MoviePlayer("path/to/video.webm");                  // 既定: loop=false, volume=1
+var mp = new MoviePlayer("path/to/video.webm");                  // 既定: rgba, loop=false, volume=1
 var mp = new MoviePlayer("video.webm", { loop: true, volume: 0.5 });
+
+// colorFormat オプションで YUV plane 経路に切替可能 (movie-player の新 plane API 使用)。
+// "rgba" (default): decoder 側 で YUV→RGBA 変換済み、 mp.data に packed RGBA を 1 plane で公開。
+//                   余計な memcpy 無しで host バッファに直書込みする高速経路。
+// "i420": Y/U/V 3 plane (Y=W×H, U,V=W/2×H/2 の 8bit 単一チャネル)。 mp.planes / mp.getPlane(i) で取得。
+// "nv12": Y + UV interleaved 2 plane (UV plane は 2 byte/pixel)。
+// "nv21": Y + VU interleaved 2 plane。
+var mpYuv = new MoviePlayer("video.webm", { colorFormat: "i420", loop: true });
+mpYuv.colorFormat;       // => "i420"
+mpYuv.planeCount;        // => 3
+var planes = mpYuv.planes;          // => [{width,height,data}, ...] (RGBA mode は 1 要素)
+var Y = mpYuv.getPlane(0);          // 単一 plane 取得 (planes 配列を毎フレーム作るより安い)
+
+// YUV plane を WebGL に upload (3 つの単一チャネルテクスチャ)
+// 注: GLES3 では sized internalformat 必須 (gl.R8 = 0x8229)
+gl.bindTexture(gl.TEXTURE_2D, yTex);
+gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, Y.width, Y.height, 0, gl.RED, gl.UNSIGNED_BYTE, Y.data);
+// 同様に U / V を別テクスチャに上げ、 fragment shader で YUV→RGB 合成する
+//   y = texture(uY, uv).r;  u = texture(uU, uv).r - 0.5;  v = texture(uV, uv).r - 0.5;
+//   r = y + 1.5748*v;  g = y - 0.1873*u - 0.4681*v;  b = y + 1.8556*u;  (BT.709 limited range)
+//
+// 注意: VP9 decoder は coded (stride-padded) 幅で plane を出すので、 plane.width が
+//   videoWidth より大きい場合がある (例: 1920 → 1984)。 shader 側で uv 座標を
+//   videoWidth/plane.width で normalize するか、 plane.width をテクスチャ幅として
+//   使い、 描画 quad の UV 範囲を制限する。
 
 mp.play();          // 引数 true で loop ON にして再生 (= mp.play(true))
 mp.pause();         // 一時停止 (※ state 反映は非同期: 同フレーム内に mp.paused を読んでも
