@@ -802,8 +802,6 @@ function initDemo5() {
     pixiInited = true;
 
     // ポリフィル・シム読み込み
-    loadScript("lib/polyfill.js");
-    loadScript("lib/browser_shim.js");
     loadScript("lib/pixi.min.js");
     console.log("PIXI " + PIXI.VERSION + " loaded");
 
@@ -901,8 +899,6 @@ var pixiUiBgGraphics = null;
 function initDemo10() {
     if (pixiUiApp) return;
 
-    loadScript("lib/polyfill.js");
-    loadScript("lib/browser_shim.js");
     loadScript("lib/pixi.min.js");
     loadScript("lib/pixi-ui-deps-shim.js");
     loadScript("lib/pixi-ui.js");
@@ -1084,8 +1080,6 @@ var demo11Loaded = false;
 function ensureDemo11Loaded() {
     if (demo11Loaded) return;
     // pixi 一式 (Demo 10 と共用、重複ロードは多重ガード済み)
-    loadScript("lib/polyfill.js");
-    loadScript("lib/browser_shim.js");
     loadScript("lib/pixi.min.js");
     // pixi.ui (Settings の Slider 等に使う)
     loadScript("lib/pixi-ui-deps-shim.js");
@@ -1130,8 +1124,6 @@ var demo12Loaded = false;
 function ensureDemo12Loaded() {
     if (demo12Loaded) return;
     // Demo 11 と同じく pixi 一式を共用 (多重ガード済み)
-    loadScript("lib/polyfill.js");
-    loadScript("lib/browser_shim.js");
     loadScript("lib/pixi.min.js");
     loadScript("lib/pixi-ui-deps-shim.js");   // tweedle 本物実装入り
     loadScript("lib/pixi-ui.js");
@@ -1414,8 +1406,7 @@ function initDemo8() {
     threeInited = true;
 
     // ポリフィル・シム読み込み（未ロードの場合）
-    if (typeof Map === "undefined") loadScript("lib/polyfill.js");
-    if (typeof window === "undefined" || !window.HTMLCanvasElement) loadScript("lib/browser_shim.js");
+    // ポリフィル・シムは jsengine 内蔵 sysinit.js で常時提供されるので不要
 
     // three.js ESM 版を読み込み（loadModule で ESM の export を取得）
     console.log("Loading three.js...");
@@ -1575,8 +1566,6 @@ function initDemo9() {
     vrmInited = true;
 
     // シム読み込み
-    loadScript("lib/polyfill.js");
-    loadScript("lib/browser_shim.js");
 
     // three.js ESM 読み込み
     var THREE = loadModule("lib/three.module.min.js");

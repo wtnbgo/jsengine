@@ -85,9 +85,9 @@ audioCtx.currentTime;                  // 読み取り専用: アプリ起動か
 audioCtx.state;                        // "running" | "suspended" | "closed"
 audioCtx.destination;                  // ダミーノード（互換性のため）
 audioCtx.masterVolume = 0.8;           // マスターボリューム（0.0 ~ 1.0+）
-audioCtx.resume();                     // 再生再開
-audioCtx.suspend();                    // 一時停止
-audioCtx.close();                      // 全停止
+audioCtx.resume();                     // Promise<undefined>: 再生再開
+audioCtx.suspend();                    // Promise<undefined>: 一時停止
+audioCtx.close();                      // Promise<undefined>: 全停止
 
 // --- AudioBufferSourceNode (拡張: ファイル直接ロード) ---
 // jsengine 独自の簡略 API: createBufferSource(path) でファイルを直接読み込み即再生可能
@@ -98,8 +98,19 @@ beep.loop = false;                     // ループ再生
 beep.ended;                            // 読み取り専用: 再生終了したか
 beep.buffer = audioBuf;                // AudioBuffer 代入で別ソースに差し替え (decodeAudioData 経由)
 beep.group  = audioGroup;              // AudioGroup に attach (jsengine 拡張、後述)
-beep.start();                          // 再生開始（先頭から）
+beep.start();                          // 再生開始（先頭から、引数 when/offset は受け取るが無視）
 beep.stop();                           // 再生停止
+
+// --- WebAudio spec 表面シム (実音には反映しないが標準コードを動かすための互換) ---
+beep.loopStart = 0;                    // 数値フィールドのみ (ループ範囲指定はネイティブ未対応)
+beep.loopEnd = 0;
+beep.playbackRate.value = 1.0;         // AudioParam ダミー (実ピッチ変更は無効)
+beep.playbackRate.setValueAtTime(1.0, 0);              // no-op
+beep.playbackRate.linearRampToValueAtTime(1.0, 0);     // no-op
+var panner = audioCtx.createPanner();  // PannerNode 互換ダミー (パンは効かない)
+panner.panningModel;                   // "equalpower"
+panner.setPosition(0, 0, 0);           // no-op
+panner.connect(audioCtx.destination);  // no-op
 
 // --- AudioBuffer + decodeAudioData (標準) ---
 // fetch でファイルを ArrayBuffer として読み込み、decodeAudioData でデコードして再利用可能な AudioBuffer に
@@ -781,23 +792,27 @@ addEventListener("touchcancel", function(e) {
 // tweedle_js.Group.shared.getAll();           // アクティブ Tween 一覧 (PerfHud で件数表示等)
 
 // ************************************************************
-// ポリフィル / ブラウザシム（pixi.js 等のライブラリ動作用）
+// 内蔵 sysinit.js (ブラウザシム、 自動評価)
 // ************************************************************
 //
-// lib/polyfill.js:
-//   ブラウザ互換ポリフィル（QuickJS は ES2023 対応のため最小限）。
-//
-// lib/browser_shim.js:
-//   ブラウザ API シム。以下を提供:
-//   window, document, navigator, location,
+// jsengine はビルド時に src/sysinit.js を unsigned char 配列として
+// 取り込み、 main.js のロード前に自動評価する。 アプリ側で明示的に
+// loadScript で呼ぶ必要はない。 内容:
+//   window, document (createElement / fonts / body / head / documentElement),
+//   navigator, location (search/hash/host/origin), screen,
 //   HTMLCanvasElement (getContext で gl を返す),
+//   HTMLVideoElement / HTMLAudioElement / Audio (no-op シム、 再生は不可),
 //   Image (createImageBitmap ベース),
 //   WebGLRenderingContext / WebGL2RenderingContext,
-//   XMLHttpRequest, fetch (fs.readText ベース),
-//   Event, CustomEvent, URL
+//   XMLHttpRequest (responseType="arraybuffer" は fs.readBinary を使用),
+//   fetch (fs.readText ベース),
+//   Event, CustomEvent, URL, webkitAudioContext エイリアス,
+//   Object.getOwnPropertyDescriptors ポリフィル
+//
+// 開発時オプション:
+//   jsengine -sysinit <path>          // 内蔵ではなく外部ファイルから読む (リビルド不要)
+//   jsengine -sysinit src/sysinit.js  // src/ の最新を即反映する典型用法
 //
 // 使用方法:
-//   loadScript("lib/polyfill.js");
-//   loadScript("lib/browser_shim.js");
 //   loadScript("lib/pixi.min.js");  // pixi.js v7.4.3 動作確認済み
 //   var THREE = loadModule("lib/three.module.min.js");  // three.js r176 (ESM)

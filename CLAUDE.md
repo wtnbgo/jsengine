@@ -72,8 +72,10 @@ cmake --build build/x64-windows --config Release
 
 ### JS runtime (QuickJS-ng)
 
-- QuickJS-ng is installed via vcpkg (`quickjs-ng`). CMake target: `qjs`. ES2023 対応のため、ES6 ポリフィル（Promise, Map, Set, WeakMap 等）は不要。`polyfill.js` は最小限のみ。
+- QuickJS-ng is installed via vcpkg (`quickjs-ng`). CMake target: `qjs`. ES2023 対応のため、ES6 ポリフィル (Promise, Map, Set, WeakMap 等) は不要。
 - JS files are loaded from the base path (default: `data/`, changeable via `-data <path>` CLI option). All relative paths in `loadScript()` and `fs.*` APIs resolve from this base path.
+- **内蔵初期化スクリプト**: `src/sysinit.js` がブラウザ環境シム (window/document/Image/HTMLVideoElement/HTMLAudioElement/XMLHttpRequest/fetch/document.fonts 等) を提供する。 CMake (`cmake/embed_sysinit.cmake`) がビルド時に C++ ソース (`builtin_sysinit.cpp`) に unsigned char 配列として埋め込み、 `JsEngine::loadSysinit()` が `main.js` ロード前に自動評価する。 開発時は `-sysinit <path>` コマンドラインオプションで外部ファイル (例 `src/sysinit.js`) から差し替え可能 (ビルド省略可)。 アプリ側 (data/main.js 等) で `loadScript("lib/browser_shim.js")` を呼ぶ必要はもう無い (廃止済み)。
+- **本体 (C++) 側でブラウザ互換 API を追加・変更した時は、 `src/sysinit.js` の対応コードも合わせて見直すこと**: 例えば `webaudio.cpp` に AudioContext のメソッドや AudioBufferSourceNode のプロパティを追加したら、 sysinit 側で同名のシムが空オブジェクトを返していたら撤去する。 逆に C++ 側で未実装のブラウザ API を JS で求められたら sysinit にシム (no-op か簡易実装) を追加する。 この同期を怠ると「以前は sysinit のシムで動いていた」「実装したのに sysinit のダミーが優先されて効かない」が起きる。
 - JS lifecycle: `data/main.js` は ES Module として読み込まれる（top-level await 対応）。`update(dt)` / `render()` / `done()` は `globalThis` に明示登録が必要（モジュールスコープのため）。
 - ESM (ES Modules) 対応: `loadModule(path)` で ESM ファイルを読み込み、export された名前空間オブジェクトを返す。`JS_SetModuleLoaderFunc` によりモジュール間の `import` も動作する。TLA (Top-Level Await) 使用モジュールは未対応（課題）。
 - `globalThis.__DEBUG__` フラグ: jsengine.cpp が `NDEBUG` の有無で `true` / `false` を JS に渡す。Demo 9 のレンダ結果ピクセル検証など、本番では出したくないログを `if (globalThis.__DEBUG__) { ... }` でガードする。
@@ -100,6 +102,11 @@ cmake --build build/x64-windows --config Release
 - **ノード寿命管理 (WebAudio 仕様準拠)**: GainNode と BufferSourceNode は、接続中/再生中の間は JS 参照が切れても GC されない。webaudio.cpp の `JsAudioGain::selfHold` / `JsAudioSource::selfHold` が `JS_DupValue` で自己 JSValue を保持する。`gain.connect()` で hold、`gain.disconnect()` で release。source は `start()` で hold、`webaudio_update` で `IsPlaying() == false` を検知して release。この寿命管理がないと、JS スコープ末尾で GC された source の finalizer が `connectedGain = nullptr` を実行してチェーンを破壊する (旧版で SE 単発再生時に master/グループ音量が効かなくなる原因だった)。
 - `createBufferSource(path)` の path 引数はファイル直接ロードする jsengine 拡張。
 - `webaudio_update(deltaMs)` を毎フレーム呼ぶ。AudioContext.currentTime を進める / gain ramp 反映 / 再生終了 source の selfHold 解放を行う。
+- **WebAudio spec の表面シム (実音には反映しないが、 spec 期待コードを動かすため)**:
+  - `AudioContext.resume() / suspend() / close()` は Promise を返す (`resolved_promise()` ヘルパ)。
+  - `AudioContext.createPanner()` は PannerNode 互換オブジェクト (panningModel / setPosition / setOrientation / connect / disconnect 等) を返すが、 中身は全 no-op (実パン無し)。
+  - `AudioBufferSourceNode.loopStart` / `loopEnd` 数値フィールド (ループ範囲指定はネイティブ未対応、 全体ループのみ)、 `playbackRate` AudioParam ダミー (value / setValueAtTime / linearRampToValueAtTime / cancelScheduledValues、 全部 no-op で実ピッチ変更無し)。
+  - `source.start(when, offset)` は 2 引数で呼んでも問題ないが、 `when` と `offset` は無視される。 これらは RPG Maker MV 等の WebAudio 標準利用コードを「型エラーなしに走らせる」ためのシムで、 機能完全実装ではない。
 
 ### Canvas 2D (`src/canvas2d.cpp`, ThorVG)
 
@@ -114,13 +121,15 @@ cmake --build build/x64-windows --config Release
 ### 3rd-party JS libraries
 
 - three.js r176 は ESM 版（`three.module.min.js` + `three.core.min.js`）を `loadModule()` で読み込み。Babel トランスパイル不要。
-- pixi.js v7.4.3 動作確認済み（UMD 版、`data/lib/` に `polyfill.js`, `browser_shim.js`, `pixi.min.js`）。pixi.js v8 は ESM+TLA で読み込み可能だがバッチレンダラーのジオメトリ更新に問題あり（課題）。
+- pixi.js v7.4.3 動作確認済み (UMD 版、 `data/lib/pixi.min.js`)。 ブラウザシム (旧 `data/lib/browser_shim.js` + `polyfill.js`) は jsengine 本体に内蔵 (`src/sysinit.js`) になったので明示 loadScript は不要。 pixi.js v8 は ESM+TLA で読み込み可能だがバッチレンダラーのジオメトリ更新に問題あり (課題)。
 - pixi.js v4.5.4（RPG Maker MV）は `test/` で作業中。OES_vertex_array_object 拡張マッピング、CanvasRenderingContext2D シム等を追加済み。
 - pixi.ui v1.2.4 は `(PIXI×8, typedSignals, tweedle_js)` を期待する IIFE 形式なので、依存の最小シム `data/lib/pixi-ui-deps-shim.js` を loadScript 順で読み込む。**tweedle は時間ベースの本物最小実装**に置き換え済 (Tween / Group / Easing — Linear/Quadratic/Cubic/Quartic/Sinusoidal/Exponential/Back/Elastic 一通り、`Group.shared` シングルトン、chain / delay / repeat / yoyo / onStart/Update/Complete/Stop 対応)。ホスト側で毎フレーム `tweedle_js.Group.shared.update()` を呼ぶこと (Demo 11/12 がやっている)。これにより FancyButton の `animations.hover/pressed` が補間されるようになり、`framework/scene_manager.js` の `replaceWithFade / pushWithFade` と `framework/ui_effects.js` の flash/ripple/bounce/toast が動く。
 
-### `browser_shim.js` (ブラウザ API シム)
+### 内蔵 sysinit.js (ブラウザ API シム)
 
-- `HTMLCanvasElement` (`getContext("2d")` で Canvas2D、`"webgl"` / `"webgl2"` でグローバル `gl` を返す)、`Image`、`document`、`window` 等を提供。
+`src/sysinit.js` が jsengine バイナリに埋め込まれ、 `main.js` ロード前に自動評価される (旧 `data/lib/browser_shim.js` + `polyfill.js` をマージしたもの)。
+
+- `HTMLCanvasElement` (`getContext("2d")` で Canvas2D、`"webgl"` / `"webgl2"` でグローバル `gl` を返す)、`Image`、`HTMLVideoElement` / `HTMLAudioElement` / `window.Audio`、`document` (`createElement` で canvas/video/audio/img/汎用、 `document.fonts` の CSS Font Loading API ダミー、 `body`/`head`/`documentElement` の clientWidth/Height)、`window` (innerWidth/outerWidth/scrollX/alert/focus/blur/open 等)、`location` (search/hash/host/origin)、`screen`、`XMLHttpRequest` (`responseType="arraybuffer"` は `fs.readBinary` 使用、 `decodeURI` でパス補正)、`fetch`、`Event` / `CustomEvent` / `URL`、`Object.getOwnPropertyDescriptors` ポリフィル、`webkitAudioContext` エイリアスを提供。
 - `Image.prototype.src` setter は内部で同期的に画像をロードしたいが、自身が後段で `globalThis.createImageBitmap` を Promise を返すラッパーに上書きする (Blob / ArrayBuffer 対応のため)。setter は thenable を検出して `awaitPromise` でアンラップしてから `_data` / `width` / `height` を埋める。
 - pixi v7 EventSystem 対応:
   1. `pointerdown` / `up` / `move` / `cancel` は C++ 側でネイティブ発火するようになったため shim 側のマッピングは廃止。`pointerover` / `pointerout` / `pointerupoutside` / `pointerleave` / `pointerenter` / `gotpointercapture` / `lostpointercapture` の登録は shim 側で no-op として吸収する。

@@ -1784,6 +1784,46 @@ bool JsEngine::init(int argc, char **argv) {
     return true;
 }
 
+// CMake が src/sysinit.js をバイト配列として埋め込む (cmake/embed_sysinit.cmake 経由)
+extern const unsigned char g_sysinit_js[];
+extern const unsigned int  g_sysinit_js_len;
+
+bool JsEngine::loadSysinit(const char *overridePath) {
+    if (!ctx_) return false;
+
+    const char *source = nullptr;
+    size_t size = 0;
+    char *file_source = nullptr;  // 外部ファイル時の free 対象
+    std::string label;
+
+    if (overridePath && *overridePath) {
+        // 開発用: -sysinit <path> で外部ファイルから読む
+        std::string resolved = resolvePath(overridePath);
+        file_source = load_file_sdl(resolved.c_str(), &size);
+        if (!file_source) {
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "loadSysinit: failed to read override '%s'", resolved.c_str());
+            return false;
+        }
+        source = file_source;
+        label = resolved;
+        SDL_Log("sysinit override: %s", resolved.c_str());
+    } else {
+        source = reinterpret_cast<const char*>(g_sysinit_js);
+        size = g_sysinit_js_len;
+        label = "<builtin:sysinit.js>";
+    }
+
+    JSValue result = JS_Eval(ctx_, source, size, label.c_str(), JS_EVAL_TYPE_GLOBAL);
+    if (file_source) SDL_free(file_source);
+
+    if (JS_IsException(result)) {
+        log_exception(ctx_, label.c_str());
+        return false;
+    }
+    JS_FreeValue(ctx_, result);
+    return true;
+}
+
 bool JsEngine::loadFile(const char *path) {
     if (!ctx_) return false;
 

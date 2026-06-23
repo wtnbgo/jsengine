@@ -1,10 +1,25 @@
 // ============================================================
-// ブラウザ API シム (pixi.js 動作用)
+// jsengine 内蔵初期化スクリプト (sysinit.js)
 // ============================================================
-// polyfill.js の後に読み込むこと
-// 多重読み込みガード: gl.getExtension のラップ等が再帰になるのを防ぐ
+// ビルド時に C++ に埋め込まれ、 main.js のロード前に自動評価される。
+// 主にブラウザ環境シム (window/document/Image/XMLHttpRequest 等) を提供。
+// 開発時は -sysinit <path> オプションで外部ファイルから差し替え可能。
+//
+// 多重読み込みガード (loadScript で再評価された場合も no-op)
 if (!globalThis.__browser_shim_loaded) {
 globalThis.__browser_shim_loaded = true;
+
+// --- ES6+ ポリフィル (QuickJS は ES2023 だが一部 ES2017 API の補完) ---
+if (!Object.getOwnPropertyDescriptors) {
+    Object.getOwnPropertyDescriptors = function(obj) {
+        var result = {};
+        var keys = Object.getOwnPropertyNames(obj);
+        for (var i = 0; i < keys.length; i++) {
+            result[keys[i]] = Object.getOwnPropertyDescriptor(obj, keys[i]);
+        }
+        return result;
+    };
+}
 
 // --- window ---
 if (typeof window === "undefined") {
@@ -15,6 +30,18 @@ window.self = window;
 window.devicePixelRatio = 1;
 window.innerWidth = 1280;
 window.innerHeight = 720;
+window.outerWidth = 1280;
+window.outerHeight = 720;
+window.pageXOffset = 0;
+window.pageYOffset = 0;
+window.scrollX = 0;
+window.scrollY = 0;
+window.onload = null;
+window.focus = function() {};
+window.blur = function() {};
+window.open = function() { return null; };
+window.alert = function(msg) { console.log("ALERT: " + msg); };
+window.confirm = function() { return true; };
 window.console = console;
 window.setTimeout = setTimeout;
 window.clearTimeout = clearTimeout;
@@ -37,7 +64,17 @@ window.navigator = navigator;
 if (typeof location === "undefined") {
     var location = { href: "", protocol: "file:", hostname: "", pathname: "" };
 }
+if (!location.search) location.search = "";
+if (!location.hash)   location.hash = "";
+if (!location.host)   location.host = "";
+if (!location.origin) location.origin = "file://";
 window.location = location;
+
+// --- screen ---
+if (typeof screen === "undefined") {
+    var screen = { width: 1280, height: 720, availWidth: 1280, availHeight: 720 };
+}
+window.screen = screen;
 
 // --- HTMLCanvasElement シム ---
 // pixi.js が document.createElement("canvas") で取得してくるキャンバス
@@ -199,14 +236,73 @@ HTMLCanvasElement.prototype.getAttribute = function(name) {
 
 window.HTMLCanvasElement = HTMLCanvasElement;
 
-// --- HTMLVideoElement / HTMLImageElement シム ---
+// --- HTMLVideoElement / HTMLImageElement / HTMLAudioElement シム ---
+// 多くの WebFW (pixi/three/RPG Maker MV) が video/audio タグの API set を期待するので
+// 最小限の no-op 表面を生やしておく。 実音/実動画再生はネイティブ未対応。
 if (typeof HTMLVideoElement === "undefined") {
-    function HTMLVideoElement() {}
+    function HTMLVideoElement() {
+        this.style = {};
+        this.volume = 1;
+        this.src = "";
+        this.id = "";
+    }
+    HTMLVideoElement.prototype.play = function() { return Promise.resolve(); };
+    HTMLVideoElement.prototype.pause = function() {};
+    HTMLVideoElement.prototype.load = function() {};
+    HTMLVideoElement.prototype.canPlayType = function() { return ""; };
+    HTMLVideoElement.prototype.setAttribute = function() {};
+    HTMLVideoElement.prototype.getAttribute = function() { return null; };
+    HTMLVideoElement.prototype.addEventListener = function() {};
+    HTMLVideoElement.prototype.removeEventListener = function() {};
+    HTMLVideoElement.prototype.getBoundingClientRect = function() {
+        return {x:0, y:0, width:0, height:0, top:0, left:0, bottom:0, right:0};
+    };
     window.HTMLVideoElement = HTMLVideoElement;
 }
 if (typeof HTMLImageElement === "undefined") {
     function HTMLImageElement() {}
     window.HTMLImageElement = HTMLImageElement;
+}
+if (typeof HTMLAudioElement === "undefined") {
+    function HTMLAudioElement() {
+        this.src = "";
+        this.volume = 1;
+        this.currentTime = 0;
+        this.duration = 0;
+        this.paused = true;
+        this.loop = false;
+        this._listeners = {};
+    }
+    HTMLAudioElement.prototype.play = function() { this.paused = false; return Promise.resolve(); };
+    HTMLAudioElement.prototype.pause = function() { this.paused = true; };
+    HTMLAudioElement.prototype.load = function() {};
+    HTMLAudioElement.prototype.cloneNode = function() { return new HTMLAudioElement(); };
+    HTMLAudioElement.prototype.addEventListener = function(type, cb) {
+        if (!this._listeners[type]) this._listeners[type] = [];
+        this._listeners[type].push(cb);
+    };
+    HTMLAudioElement.prototype.removeEventListener = function(type, cb) {
+        if (this._listeners[type]) {
+            this._listeners[type] = this._listeners[type].filter(function(f) { return f !== cb; });
+        }
+    };
+    HTMLAudioElement.prototype.canPlayType = function(type) {
+        if (type.indexOf("ogg") >= 0 || type.indexOf("wav") >= 0 || type.indexOf("mp3") >= 0) return "maybe";
+        return "";
+    };
+    window.HTMLAudioElement = HTMLAudioElement;
+    window.Audio = HTMLAudioElement;
+}
+
+// --- document.fonts (CSS Font Loading API) ---
+// pixi-text / RPG MV 等が document.fonts.ready / check / load を触る。
+// jsengine では Canvas2D.loadFont で先に登録する想定なので、ここは即時 ready を返すだけ。
+if (typeof document !== "undefined" && !document.fonts) {
+    document.fonts = {
+        ready: Promise.resolve(),
+        check: function() { return true; },
+        load: function() { return Promise.resolve(); }
+    };
 }
 
 // --- Intl シム (pixi.js v8 等で必要) ---
@@ -445,44 +541,76 @@ if (typeof document === "undefined") {
     var document = {};
 }
 document.createElement = function(tag) {
-    if (tag === "canvas") {
-        return new HTMLCanvasElement(1, 1);
-    }
-    if (tag === "div" || tag === "span" || tag === "p") {
-        return {
-            style: {},
-            classList: { add: function(){}, remove: function(){} },
-            appendChild: function() {},
-            removeChild: function() {},
-            addEventListener: function() {},
-            removeEventListener: function() {},
-            setAttribute: function() {},
-            getAttribute: function() { return null; },
-            innerHTML: "",
-            textContent: ""
-        };
-    }
-    return {};
+    if (tag === "canvas") return new HTMLCanvasElement(1, 1);
+    if (tag === "video")  return (typeof HTMLVideoElement !== "undefined") ? new HTMLVideoElement() : {};
+    if (tag === "audio")  return (typeof HTMLAudioElement !== "undefined") ? new HTMLAudioElement() : {};
+    if (tag === "img")    return (typeof Image !== "undefined") ? new Image() : {};
+    // div, span, p 等の汎用 element
+    return {
+        style: {},
+        classList: { add: function(){}, remove: function(){}, contains: function(){ return false; } },
+        appendChild: function(c) { return c; },
+        removeChild: function(c) { return c; },
+        insertBefore: function(c) { return c; },
+        addEventListener: function() {},
+        removeEventListener: function() {},
+        setAttribute: function() {},
+        getAttribute: function() { return null; },
+        getElementsByTagName: function() { return []; },
+        contains: function() { return false; },
+        getBoundingClientRect: function() { return {x:0, y:0, width:0, height:0, top:0, left:0, bottom:0, right:0}; },
+        innerHTML: "",
+        textContent: "",
+        tagName: (tag || "").toUpperCase(),
+        id: "",
+        className: "",
+        parentNode: null,
+        childNodes: [],
+        children: [],
+        firstChild: null,
+        offsetWidth: 0,
+        offsetHeight: 0
+    };
 };
 document.createElementNS = function(ns, tag) {
     return document.createElement(tag);
 };
+document.createTextNode = function(t) { return { textContent: t }; };
+document.createDocumentFragment = function() { return { appendChild: function(c){return c;}, childNodes: [] }; };
 document.getElementById = function() { return null; };
+document.getElementsByTagName = function() { return []; };
+document.getElementsByClassName = function() { return []; };
 document.querySelector = function() { return null; };
 document.querySelectorAll = function() { return []; };
-document.documentElement = { style: {} };
+document.styleSheets = [];
+document.documentElement = { style: {}, clientWidth: 1280, clientHeight: 720 };
 document.body = {
     style: {},
     appendChild: function(el) { return el; },
     removeChild: function(el) { return el; },
+    insertBefore: function(el) { return el; },
     contains: function() { return true; },
+    getElementsByTagName: function() { return []; },
+    addEventListener: function() {},
+    removeEventListener: function() {},
+    clientWidth: 1280,
+    clientHeight: 720
+};
+document.head = {
+    style: {},
+    appendChild: function(el) { return el; },
+    removeChild: function(el) { return el; },
     addEventListener: function() {},
     removeEventListener: function() {}
 };
-document.head = document.body;
 document.addEventListener = function(type, cb) { addEventListener(type, cb); };
 document.removeEventListener = function(type, cb) { removeEventListener(type, cb); };
 window.document = document;
+
+// AudioContext は C++ 側で window に登録済み。 古いブラウザ向けエイリアスを補う。
+if (typeof window.AudioContext !== "undefined" && typeof window.webkitAudioContext === "undefined") {
+    window.webkitAudioContext = window.AudioContext;
+}
 
 // --- Image ---
 function Image(width, height) {
@@ -591,7 +719,9 @@ window.URL = URL;
 globalThis.__blobStore = __blobStore;
 
 // --- createImageBitmap ラッパー（Blob / ArrayBuffer 対応） ---
-// ネイティブ版はファイルパスのみ対応。Blob/ArrayBuffer を受けた場合は decodeImageBuffer で処理。
+// ネイティブ版はファイルパスのみ対応 (同期的に Image オブジェクトを返す jsengine 拡張)。
+// Blob/ArrayBuffer は decodeImageBuffer で処理して Promise を返す (spec 準拠)。
+// 文字列の場合のみ後方互換のため同期挙動を維持。
 var _nativeCreateImageBitmap = createImageBitmap;
 globalThis.createImageBitmap = function(source) {
     if (source instanceof Blob) {
@@ -602,7 +732,8 @@ globalThis.createImageBitmap = function(source) {
         return Promise.resolve(decodeImageBuffer(source));
     }
     if (typeof source === "string") {
-        return Promise.resolve(_nativeCreateImageBitmap(source));
+        // 文字列 (ファイルパス) 引数は jsengine 拡張で同期。 ネイティブ実装が Image を即返す。
+        return _nativeCreateImageBitmap(source);
     }
     return Promise.reject(new Error("createImageBitmap: unsupported source type"));
 };
@@ -617,40 +748,43 @@ function XMLHttpRequest() {
     this.onerror = null;
     this.onreadystatechange = null;
 }
-XMLHttpRequest.prototype.open = function(method, url) {
+XMLHttpRequest.prototype.open = function(method, url, async) {
     this._method = method;
     this._url = url;
+    this._async = (async !== false);
     this.readyState = 1;
 };
 XMLHttpRequest.prototype.setRequestHeader = function() {};
+XMLHttpRequest.prototype.overrideMimeType = function() {};
 XMLHttpRequest.prototype.send = function() {
     var self = this;
+    // RPG Maker MV / pixi.loader 等は encodeURIComponent でファイル名を渡してくるので戻す
+    var url = self._url;
+    try { url = decodeURI(url); } catch(e) {}
     try {
-        var data = fs.readText(self._url);
-        self.readyState = 4;
-        self.status = 200;
         if (self.responseType === "arraybuffer") {
-            // テキストからバッファに変換（簡易）
-            var buf = new Uint8Array(data.length);
-            for (var i = 0; i < data.length; i++) buf[i] = data.charCodeAt(i);
-            self.response = buf.buffer;
+            // バイナリは fs.readBinary を使う。 charCodeAt 経由だと UTF-8 マルチバイトが壊れる。
+            self.response = fs.readBinary(url);
         } else {
+            var data = fs.readText(url);
             self.response = data;
             self.responseText = data;
         }
+        self.readyState = 4;
+        self.status = 200;
     } catch(e) {
         self.readyState = 4;
         self.status = 404;
+        self.response = null;
     }
-    if (typeof self.onreadystatechange === "function") {
-        setTimeout(function() { self.onreadystatechange(); }, 0);
-    }
-    if (self.status === 200 && typeof self.onload === "function") {
-        setTimeout(function() { self.onload(); }, 0);
-    }
-    if (self.status !== 200 && typeof self.onerror === "function") {
-        setTimeout(function() { self.onerror(); }, 0);
-    }
+    var dispatch = function(fn) {
+        if (typeof fn !== "function") return;
+        if (self._async === false) fn();
+        else setTimeout(fn, 0);
+    };
+    dispatch(self.onreadystatechange);
+    if (self.status === 200) dispatch(self.onload);
+    else dispatch(self.onerror);
 };
 window.XMLHttpRequest = XMLHttpRequest;
 
@@ -761,5 +895,4 @@ if (typeof globalThis === "undefined") {
     this.globalThis = window;
 }
 
-console.log("browser_shim.js loaded");
 } // end of __browser_shim_loaded guard

@@ -623,6 +623,9 @@ static JSValue source_disconnect(JSContext* /*ctx*/, JSValueConst this_val, int,
     return JS_UNDEFINED;
 }
 
+// forward decl (push_source_node が AudioParam ダミーで使用)
+static JSValue node_noop(JSContext*, JSValueConst, int, JSValueConst*);
+
 // AudioBufferSourceNode オブジェクトを構築 (path 指定なら即時ロード)
 static JSValue push_source_node(JSContext* ctx, AudioStream* preloadedStream) {
     JSValue obj = JS_NewObjectClass(ctx, js_audio_source_class_id);
@@ -654,6 +657,19 @@ static JSValue push_source_node(JSContext* ctx, AudioStream* preloadedStream) {
     def_acc("ended",  source_get_ended,  nullptr);
     def_acc("buffer", source_get_buffer, source_set_buffer);
     def_acc("group",  source_get_group,  source_set_group);
+
+    // WebAudio spec の表面互換 (実音には反映しないシム)
+    // loopStart / loopEnd: 数値フィールドだけ用意 (ネイティブのループは全体ループのみ)
+    JS_SetPropertyStr(ctx, obj, "loopStart", JS_NewFloat64(ctx, 0.0));
+    JS_SetPropertyStr(ctx, obj, "loopEnd",   JS_NewFloat64(ctx, 0.0));
+    // playbackRate: AudioParam ダミー (value / setValueAtTime 等)。 ピッチ変更はネイティブ未対応。
+    JSValue rate = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, rate, "value", JS_NewFloat64(ctx, 1.0));
+    JS_SetPropertyStr(ctx, rate, "setValueAtTime",            JS_NewCFunction(ctx, node_noop, "setValueAtTime", 2));
+    JS_SetPropertyStr(ctx, rate, "linearRampToValueAtTime",   JS_NewCFunction(ctx, node_noop, "linearRampToValueAtTime", 2));
+    JS_SetPropertyStr(ctx, rate, "exponentialRampToValueAtTime", JS_NewCFunction(ctx, node_noop, "exponentialRampToValueAtTime", 2));
+    JS_SetPropertyStr(ctx, rate, "cancelScheduledValues",     JS_NewCFunction(ctx, node_noop, "cancelScheduledValues", 1));
+    JS_SetPropertyStr(ctx, obj, "playbackRate", rate);
     return obj;
 }
 
@@ -995,11 +1011,39 @@ static JSValue actx_decodeAudioData(JSContext* ctx, JSValueConst /*this_val*/, i
     return promise;
 }
 
-static JSValue actx_resume(JSContext*, JSValueConst, int, JSValueConst*)  { return JS_UNDEFINED; }
-static JSValue actx_suspend(JSContext*, JSValueConst, int, JSValueConst*) { return JS_UNDEFINED; }
-static JSValue actx_close(JSContext*, JSValueConst, int, JSValueConst*) {
+// Promise.resolve(undefined) を返すヘルパ (resume/suspend 用)
+static JSValue resolved_promise(JSContext* ctx) {
+    JSValue resolvers[2];
+    JSValue promise = JS_NewPromiseCapability(ctx, resolvers);
+    JSValue r = JS_Call(ctx, resolvers[0], JS_UNDEFINED, 0, nullptr);
+    JS_FreeValue(ctx, r);
+    JS_FreeValue(ctx, resolvers[0]);
+    JS_FreeValue(ctx, resolvers[1]);
+    return promise;
+}
+
+// resume() / suspend() は WebAudio spec で Promise を返す
+static JSValue actx_resume(JSContext* ctx, JSValueConst, int, JSValueConst*)  { return resolved_promise(ctx); }
+static JSValue actx_suspend(JSContext* ctx, JSValueConst, int, JSValueConst*) { return resolved_promise(ctx); }
+static JSValue actx_close(JSContext* ctx, JSValueConst, int, JSValueConst*) {
     AudioEngine::GetInstance().StopAll();
-    return JS_UNDEFINED;
+    return resolved_promise(ctx);
+}
+
+// PannerNode (3D 空間音源) - jsengine ネイティブ実装は無いので no-op シム。
+// connect 系を持つので AudioContext 上のノードグラフに繋げられる。
+static JSValue node_noop(JSContext*, JSValueConst, int, JSValueConst*) { return JS_UNDEFINED; }
+
+static JSValue actx_createPanner(JSContext* ctx, JSValueConst, int, JSValueConst*) {
+    JSValue obj = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, obj, "panningModel", JS_NewString(ctx, "equalpower"));
+    JS_SetPropertyStr(ctx, obj, "distanceModel", JS_NewString(ctx, "inverse"));
+    JS_SetPropertyStr(ctx, obj, "setPosition",    JS_NewCFunction(ctx, node_noop, "setPosition",    3));
+    JS_SetPropertyStr(ctx, obj, "setOrientation", JS_NewCFunction(ctx, node_noop, "setOrientation", 6));
+    JS_SetPropertyStr(ctx, obj, "setVelocity",    JS_NewCFunction(ctx, node_noop, "setVelocity",    3));
+    JS_SetPropertyStr(ctx, obj, "connect",        JS_NewCFunction(ctx, node_noop, "connect",        1));
+    JS_SetPropertyStr(ctx, obj, "disconnect",     JS_NewCFunction(ctx, node_noop, "disconnect",     0));
+    return obj;
 }
 
 static JSValue actx_get_sampleRate(JSContext* ctx, JSValueConst, int, JSValueConst*) {
@@ -1027,6 +1071,7 @@ static JSValue actx_constructor(JSContext* ctx, JSValueConst /*new_target*/, int
     JS_SetPropertyStr(ctx, obj, "createBufferSource", JS_NewCFunction(ctx, actx_createBufferSource, "createBufferSource", 1));
     JS_SetPropertyStr(ctx, obj, "createGain",         JS_NewCFunction(ctx, actx_createGain,         "createGain",         0));
     JS_SetPropertyStr(ctx, obj, "createGroup",        JS_NewCFunction(ctx, actx_createGroup,        "createGroup",        1));
+    JS_SetPropertyStr(ctx, obj, "createPanner",       JS_NewCFunction(ctx, actx_createPanner,       "createPanner",       0));
     JS_SetPropertyStr(ctx, obj, "decodeAudioData",    JS_NewCFunction(ctx, actx_decodeAudioData,    "decodeAudioData",    3));
     JS_SetPropertyStr(ctx, obj, "resume",  JS_NewCFunction(ctx, actx_resume,  "resume",  0));
     JS_SetPropertyStr(ctx, obj, "suspend", JS_NewCFunction(ctx, actx_suspend, "suspend", 0));

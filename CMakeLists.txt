@@ -184,6 +184,24 @@ set(SOURCES
 	src/main.cpp
 )
 
+# ----------------------------------------------------
+# 内蔵初期化スクリプト (sysinit.js → builtin_sysinit.cpp)
+# main.js のロード前に自動評価される。 開発時は -sysinit <path> で
+# 外部ファイルに差し替え可能 (ビルドし直しを避けるため)。
+# ----------------------------------------------------
+set(SYSINIT_JS_SRC ${CMAKE_CURRENT_SOURCE_DIR}/src/sysinit.js)
+set(SYSINIT_CPP_OUT ${CMAKE_CURRENT_BINARY_DIR}/builtin_sysinit.cpp)
+add_custom_command(
+	OUTPUT ${SYSINIT_CPP_OUT}
+	COMMAND ${CMAKE_COMMAND}
+		-DINPUT=${SYSINIT_JS_SRC}
+		-DOUTPUT=${SYSINIT_CPP_OUT}
+		-P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed_sysinit.cmake
+	DEPENDS ${SYSINIT_JS_SRC} ${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed_sysinit.cmake
+	COMMENT "Embedding sysinit.js"
+)
+list(APPEND SOURCES ${SYSINIT_CPP_OUT})
+
 if(Vorbis_FOUND)
 	list(APPEND SOURCES src/audio/ma_libvorbis.c)
 endif()

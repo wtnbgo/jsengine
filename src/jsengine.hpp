@@ -39,6 +39,11 @@ public:
     // SDL3 のファイル関数経由で JS ファイルを読み込み実行
     bool loadFile(const char *path);
 
+    // 内蔵 sysinit.js (CMake で C++ に埋め込まれたブラウザシム) を評価。
+    // overridePath が非 nullptr なら、 内蔵ではなく指定ファイルから読む (開発用、 -sysinit オプション)。
+    // 全 binding (gl/Canvas2D/AudioContext/fs 等) 登録後、 main.js ロード前に呼ぶこと。
+    bool loadSysinit(const char *overridePath);
+
     JSContext* getContext() const { return ctx_; }
 
     // 任意の type と event オブジェクトを addEventListener で登録されたリスナへ配信。

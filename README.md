@@ -68,6 +68,7 @@ jsengine -quiet             # Warnings and errors only
 - `src/webaudio.h / webaudio.cpp` — Web Audio API bindings.
 - `src/canvas2d.h / canvas2d.cpp` — Canvas 2D API bindings (ThorVG-based).
 - `src/audio/` — AudioEngine / AudioStream (miniaudio + SDL3 audio).
+- `src/sysinit.js` — Built-in browser shim (window / document / HTMLCanvasElement / HTMLVideoElement / HTMLAudioElement / Image / XMLHttpRequest / fetch / document.fonts etc.). Embedded into the binary via CMake (`cmake/embed_sysinit.cmake`) and auto-evaluated before `main.js`. Override at runtime with `-sysinit <path>` (skip rebuild while iterating on the shim).
 
 ### JavaScript Lifecycle
 

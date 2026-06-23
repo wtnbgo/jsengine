@@ -84,10 +84,12 @@ bool App::init(int argc, char *argv[])
 
     // データパス決定（デフォルト: data、-data オプションで変更可）
     const char *dataPath = "data";
+    const char *sysinitOverride = nullptr;  // -sysinit <path> で内蔵 sysinit.js を差し替え
     for (int i = 1; i < argc; i++) {
         if (SDL_strcmp(argv[i], "-data") == 0 && i + 1 < argc) {
             dataPath = argv[i + 1];
-            break;
+        } else if (SDL_strcmp(argv[i], "-sysinit") == 0 && i + 1 < argc) {
+            sysinitOverride = argv[i + 1];
         }
     }
 
@@ -106,6 +108,12 @@ bool App::init(int argc, char *argv[])
     SDL_Log("Data path: %s", jsEngine_->getBasePath().c_str());
     if (!jsEngine_->init(argc, argv)) {
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to initialize JsEngine");
+        return false;
+    }
+
+    // 内蔵 sysinit.js (ブラウザシム) を main.js より先に実行
+    if (!jsEngine_->loadSysinit(sysinitOverride)) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to load sysinit");
         return false;
     }
 
