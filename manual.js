@@ -845,8 +845,10 @@ addEventListener("touchcancel", function(e) {
 //   - System.json の gameTitle を読み、 localStorage.setPath("jsengine_rpgmv", title)
 //     で SDL_GetPrefPath ベースの保存先を切り替え (ゲーム毎にセーブ分離)
 //   - GameFont (fonts/mplus-1m-regular.ttf) を Canvas2D.loadFont で登録
-//   - pixi.js v4.5.4 (lib/pixi.min.js) + rpg_core / managers / objects / scenes
-//     / sprites / windows / system を順次 loadScript
+//   - プロジェクト直下の index.html を読み、 <script src="..."> の列挙を
+//     順に loadScript する (pixi-tilemap / pixi-picture の有無、 ファイル名
+//     の差分等に追従)。 main.js / iphone-inline-video / plugins.js は bootstrap
+//     側で扱うのでスキップ。 index.html が無いときは標準構成にフォールバック。
 //   - WindowLayer / Graphics の jsengine 向けパッチを適用
 //   - PluginManager.setup → SceneManager.run(Scene_Boot) で起動
 //

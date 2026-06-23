@@ -63,19 +63,65 @@ try {
 
 // ------------------------------------------------------------
 // pixi.js v4 + RPG Maker MV コアをロード
+//
+// index.html を読んで <script src="..."> の列挙をそのまま再生する。
+// これによりプロジェクト毎に異なる構成 (pixi-tilemap / pixi-picture を含まない
+// バージョン、 デプロイ前に minified ファイル名に変わっているケース等) でも
+// 追加の特殊対応なしに動く。
+//   - js/main.js は我々の bootstrap がその役割を担うのでスキップ
+//   - iphone-inline-video.* は makeVideoPlayableInline ダミーで吸収済みなのでスキップ
+//   - index.html を読めない場合は標準構成 (pixi + tilemap + picture + fpsmeter +
+//     lz-string + rpg_*) にフォールバック
 // ------------------------------------------------------------
-loadScript("js/libs/pixi.js");
-loadScript("js/libs/pixi-tilemap.js");
-loadScript("js/libs/pixi-picture.js");
-loadScript("js/libs/fpsmeter.js");
-loadScript("js/libs/lz-string.js");
-
-loadScript("js/rpg_core.js");
-loadScript("js/rpg_managers.js");
-loadScript("js/rpg_objects.js");
-loadScript("js/rpg_scenes.js");
-loadScript("js/rpg_sprites.js");
-loadScript("js/rpg_windows.js");
+(function loadProjectScripts() {
+    var SKIP_PATTERNS = [
+        /(^|\/)main\.js$/i,        // 我々の bootstrap が main.js の役割
+        /iphone-inline-video/i,    // makeVideoPlayableInline ダミーで吸収
+        /(^|\/)plugins\.js$/i,     // override 適用後に明示 loadScript する
+    ];
+    var scripts = null;
+    try {
+        var html = fs.readText("index.html");
+        scripts = [];
+        // <script ... src="..."> を順序を保ったまま抽出。 attribute 順は問わない。
+        var re = /<script\b[^>]*\bsrc\s*=\s*("([^"]+)"|'([^']+)')[^>]*>/gi;
+        var m;
+        while ((m = re.exec(html)) !== null) {
+            var src = m[2] || m[3];
+            if (!src) continue;
+            // 同階層相対パスの先頭 "./" を剥がす
+            if (src.indexOf("./") === 0) src = src.substring(2);
+            var skip = false;
+            for (var i = 0; i < SKIP_PATTERNS.length; i++) {
+                if (SKIP_PATTERNS[i].test(src)) { skip = true; break; }
+            }
+            if (!skip) scripts.push(src);
+        }
+        if (scripts.length === 0) scripts = null;  // <script src> が無ければフォールバック
+    } catch(e) {
+        console.log("index.html not found, using default script list");
+        scripts = null;
+    }
+    if (!scripts) {
+        scripts = [
+            "js/libs/pixi.js",
+            "js/libs/pixi-tilemap.js",
+            "js/libs/pixi-picture.js",
+            "js/libs/fpsmeter.js",
+            "js/libs/lz-string.js",
+            "js/rpg_core.js",
+            "js/rpg_managers.js",
+            "js/rpg_objects.js",
+            "js/rpg_scenes.js",
+            "js/rpg_sprites.js",
+            "js/rpg_windows.js",
+        ];
+    }
+    console.log("Loading " + scripts.length + " scripts from index.html");
+    for (var j = 0; j < scripts.length; j++) {
+        loadScript(scripts[j]);
+    }
+})();
 
 // ------------------------------------------------------------
 // RPG Maker MV クラスへのオーバーライド (rpg_core.js 読み込み後)
