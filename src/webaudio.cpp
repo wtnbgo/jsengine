@@ -385,11 +385,22 @@ static void js_audio_source_finalizer(JSRuntime* /*rt*/, JSValue val) {
         v.erase(std::remove(v.begin(), v.end(), s), v.end());
         s->group = nullptr;
     }
-    // gain からの参照を外す
+    // gain からの参照を外す。
+    // ★ source が「gain の最後の入力」だった場合は、 gain の selfHold も連鎖解放する。
+    // WebAudio spec 厳密には gain.disconnect() を JS 側で呼ばないと selfHold は残るが、
+    // RPG Maker MV の WebAudio._removeNodes は disconnect を呼ばずに JS 参照を null 化
+    // するだけなので、 source 解放 = gain も解放したい意図と推測して連鎖する。
+    // gain への JS 側参照 (例: 別の変数で保持) が残っていれば refcount で生き残るため
+    // 即 finalize されることはない。
     if (s->connectedGain) {
-        auto& v = s->connectedGain->connectedSrcs;
+        JsAudioGain* g = s->connectedGain;
+        auto& v = g->connectedSrcs;
         v.erase(std::remove(v.begin(), v.end(), s), v.end());
         s->connectedGain = nullptr;
+        if (v.empty() && !JS_IsUndefined(g->selfHold)) {
+            gain_release_keep_alive(g);
+            // 注: ここで g が finalize されて delete される可能性があるので g に触らない
+        }
     }
     if (s->stream) {
         if (s->stream->IsPlaying()) {
