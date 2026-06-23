@@ -1627,6 +1627,40 @@ static JSValue native_storage_length(JSContext *ctx, JSValueConst this_val) {
     return JS_NewUint32(ctx, count);
 }
 
+// localStorage.setPath(orgName, appName) — jsengine 拡張
+//
+// `SDL_GetPrefPath(orgName, appName)` で得たディレクトリ配下の `localStorage.json`
+// を以降のセーブ/ロード対象にする。 メモリ上の `__localStorageData` は新パスの
+// ファイル内容で置き換える (= 新パスから読み直し)。
+//
+// アプリケーションごとに保存域を分けたい場合 (例: RPG Maker MV プロジェクトの
+// data/System.json の gameTitle で識別子を分ける) は main.js 側で本 API を呼ぶ。
+// 起動直後に呼ぶこと: 既に setItem 等で書き込んだ後に呼ぶと、 デフォルトパスに
+// 書いたデータは置き去りになる (新パスから読み直すので)。
+static JSValue native_storage_setPath(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    (void)this_val;
+    if (argc < 2) return JS_UNDEFINED;
+    const char *org = JS_ToCString(ctx, argv[0]);
+    if (!org) return JS_UNDEFINED;
+    const char *app = JS_ToCString(ctx, argv[1]);
+    if (!app) { JS_FreeCString(ctx, org); return JS_UNDEFINED; }
+
+    char *p = SDL_GetPrefPath(org, app);
+    if (p) {
+        JsEngine *engine = JsEngine::getInstance();
+        if (engine) engine->setPrefPath(p);
+        SDL_Log("localStorage path: %s", p);
+        SDL_free(p);
+    }
+
+    JS_FreeCString(ctx, org);
+    JS_FreeCString(ctx, app);
+
+    // 新パスから localStorage を再ロード (既存メモリ上の data は破棄)
+    storage_load(ctx);
+    return JS_UNDEFINED;
+}
+
 static void storage_register(JSContext *ctx) {
     // ファイルからデータ復元
     storage_load(ctx);
@@ -1639,6 +1673,7 @@ static void storage_register(JSContext *ctx) {
     JS_SetPropertyStr(ctx, ls, "removeItem", JS_NewCFunction(ctx, native_storage_removeItem, "removeItem", 1));
     JS_SetPropertyStr(ctx, ls, "clear", JS_NewCFunction(ctx, native_storage_clear, "clear", 0));
     JS_SetPropertyStr(ctx, ls, "key", JS_NewCFunction(ctx, native_storage_key, "key", 1));
+    JS_SetPropertyStr(ctx, ls, "setPath", JS_NewCFunction(ctx, native_storage_setPath, "setPath", 2));
 
     // length を getter プロパティとして定義
     JSAtom lengthAtom = JS_NewAtom(ctx, "length");
