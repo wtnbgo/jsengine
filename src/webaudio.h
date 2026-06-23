@@ -15,3 +15,7 @@ void webaudio_gc();
 
 // QuickJS に Web Audio API バインディングを登録
 void webaudio_bind(JSContext *ctx);
+
+// JS_FreeContext より前に呼ぶこと: 再生中 source の selfHold と GainNode の selfHold
+// を放出し、 自己ループ参照が残って JS_FreeRuntime で assert する事態を防ぐ。
+void webaudio_release_self_holds(JSContext *ctx);

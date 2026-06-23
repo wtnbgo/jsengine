@@ -42,6 +42,17 @@ window.blur = function() {};
 window.open = function() { return null; };
 window.alert = function(msg) { console.log("ALERT: " + msg); };
 window.confirm = function() { return true; };
+// window.resizeTo(w, h): jsengine ネイティブ window をリサイズする
+// (C++ 側で __nativeWindowResize が登録されている時のみ有効)
+window.resizeTo = function(w, h) {
+    if (typeof __nativeWindowResize === "function") {
+        __nativeWindowResize(w | 0, h | 0);
+        window.innerWidth  = w | 0;
+        window.innerHeight = h | 0;
+        window.outerWidth  = w | 0;
+        window.outerHeight = h | 0;
+    }
+};
 window.console = console;
 window.setTimeout = setTimeout;
 window.clearTimeout = clearTimeout;
@@ -84,15 +95,27 @@ function HTMLCanvasElement(width, height) {
     this.style = {};
     this.classList = { add: function(){}, remove: function(){} };
     this._glContext = null;
+    // ブラウザ DOM 互換のオフセット系プロパティ
+    // (RPG Maker MV の Graphics.pageToCanvasX 等が offsetLeft を読む。
+    //  実フルスクリーン canvas 想定で 0 のままが妥当。)
+    this.offsetLeft = 0;
+    this.offsetTop = 0;
+    this.offsetWidth = this._width;
+    this.offsetHeight = this._height;
+    this.clientLeft = 0;
+    this.clientTop = 0;
+    this.clientWidth = this._width;
+    this.clientHeight = this._height;
 }
 
-// width/height setter: 変更時に Canvas2D を再作成
+// width/height setter: 変更時に Canvas2D を再作成、 offset/client サイズも追従
 Object.defineProperty(HTMLCanvasElement.prototype, "width", {
     get: function() { return this._width; },
     set: function(v) {
         v = Math.max(1, v | 0);
         this._width = v;
-        // キャッシュ済み Canvas2D があればリサイズ
+        this.offsetWidth = v;
+        this.clientWidth = v;
         if (this._ctx2d && typeof this._ctx2d._resize === "function") {
             this._ctx2d._resize(this._width, this._height);
         }
@@ -103,6 +126,8 @@ Object.defineProperty(HTMLCanvasElement.prototype, "height", {
     set: function(v) {
         v = Math.max(1, v | 0);
         this._height = v;
+        this.offsetHeight = v;
+        this.clientHeight = v;
         if (this._ctx2d && typeof this._ctx2d._resize === "function") {
             this._ctx2d._resize(this._width, this._height);
         }

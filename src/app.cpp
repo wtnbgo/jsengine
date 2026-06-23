@@ -128,6 +128,12 @@ bool App::init(int argc, char *argv[])
 
 App::~App()
 {
+    // ★ オーディオシステムを先に止める。
+    // JsEngine 解放途中で abort/assert に遭遇した場合でも、 ma_engine が止まっていれば
+    // 音が鳴り続ける事態を防げる。 JsAudioGain/Source の finalizer は webaudio_uninit 後
+    // でも安全に動作するよう設計されている (StopAll 後の stream を delete or pending 移動するだけ)。
+    webaudio_uninit();
+
     // JsEngine 終了
     if (jsEngine_) {
         jsEngine_.reset();
@@ -135,9 +141,6 @@ App::~App()
 
     // ゲームパッドサブシステム終了
     webgamepad_uninit();
-
-    // オーディオシステム終了
-    webaudio_uninit();
 
     // Canvas2D (ThorVG) 終了
     canvas2d_uninit();

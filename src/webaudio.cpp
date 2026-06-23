@@ -342,6 +342,33 @@ void webaudio_update(uint32_t deltaMs) {
 // 旧 API 互換 (app.cpp が webaudio_gc() を呼ぶケース用)
 void webaudio_gc() { webaudio_update(0); }
 
+// 終了直前に呼ぶ: 自己ループ参照を断つ。
+// source.selfHold は source 自身を参照、 gain.selfHold は gain 自身を参照する設計のため、
+// 通常の JS_FreeContext 経路では refcount が下がらず JS_FreeRuntime で assert する。
+void webaudio_release_self_holds(JSContext* ctx) {
+    if (!ctx) return;
+    int sourceHeld = 0, gainHeld = 0;
+    for (auto* s : g_aliveSources) {
+        if (s && !JS_IsUndefined(s->selfHold)) {
+            JSValue v = s->selfHold;
+            s->selfHold = JS_UNDEFINED;
+            JS_FreeValue(ctx, v);
+            sourceHeld++;
+        }
+    }
+    g_aliveSources.clear();
+    for (auto* g : g_allGains) {
+        if (g && !JS_IsUndefined(g->selfHold)) {
+            JSValue v = g->selfHold;
+            g->selfHold = JS_UNDEFINED;
+            JS_FreeValue(ctx, v);
+            gainHeld++;
+        }
+    }
+    SDL_Log("webaudio cleanup: selfHold released src=%d gain=%d, remaining g_allGains=%zu",
+            sourceHeld, gainHeld, g_allGains.size());
+}
+
 // ============================================================
 // クラス finalizer
 // ============================================================

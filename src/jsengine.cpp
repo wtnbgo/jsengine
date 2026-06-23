@@ -1,8 +1,10 @@
 #include "jsengine.hpp"
+#include "app.hpp"
 #include "webgl.h"
 #include "webaudio.h"
 #include "webgamepad.h"
 #include "canvas2d.h"
+#include "glad/gles2.h"
 #include <quickjs.h>
 #include <SDL3/SDL.h>
 #include <SDL3_image/SDL_image.h>
@@ -403,6 +405,28 @@ static JSValue native_cancelAnimationFrame(JSContext *ctx, JSValueConst this_val
 static JSValue native_performance_now(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     (void)this_val; (void)argc; (void)argv;
     return JS_NewFloat64(ctx, (double)SDL_GetTicks());
+}
+
+// window.resizeTo(w, h) の実体: SDL_Window をリサイズし GL viewport を更新する。
+// JS から window.resizeTo() 経由で呼ばれる (sysinit.js でラップ)。
+static JSValue native_windowResize(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    (void)this_val;
+    if (argc < 2) return JS_UNDEFINED;
+    int32_t w = 0, h = 0;
+    JS_ToInt32(ctx, &w, argv[0]);
+    JS_ToInt32(ctx, &h, argv[1]);
+    if (w <= 0 || h <= 0) return JS_UNDEFINED;
+
+    App *app = App::getInstance();
+    SDL_Window *win = app ? app->getWindow() : nullptr;
+    if (!win) return JS_UNDEFINED;
+
+    SDL_SetWindowSize(win, w, h);
+    // OpenGL のドローバブルサイズ (HiDPI ピクセル) に viewport を合わせる
+    int dw = w, dh = h;
+    SDL_GetWindowSizeInPixels(win, &dw, &dh);
+    glViewport(0, 0, dw, dh);
+    return JS_UNDEFINED;
 }
 
 // ============================================================
@@ -1755,6 +1779,10 @@ bool JsEngine::init(int argc, char **argv) {
     JS_SetPropertyStr(ctx_, perf, "now", JS_NewCFunction(ctx_, native_performance_now, "now", 0));
     JS_SetPropertyStr(ctx_, global, "performance", perf);
 
+    // window.resizeTo の native 実装 (sysinit.js が typeof で見つけて wrap する)
+    JS_SetPropertyStr(ctx_, global, "__nativeWindowResize",
+        JS_NewCFunction(ctx_, native_windowResize, "__nativeWindowResize", 2));
+
     // ビルド種別フラグ: Debug ビルドでのみ JS 側のデバッグ用検証コードが動く
 #ifdef NDEBUG
     JS_SetPropertyStr(ctx_, global, "__DEBUG__", JS_FALSE);
@@ -1874,6 +1902,7 @@ void JsEngine::processTimers() {
     size_t i = 0;
     while (i < g_timers.size()) {
         if (g_timers[i].cancelled) {
+            // clearTimeout 側で既に callback は free 済み (JS_UNDEFINED に置換)
             g_timers.erase(g_timers.begin() + (ptrdiff_t)i);
             continue;
         }
@@ -1881,20 +1910,44 @@ void JsEngine::processTimers() {
             int id = g_timers[i].id;
             bool isInterval = g_timers[i].interval;
             uint32_t delay = g_timers[i].delay;
-            JSValue cb = g_timers[i].callback;
+            // コールバック中に同じ timer に対して clearTimeout が呼ばれると
+            // g_timers[i].callback が即 free されるため、 ローカルで dup して保護する。
+            JSValue cb = JS_DupValue(ctx_, g_timers[i].callback);
 
             JSValue result = JS_Call(ctx_, cb, JS_UNDEFINED, 0, nullptr);
             if (JS_IsException(result)) {
                 log_exception(ctx_, "Timer error");
             }
             JS_FreeValue(ctx_, result);
+            // ローカル dup を解放
+            JS_FreeValue(ctx_, cb);
 
+            // コールバック実行中に g_timers が変化 (新規 setTimeout / 自身の cancel /
+            // 他 timer の cancel での順序変動) する可能性があるため、 同じ id を再探索する。
+            size_t idx = i;
+            bool found = false;
+            for (size_t k = 0; k < g_timers.size(); k++) {
+                if (g_timers[k].id == id) { idx = k; found = true; break; }
+            }
+            if (!found) {
+                // コールバック内で clearTimeout(id) された (idx は cancelled で erase 済み)
+                continue;  // i はそのまま、 次のループへ
+            }
+            if (g_timers[idx].cancelled) {
+                // cancelled mark のみ。 次の頭出しループで erase される。
+                i = idx + 1;
+                continue;
+            }
             if (isInterval) {
-                g_timers[i].fireTime = g_currentTime + delay;
-                i++;
+                g_timers[idx].fireTime = g_currentTime + delay;
+                i = idx + 1;
             } else {
-                JS_FreeValue(ctx_, cb);
-                g_timers.erase(g_timers.begin() + (ptrdiff_t)i);
+                // oneshot: callback の参照はまだ生きてる (clearTimeout 経由でない場合)。 ここで free。
+                JS_FreeValue(ctx_, g_timers[idx].callback);
+                g_timers[idx].callback = JS_UNDEFINED;
+                g_timers.erase(g_timers.begin() + (ptrdiff_t)idx);
+                // i は erase で 1 つズレるので調整 (idx <= i のはず)
+                if (idx <= i && i > 0) i = idx;
             }
         } else {
             i++;
@@ -2045,6 +2098,59 @@ void JsEngine::dispatchEvent(const char *type, JSValue event_obj) {
     JS_FreeValue(ctx_, event_obj);
 }
 
+// SDL_Keycode → ブラウザ KeyboardEvent.keyCode (Windows VK code) のレガシー変換。
+// SDL3 の SDL_Keycode は SDL 独自値 (矢印キー等は 0x40000000 以上) で、 RPG Maker MV
+// 等 keyCode に依存する古いコードと整合しない。 これは spec deprecated だが現役で多い。
+static uint32_t sdl_key_to_legacy_keycode(SDL_Keycode k) {
+    switch (k) {
+    case SDLK_BACKSPACE: return 8;
+    case SDLK_TAB:       return 9;
+    case SDLK_RETURN:    return 13;
+    case SDLK_LSHIFT: case SDLK_RSHIFT: return 16;
+    case SDLK_LCTRL:  case SDLK_RCTRL:  return 17;
+    case SDLK_LALT:   case SDLK_RALT:   return 18;
+    case SDLK_PAUSE:    return 19;
+    case SDLK_CAPSLOCK: return 20;
+    case SDLK_ESCAPE:   return 27;
+    case SDLK_SPACE:    return 32;
+    case SDLK_PAGEUP:   return 33;
+    case SDLK_PAGEDOWN: return 34;
+    case SDLK_END:      return 35;
+    case SDLK_HOME:     return 36;
+    case SDLK_LEFT:     return 37;
+    case SDLK_UP:       return 38;
+    case SDLK_RIGHT:    return 39;
+    case SDLK_DOWN:     return 40;
+    case SDLK_INSERT:   return 45;
+    case SDLK_DELETE:   return 46;
+    case SDLK_F1:  return 112; case SDLK_F2:  return 113;
+    case SDLK_F3:  return 114; case SDLK_F4:  return 115;
+    case SDLK_F5:  return 116; case SDLK_F6:  return 117;
+    case SDLK_F7:  return 118; case SDLK_F8:  return 119;
+    case SDLK_F9:  return 120; case SDLK_F10: return 121;
+    case SDLK_F11: return 122; case SDLK_F12: return 123;
+    case SDLK_NUMLOCKCLEAR: return 144;
+    case SDLK_SCROLLLOCK:   return 145;
+    case SDLK_SEMICOLON:  return 186;
+    case SDLK_EQUALS:     return 187;
+    case SDLK_COMMA:      return 188;
+    case SDLK_MINUS:      return 189;
+    case SDLK_PERIOD:     return 190;
+    case SDLK_SLASH:      return 191;
+    case SDLK_GRAVE:      return 192;
+    case SDLK_LEFTBRACKET:  return 219;
+    case SDLK_BACKSLASH:    return 220;
+    case SDLK_RIGHTBRACKET: return 221;
+    case SDLK_APOSTROPHE:   return 222;
+    default:
+        // 'a'-'z' → 'A'-'Z' (ブラウザは小文字でも 65-90 を返す)
+        if (k >= 'a' && k <= 'z') return (uint32_t)(k - 'a' + 'A');
+        // 0-9 (ASCII 48-57) はそのまま
+        if (k >= '0' && k <= '9') return (uint32_t)k;
+        return (uint32_t)k;
+    }
+}
+
 // ============================================================
 // キーボードイベント構築
 // ============================================================
@@ -2067,8 +2173,10 @@ JSValue JsEngine::pushKeyboardEvent(const SDL_Event *event, const char *type) {
     const char *jsCode = sdl_scancode_to_js_code(key.scancode);
     JS_SetPropertyStr(ctx_, obj, "code", JS_NewString(ctx_, jsCode ? jsCode : ""));
 
-    // keyCode (レガシー互換)
-    JS_SetPropertyStr(ctx_, obj, "keyCode", JS_NewUint32(ctx_, (uint32_t)key.key));
+    // keyCode (レガシー互換): SDL_Keycode をブラウザ Windows VK code に変換
+    uint32_t legacy = sdl_key_to_legacy_keycode(key.key);
+    JS_SetPropertyStr(ctx_, obj, "keyCode", JS_NewUint32(ctx_, legacy));
+    JS_SetPropertyStr(ctx_, obj, "which",   JS_NewUint32(ctx_, legacy));
 
     // 修飾キー
     JS_SetPropertyStr(ctx_, obj, "altKey", JS_NewBool(ctx_, (key.mod & SDL_KMOD_ALT) != 0));
@@ -2089,10 +2197,10 @@ JSValue JsEngine::pushMouseEvent(const SDL_Event *event, const char *type) {
 
     JS_SetPropertyStr(ctx_, obj, "type", JS_NewString(ctx_, type));
 
+    double cx = 0.0, cy = 0.0;
     if (event->type == SDL_EVENT_MOUSE_MOTION) {
         const SDL_MouseMotionEvent &m = event->motion;
-        JS_SetPropertyStr(ctx_, obj, "clientX", JS_NewFloat64(ctx_, m.x));
-        JS_SetPropertyStr(ctx_, obj, "clientY", JS_NewFloat64(ctx_, m.y));
+        cx = m.x; cy = m.y;
         JS_SetPropertyStr(ctx_, obj, "movementX", JS_NewFloat64(ctx_, m.xrel));
         JS_SetPropertyStr(ctx_, obj, "movementY", JS_NewFloat64(ctx_, m.yrel));
         // buttons ビットマスク（ブラウザ互換: 1=左, 2=右, 4=中）
@@ -2100,8 +2208,7 @@ JSValue JsEngine::pushMouseEvent(const SDL_Event *event, const char *type) {
         JS_SetPropertyStr(ctx_, obj, "button", JS_NewInt32(ctx_, 0));
     } else {
         const SDL_MouseButtonEvent &b = event->button;
-        JS_SetPropertyStr(ctx_, obj, "clientX", JS_NewFloat64(ctx_, b.x));
-        JS_SetPropertyStr(ctx_, obj, "clientY", JS_NewFloat64(ctx_, b.y));
+        cx = b.x; cy = b.y;
         // SDL button: 1=左,2=中,3=右 → ブラウザ button: 0=左,1=中,2=右
         int jsButton = 0;
         switch (b.button) {
@@ -2115,6 +2222,18 @@ JSValue JsEngine::pushMouseEvent(const SDL_Event *event, const char *type) {
         JS_SetPropertyStr(ctx_, obj, "movementX", JS_NewFloat64(ctx_, 0));
         JS_SetPropertyStr(ctx_, obj, "movementY", JS_NewFloat64(ctx_, 0));
     }
+    // ブラウザ MouseEvent 互換: clientX/Y, pageX/Y, screenX/Y, offsetX/Y, x/y を全部同値で埋める
+    // (jsengine ではスクロール / オフセット親要素は無いので同じ値で OK)
+    JS_SetPropertyStr(ctx_, obj, "clientX", JS_NewFloat64(ctx_, cx));
+    JS_SetPropertyStr(ctx_, obj, "clientY", JS_NewFloat64(ctx_, cy));
+    JS_SetPropertyStr(ctx_, obj, "pageX",   JS_NewFloat64(ctx_, cx));
+    JS_SetPropertyStr(ctx_, obj, "pageY",   JS_NewFloat64(ctx_, cy));
+    JS_SetPropertyStr(ctx_, obj, "screenX", JS_NewFloat64(ctx_, cx));
+    JS_SetPropertyStr(ctx_, obj, "screenY", JS_NewFloat64(ctx_, cy));
+    JS_SetPropertyStr(ctx_, obj, "offsetX", JS_NewFloat64(ctx_, cx));
+    JS_SetPropertyStr(ctx_, obj, "offsetY", JS_NewFloat64(ctx_, cy));
+    JS_SetPropertyStr(ctx_, obj, "x",       JS_NewFloat64(ctx_, cx));
+    JS_SetPropertyStr(ctx_, obj, "y",       JS_NewFloat64(ctx_, cy));
 
     // 修飾キー（現在の状態）
     SDL_Keymod mod = SDL_GetModState();
@@ -2143,6 +2262,8 @@ JSValue JsEngine::pushWheelEvent(const SDL_Event *event) {
 
     JS_SetPropertyStr(ctx_, obj, "clientX", JS_NewFloat64(ctx_, w.mouse_x));
     JS_SetPropertyStr(ctx_, obj, "clientY", JS_NewFloat64(ctx_, w.mouse_y));
+    JS_SetPropertyStr(ctx_, obj, "pageX",   JS_NewFloat64(ctx_, w.mouse_x));
+    JS_SetPropertyStr(ctx_, obj, "pageY",   JS_NewFloat64(ctx_, w.mouse_y));
 
     // deltaMode: 0 = DOM_DELTA_PIXEL
     JS_SetPropertyStr(ctx_, obj, "deltaMode", JS_NewInt32(ctx_, 0));
@@ -2363,8 +2484,23 @@ void JsEngine::done() {
     g_timers.clear();
     g_timerNextId = 1;
 
+    // 内部で自分自身を保持している (selfHold) WebAudio オブジェクトを放出。
+    // 通常の JS_FreeContext 経由では自己ループ参照のため refcount が 0 にならず、
+    // JS_FreeRuntime で「未解放 object あり」assert を発火する。
+    webaudio_release_self_holds(ctx_);
+
+    // 循環参照 (JS 側で A.x = A のような自己/相互参照) は refcount だけでは 0 にならない。
+    // JS_RunGC で mark-and-sweep を走らせて gc_obj_list を回収する。
+    // 多段の循環チェーン (A→B→C→A 等) は 1 回の GC で全部回収できないことがあるので複数回回す。
+    for (int i = 0; i < 5; i++) JS_RunGC(rt_);
     JS_FreeContext(ctx_);
     ctx_ = nullptr;
+    for (int i = 0; i < 5; i++) JS_RunGC(rt_);
+#ifndef NDEBUG
+    // Debug ビルド (ENABLE_DUMPS 有効) ではリークが残ると abort 前に
+    // どの object/string が残っているかを stderr に dump する。
+    JS_SetDumpFlags(rt_, JS_DUMP_LEAKS);
+#endif
     JS_FreeRuntime(rt_);
     rt_ = nullptr;
     SDL_Log("JsEngine destroyed");
