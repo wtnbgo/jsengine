@@ -11,6 +11,7 @@
 #include <SDL3/SDL.h>
 #include <cstdlib>
 #include <cstring>
+#include <vector>
 
 // ============================================================
 // ヘルパー: WebGL オブジェクト（GLuint ID をラップ）
@@ -80,6 +81,60 @@ static void* qjs_get_buffer(JSContext *ctx, JSValueConst val, size_t *out_size) 
     }
     if (out_size) *out_size = 0;
     return NULL;
+}
+
+// JS Array → 数値ベクター変換ヘルパー (uniform*v / vertexAttrib*v 等で
+// pixi が plain Array で渡してくるパターンに対応)。
+// 戻り値: 配列の場合 true (out にコピー)。 それ以外は false。
+static bool qjs_array_to_int_vec(JSContext *ctx, JSValueConst val, std::vector<GLint> &out) {
+    if (!JS_IsArray(val)) return false;
+    JSValue lenVal = JS_GetPropertyStr(ctx, val, "length");
+    uint32_t len = 0;
+    JS_ToUint32(ctx, &len, lenVal);
+    JS_FreeValue(ctx, lenVal);
+    out.resize(len);
+    for (uint32_t i = 0; i < len; i++) {
+        JSValue v = JS_GetPropertyUint32(ctx, val, i);
+        int32_t s = 0;
+        JS_ToInt32(ctx, &s, v);
+        out[i] = (GLint)s;
+        JS_FreeValue(ctx, v);
+    }
+    return true;
+}
+
+static bool qjs_array_to_uint_vec(JSContext *ctx, JSValueConst val, std::vector<GLuint> &out) {
+    if (!JS_IsArray(val)) return false;
+    JSValue lenVal = JS_GetPropertyStr(ctx, val, "length");
+    uint32_t len = 0;
+    JS_ToUint32(ctx, &len, lenVal);
+    JS_FreeValue(ctx, lenVal);
+    out.resize(len);
+    for (uint32_t i = 0; i < len; i++) {
+        JSValue v = JS_GetPropertyUint32(ctx, val, i);
+        uint32_t u = 0;
+        JS_ToUint32(ctx, &u, v);
+        out[i] = (GLuint)u;
+        JS_FreeValue(ctx, v);
+    }
+    return true;
+}
+
+static bool qjs_array_to_float_vec(JSContext *ctx, JSValueConst val, std::vector<GLfloat> &out) {
+    if (!JS_IsArray(val)) return false;
+    JSValue lenVal = JS_GetPropertyStr(ctx, val, "length");
+    uint32_t len = 0;
+    JS_ToUint32(ctx, &len, lenVal);
+    JS_FreeValue(ctx, lenVal);
+    out.resize(len);
+    for (uint32_t i = 0; i < len; i++) {
+        JSValue v = JS_GetPropertyUint32(ctx, val, i);
+        double d = 0;
+        JS_ToFloat64(ctx, &d, v);
+        out[i] = (GLfloat)d;
+        JS_FreeValue(ctx, v);
+    }
+    return true;
 }
 
 // ピクセルデータ取得ヘルパー
@@ -404,16 +459,23 @@ static JSValue js_bufferData(JSContext *ctx, JSValueConst this_val, int argc, JS
 
     size_t data_size = 0;
     GLvoid *data = (GLvoid *)qjs_get_buffer(ctx, argv[1], &data_size);
+    std::vector<GLfloat> tmp;
     if (!data) {
-        // argv[1] が数値の場合はサイズ指定
-        double d;
-        if (JS_ToFloat64(ctx, &d, argv[1]) == 0 && !JS_IsObject(argv[1])) {
-            data_size = (size_t)d;
+        // plain Array が渡された場合 (Float に集約してコピー)
+        if (qjs_array_to_float_vec(ctx, argv[1], tmp)) {
+            data = tmp.data();
+            data_size = tmp.size() * sizeof(GLfloat);
+        } else {
+            // argv[1] が数値の場合はサイズ指定
+            double d;
+            if (JS_ToFloat64(ctx, &d, argv[1]) == 0 && !JS_IsObject(argv[1])) {
+                data_size = (size_t)d;
+            }
         }
     }
     GLenum usage = (GLenum)arg_uint(ctx, argv[2]);
 
-    if (argc > 3) {
+    if (argc > 3 && data) {
         uint32_t src_offset = arg_uint(ctx, argv[3]);
         data = (GLvoid*)((char*)data + src_offset);
         data_size -= src_offset;
@@ -432,7 +494,12 @@ static JSValue js_bufferSubData(JSContext *ctx, JSValueConst this_val, int argc,
 
     size_t data_size = 0;
     GLvoid *data = (GLvoid *)qjs_get_buffer(ctx, argv[2], &data_size);
-    if (argc > 3) {
+    std::vector<GLfloat> tmp;
+    if (!data && qjs_array_to_float_vec(ctx, argv[2], tmp)) {
+        data = tmp.data();
+        data_size = tmp.size() * sizeof(GLfloat);
+    }
+    if (argc > 3 && data) {
         uint32_t src_offset = arg_uint(ctx, argv[3]);
         data = (GLvoid*)((char*)data + src_offset);
         data_size -= src_offset;
@@ -929,39 +996,58 @@ static JSValue js_uniform4f(JSContext *ctx, JSValueConst this_val, int argc, JSV
     return JS_UNDEFINED;
 }
 
-// uniform*fv / uniform*iv
-#define DEFINE_UNIFORM_FV(name, cType, glFunc) \
+// uniform*fv / uniform*iv / uniform*uiv
+// pixi v4 (PIXI.glCore の uniform setter) は sampler2D[] 等を plain JS Array で渡してくる。
+// TypedArray / ArrayBuffer に加えて Array も受け付けないと、uSamplers[] が default 0 のままになり
+// MultiTexture sprite shader で全 sampler が TEXTURE0 を sampling して描画が壊れる。
+#define DEFINE_UNIFORM_FV(name, cType, glFunc, vecHelper) \
     static JSValue js_##name(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) { \
         GLint loc = get_gl_object_id_int(ctx, argv[0]); \
+        if (loc < 0) return JS_UNDEFINED; \
         size_t count = 0; \
         const cType *value = (const cType *)qjs_get_buffer(ctx, argv[1], &count); \
-        if (value && loc >= 0) { \
+        std::vector<cType> tmp; \
+        if (!value) { \
+            if (vecHelper(ctx, argv[1], tmp)) { \
+                value = tmp.data(); \
+                count = tmp.size(); \
+            } \
+        } \
+        if (value && count > 0) { \
             glFunc(loc, (GLsizei)count, value); \
         } \
         return JS_UNDEFINED; \
     }
 
-DEFINE_UNIFORM_FV(uniform1fv, GLfloat, glUniform1fv)
-DEFINE_UNIFORM_FV(uniform2fv, GLfloat, glUniform2fv)
-DEFINE_UNIFORM_FV(uniform3fv, GLfloat, glUniform3fv)
-DEFINE_UNIFORM_FV(uniform4fv, GLfloat, glUniform4fv)
-DEFINE_UNIFORM_FV(uniform1iv, GLint, glUniform1iv)
-DEFINE_UNIFORM_FV(uniform2iv, GLint, glUniform2iv)
-DEFINE_UNIFORM_FV(uniform3iv, GLint, glUniform3iv)
-DEFINE_UNIFORM_FV(uniform4iv, GLint, glUniform4iv)
-DEFINE_UNIFORM_FV(uniform1uiv, GLuint, glUniform1uiv)
-DEFINE_UNIFORM_FV(uniform2uiv, GLuint, glUniform2uiv)
-DEFINE_UNIFORM_FV(uniform3uiv, GLuint, glUniform3uiv)
-DEFINE_UNIFORM_FV(uniform4uiv, GLuint, glUniform4uiv)
+DEFINE_UNIFORM_FV(uniform1fv, GLfloat, glUniform1fv, qjs_array_to_float_vec)
+DEFINE_UNIFORM_FV(uniform2fv, GLfloat, glUniform2fv, qjs_array_to_float_vec)
+DEFINE_UNIFORM_FV(uniform3fv, GLfloat, glUniform3fv, qjs_array_to_float_vec)
+DEFINE_UNIFORM_FV(uniform4fv, GLfloat, glUniform4fv, qjs_array_to_float_vec)
+DEFINE_UNIFORM_FV(uniform1iv, GLint, glUniform1iv, qjs_array_to_int_vec)
+DEFINE_UNIFORM_FV(uniform2iv, GLint, glUniform2iv, qjs_array_to_int_vec)
+DEFINE_UNIFORM_FV(uniform3iv, GLint, glUniform3iv, qjs_array_to_int_vec)
+DEFINE_UNIFORM_FV(uniform4iv, GLint, glUniform4iv, qjs_array_to_int_vec)
+DEFINE_UNIFORM_FV(uniform1uiv, GLuint, glUniform1uiv, qjs_array_to_uint_vec)
+DEFINE_UNIFORM_FV(uniform2uiv, GLuint, glUniform2uiv, qjs_array_to_uint_vec)
+DEFINE_UNIFORM_FV(uniform3uiv, GLuint, glUniform3uiv, qjs_array_to_uint_vec)
+DEFINE_UNIFORM_FV(uniform4uiv, GLuint, glUniform4uiv, qjs_array_to_uint_vec)
 
 // uniformMatrix*fv
 #define DEFINE_UNIFORM_MATRIX(name, glFunc) \
     static JSValue js_##name(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) { \
         GLint loc = get_gl_object_id_int(ctx, argv[0]); \
+        if (loc < 0) return JS_UNDEFINED; \
         GLboolean transpose = JS_ToBool(ctx, argv[1]) ? GL_TRUE : GL_FALSE; \
         size_t count = 0; \
         const GLfloat *value = (const GLfloat *)qjs_get_buffer(ctx, argv[2], &count); \
-        if (value && loc >= 0) { \
+        std::vector<GLfloat> tmp; \
+        if (!value) { \
+            if (qjs_array_to_float_vec(ctx, argv[2], tmp)) { \
+                value = tmp.data(); \
+                count = tmp.size(); \
+            } \
+        } \
+        if (value && count > 0) { \
             glFunc(loc, 1, transpose, value); \
         } \
         return JS_UNDEFINED; \
@@ -1507,7 +1593,9 @@ static JSValue js_clearBufferfv(JSContext *ctx, JSValueConst this_val, int argc,
     GLenum buffer = (GLenum)arg_uint(ctx, argv[0]);
     GLint drawbuffer = (GLint)arg_int(ctx, argv[1]);
     const GLfloat *value = (const GLfloat *)qjs_get_buffer(ctx, argv[2], NULL);
-    glClearBufferfv(buffer, drawbuffer, value);
+    std::vector<GLfloat> tmp;
+    if (!value && qjs_array_to_float_vec(ctx, argv[2], tmp)) value = tmp.data();
+    if (value) glClearBufferfv(buffer, drawbuffer, value);
     return JS_UNDEFINED;
 }
 
@@ -1515,7 +1603,9 @@ static JSValue js_clearBufferiv(JSContext *ctx, JSValueConst this_val, int argc,
     GLenum buffer = (GLenum)arg_uint(ctx, argv[0]);
     GLint drawbuffer = (GLint)arg_int(ctx, argv[1]);
     const GLint *value = (const GLint *)qjs_get_buffer(ctx, argv[2], NULL);
-    glClearBufferiv(buffer, drawbuffer, value);
+    std::vector<GLint> tmp;
+    if (!value && qjs_array_to_int_vec(ctx, argv[2], tmp)) value = tmp.data();
+    if (value) glClearBufferiv(buffer, drawbuffer, value);
     return JS_UNDEFINED;
 }
 
@@ -1523,7 +1613,9 @@ static JSValue js_clearBufferuiv(JSContext *ctx, JSValueConst this_val, int argc
     GLenum buffer = (GLenum)arg_uint(ctx, argv[0]);
     GLint drawbuffer = (GLint)arg_int(ctx, argv[1]);
     const GLuint *value = (const GLuint *)qjs_get_buffer(ctx, argv[2], NULL);
-    glClearBufferuiv(buffer, drawbuffer, value);
+    std::vector<GLuint> tmp;
+    if (!value && qjs_array_to_uint_vec(ctx, argv[2], tmp)) value = tmp.data();
+    if (value) glClearBufferuiv(buffer, drawbuffer, value);
     return JS_UNDEFINED;
 }
 

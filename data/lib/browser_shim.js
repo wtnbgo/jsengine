@@ -563,6 +563,13 @@ Object.defineProperty(Image.prototype, "src", {
     get: function() { return this._src || ""; }
 });
 
+// gl.texImage2D(target, level, format, format, type, image) 経路で
+// webgl.cpp の qjs_get_pixels が image.data からピクセルを取り出すため、
+// _data を data として公開する (実体は ImageBitmap.data = ArrayBuffer)。
+Object.defineProperty(Image.prototype, "data", {
+    get: function() { return this._data; }
+});
+
 window.Image = Image;
 window.HTMLImageElement = Image;
 

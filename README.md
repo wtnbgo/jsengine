@@ -126,7 +126,7 @@ Use `navigator.getGamepads()` for polling the current gamepad state every frame.
 
 ### WebGL Binding Coverage
 
-Covers the major WebGL 2.0 APIs including: shaders/programs, buffers (VBO/UBO), textures (2D/3D/CubeMap), framebuffers/renderbuffers, VAO, uniforms (scalar/vector/matrix), drawing (including instanced), state management, clearBuffer, Transform Feedback, Query, and Sampler.
+Covers the major WebGL 2.0 APIs including: shaders/programs, buffers (VBO/UBO), textures (2D/3D/CubeMap), framebuffers/renderbuffers, VAO, uniforms (scalar/vector/matrix), drawing (including instanced), state management, clearBuffer, Transform Feedback, Query, and Sampler. Array-style entry points (`uniform*v`, `uniformMatrix*fv`, `bufferData`, `bufferSubData`, `clearBuffer*v`) accept either TypedArray/ArrayBuffer or a plain JavaScript Array (the latter is needed by pixi v4's `uSamplers = [0,1,2,...]` sampler array setup).
 
 ## API Reference
 

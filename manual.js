@@ -496,9 +496,11 @@ addEventListener("touchcancel", function(e) {
 //
 //   Uniform
 //     uniform[1234][fi](location, ...)        — スカラー
-//     uniform[1234][fiu]v(location, array)     — ベクトル/配列 (TypedArray)
+//     uniform[1234][fiu]v(location, array)     — ベクトル/配列 (TypedArray または plain Array)
 //     uniformMatrix[234]fv(location, transpose, array)
 //     uniformMatrix[2x3|2x4|3x2|3x4|4x2|4x3]fv(location, transpose, array)
+//     ※ array 引数は TypedArray / ArrayBuffer / plain Array いずれも可。
+//        bufferData / bufferSubData / clearBuffer*v も同様。
 //
 //   描画
 //     drawArrays, drawElements,

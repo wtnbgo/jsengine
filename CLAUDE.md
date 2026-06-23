@@ -85,6 +85,7 @@ cmake --build build/x64-windows --config Release
 
 - `qjs_get_buffer()` は TypedArray の byteOffset / byteLength を正しく処理する。
 - `qjs_get_pixels()` は `out_hold` 引数で取得した ArrayBuffer の寿命を呼出し側に渡す。`canvas.data` getter のように新規 ArrayBuffer を毎回作って返すケースで、`JS_FreeValue` を即実行するとそのバッファが解放されて `glTexImage2D` に渡したポインタが dangling になり、GPU が解放済みヒープを読んでテクスチャ端に「起動毎に色が変わる謎の点」を生む。呼出し側は GL 関数を呼び終えてから `JS_FreeValue(ctx, pixelsHold)` する。
+- `uniform*v` / `uniformMatrix*fv` / `bufferData` / `bufferSubData` / `clearBuffer*v` は TypedArray/ArrayBuffer に加えて **plain JS Array** も受け付ける (`qjs_array_to_{int,uint,float}_vec` ヘルパで vector に詰め直して GL に渡す)。pixi v4 の MultiTexture sprite shader は `shader.uniforms.uSamplers = [0,1,2,...,N-1]` のように plain Array で sampler 配列をセットしてくるので、 これに対応しないと `uSamplers[]` が default 0 のまま → 全 sampler が TEXTURE0 を sampling → batched sprite の vertex `aTextureId>0` の sprite が真っ黒になる (RPG Maker MV の Title 画面で WindowLayer の FBO 経由描画後、 Castle が消える症状の根本原因だった)。
 - `getParameter()` は配列型（VIEWPORT 等）を JS Array で返す。
 - `getExtension()` は GLES3 標準拡張に対して機能オブジェクトを返す（VAO 拡張メソッド含む）。
 - WebGL2 関数として `texStorage2D(target, levels, internalformat, w, h)` / `texStorage3D` をサポート（three.js r176 のボーンテクスチャ作成に必須）。
