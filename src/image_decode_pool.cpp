@@ -45,9 +45,9 @@ public:
             n = std::max(2u, hw > 2 ? hw / 2 : 2u);  // 半分くらい、 最低 2
         }
         for (int i = 0; i < n; i++) {
-            workers_.emplace_back([this]{ this->workerLoop(); });
+            workers_.emplace_back([this, i]{ this->workerLoop(i); });
         }
-        SDL_Log("ImageDecodePool: started with %d workers", n);
+        SDL_Log("ImageDecodePool: started with %d workers (hw=%u)", n, std::thread::hardware_concurrency());
     }
 
     void shutdown() {
@@ -67,11 +67,19 @@ public:
     }
 
     void submit(std::unique_ptr<Job> job) {
+        inFlight_.fetch_add(1, std::memory_order_release);
         {
             std::lock_guard<std::mutex> lk(pendingMu_);
             pending_.push(std::move(job));
         }
         pendingCv_.notify_one();
+    }
+
+    // in-flight (queue 内 or worker が処理中) なジョブがあるか。
+    // pending と completed をチェック + busy worker のヒューリスティック:
+    // total submitted - total completed > 0 で判定する。
+    bool hasInFlight() const {
+        return inFlight_.load(std::memory_order_acquire) > 0;
     }
 
     // メインスレッドから per-frame で呼ぶ。
@@ -85,11 +93,12 @@ public:
             auto job = std::move(local.front());
             local.pop();
             resolveJob(ctx, *job);
+            inFlight_.fetch_sub(1, std::memory_order_release);
         }
     }
 
 private:
-    void workerLoop() {
+    void workerLoop(int /*wid*/) {
         while (true) {
             std::unique_ptr<Job> job;
             {
@@ -164,6 +173,7 @@ private:
     }
 
     std::atomic<bool> running_{false};
+    std::atomic<int>  inFlight_{0};  // submit-但drain で差分カウント
     std::vector<std::thread> workers_;
     std::mutex pendingMu_;
     std::condition_variable pendingCv_;
@@ -206,6 +216,10 @@ JSValue submit_decode_async(JSContext *ctx, const uint8_t *buf, size_t bufSize) 
 
 void drain_completed(JSContext *ctx) {
     g_pool.drain(ctx);
+}
+
+bool has_in_flight() {
+    return g_pool.hasInFlight();
 }
 
 }  // namespace jsengine

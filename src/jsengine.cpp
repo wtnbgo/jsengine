@@ -2295,11 +2295,28 @@ void JsEngine::update(uint32_t delta) {
     processTimers();
     processRAF();
 
-    // ペンディングジョブを全て処理
+    // ペンディングジョブを全て処理。 microtask 1 件処理するたびに image decode pool の
+    // 完了ジョブも drain し、 完了済み image の Promise resolve を即時反映する。
+    //
+    // 「JS pending 0 だが pool に in-flight 仕事あり」 のとき (= GLTFLoader が 26 image
+    // の Promise.all を await している状態) は、 1ms sleep して再度 drain を試みる。
+    // これにより per-frame stepping (= worker 完了→ next frame で resolve の連鎖) を回避し、
+    // VRM ロードが 1 フレーム内に完了する coroutine 化が成立する。
+    //
+    // 副作用: VRM ロード中は update() が長くブロックされる (~数 100ms) ので、 ローディング
+    // 画面表示中であることを前提とする。
     {
         JSContext *pctx;
         int ret;
-        while ((ret = JS_ExecutePendingJob(JS_GetRuntime(ctx_), &pctx)) > 0) {}
+        do {
+            jsengine::drain_completed(ctx_);
+            ret = JS_ExecutePendingJob(JS_GetRuntime(ctx_), &pctx);
+            if (ret == 0 && jsengine::has_in_flight()) {
+                // workers が走り中 — 1ms 待ってから drain 再試行
+                SDL_Delay(1);
+                ret = 1;  // ループ続行
+            }
+        } while (ret > 0);
         if (ret < 0) {
             // pending job でエラーが発生 — スタックトレースを出力
             JSValue exc = JS_GetException(pctx ? pctx : ctx_);

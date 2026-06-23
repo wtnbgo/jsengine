@@ -1698,97 +1698,16 @@ function initDemo9() {
     var grid = new THREE.GridHelper(10, 10, 0x555555, 0x333333);
     vrmScene.add(grid);
 
-    // VRM モデル読み込み — GLTFLoader 版（スタック問題調査用）
+    // VRM モデル読み込み
+    // 過去のロード時間プロファイラ (PROF 構造体 + GLTFParser.load* 各メソッドの
+    // sync/wall 時間計測 + Texture stage 計測) は計測フェーズで実行済。 結果は
+    // image_decode_pool コミットに記載済。 必要があれば git log で掘り起こせる。
     console.log("Loading VRM model...");
     try {
         var loader = new GLTFLoader();
         loader.register(function(parser) { return new VRM.VRMLoaderPlugin(parser); });
-
-        // -----------------------------------------------------------------
-        // 計測コード (B/C/A 高速化方針決めのためのベースライン取得)
-        //   - 起動 1 回のみ動かす想定 (再 init 時は重複計測されるが無害)
-        //   - 各 phase の合計 ms を最後にまとめて出力
-        // -----------------------------------------------------------------
-        var PROF = {
-            read: 0, parseTotal: 0, postSetup: 0,
-            jsonParse: 0, jsonBytes: 0,
-            imageCount: 0, imageTotal: 0, imageMax: 0,
-            // GLTFParser の load* 系を loader.register 内 plugin で wrap
-            loadBuffer: 0, loadBufferCount: 0,
-            loadBufferView: 0, loadBufferViewCount: 0,
-            loadAccessor: 0, loadAccessorCount: 0,
-            loadImage: 0, loadImageCount: 0,
-            loadTexture: 0, loadTextureCount: 0,
-            loadMaterial: 0, loadMaterialCount: 0,
-            loadMesh: 0, loadMeshCount: 0,
-            loadSkin: 0, loadSkinCount: 0,
-        };
-        var t0 = Date.now();
-
-        // ── JSON.parse を一時 wrap (GLTFLoader.parse 中に最初に呼ばれた 1 回を計測) ──
-        var origJsonParse = JSON.parse;
-        var jsonParseHooked = true;
-        JSON.parse = function(text, reviver) {
-            if (jsonParseHooked && typeof text === "string" && text.length > 1024) {
-                jsonParseHooked = false;  // 最初の大きい JSON 1 件だけ計測
-                var s = Date.now();
-                var r = origJsonParse(text, reviver);
-                PROF.jsonParse = Date.now() - s;
-                PROF.jsonBytes = text.length;
-                JSON.parse = origJsonParse;  // 計測終わったら戻す
-                return r;
-            }
-            return origJsonParse(text, reviver);
-        };
-
-        // ── createImageBitmap を wrap ──
-        var origCIB = globalThis.createImageBitmap;
-        globalThis.createImageBitmap = function(source) {
-            var s = Date.now();
-            var r = origCIB(source);
-            var dt = Date.now() - s;
-            PROF.imageCount++;
-            PROF.imageTotal += dt;
-            if (dt > PROF.imageMax) PROF.imageMax = dt;
-            return r;
-        };
-
-        // ── GLTFParser の load* を plugin 経由で wrap ──
-        // VRMLoaderPlugin の前に登録すると plugin chain で先頭に来る。 各メソッドが
-        // Promise を返すので、 resolve タイミングまで含めて計測する。
-        loader.register(function(parser) {
-            function wrap(name) {
-                var orig = parser[name];
-                if (typeof orig !== "function") return;
-                parser[name] = function() {
-                    var s = Date.now();
-                    var r = orig.apply(parser, arguments);
-                    if (r && typeof r.then === "function") {
-                        return r.then(function(v) {
-                            PROF[name] = (PROF[name] || 0) + (Date.now() - s);
-                            PROF[name + "Count"] = (PROF[name + "Count"] || 0) + 1;
-                            return v;
-                        });
-                    }
-                    PROF[name] = (PROF[name] || 0) + (Date.now() - s);
-                    PROF[name + "Count"] = (PROF[name + "Count"] || 0) + 1;
-                    return r;
-                };
-            }
-            ["loadBuffer", "loadBufferView", "loadAccessor", "loadImage",
-             "loadTexture", "loadMaterial", "loadMesh", "loadSkin"].forEach(wrap);
-            return { name: "ProfilingPlugin" };
-        });
-
         var vrmData = fs.readBinary("models/AvatarSample_A.vrm");
-        PROF.read = Date.now() - t0;
-        console.log("VRM file loaded: " + vrmData.byteLength + " bytes (" + PROF.read + " ms)");
-
-        var tParse = Date.now();
-        loader.parse(vrmData, "", function(gltf) {
-            PROF.parseTotal = Date.now() - tParse;
-            var tPost = Date.now();
-            console.log("VRM parse complete");
+        console.log("VRM file loaded: " + vrmData.byteLength + " bytes");
             vrmModel = gltf.userData.vrm;
             if (vrmModel) {
                 VRM.VRMUtils.removeUnnecessaryVertices(gltf.scene);
@@ -1819,28 +1738,6 @@ function initDemo9() {
                 vrmScene.add(gltf.scene);
                 console.log("GLTF scene added (no VRM data)");
             }
-            PROF.postSetup = Date.now() - tPost;
-            // 計測結果をまとめて出力 + monkey patch 復元
-            globalThis.createImageBitmap = origCIB;
-            if (JSON.parse !== origJsonParse) JSON.parse = origJsonParse;
-            var fmt = function(k) { return PROF[k] + "ms"; };
-            var fmtN = function(k) { var c = PROF[k + "Count"] || 0; return PROF[k] + "ms/" + c + (c ? "(avg " + (PROF[k] / c).toFixed(1) + ")" : ""); };
-            console.log("=== VRM Load Profile ===");
-            console.log(" total wall  : " + (Date.now() - t0) + "ms (= read+parse+postSetup)");
-            console.log(" read        : " + fmt("read") + " (" + vrmData.byteLength + " bytes)");
-            console.log(" parse total : " + fmt("parseTotal"));
-            console.log(" postSetup   : " + fmt("postSetup"));
-            console.log(" --- inside parse ---");
-            console.log(" JSON.parse  : " + PROF.jsonParse + "ms (" + PROF.jsonBytes + " chars)");
-            console.log(" createImageBitmap: " + PROF.imageTotal + "ms / " + PROF.imageCount + " images (max " + PROF.imageMax + "ms)");
-            console.log(" loadBuffer  : " + fmtN("loadBuffer"));
-            console.log(" loadBufferView: " + fmtN("loadBufferView"));
-            console.log(" loadAccessor: " + fmtN("loadAccessor"));
-            console.log(" loadImage   : " + fmtN("loadImage"));
-            console.log(" loadTexture : " + fmtN("loadTexture"));
-            console.log(" loadMaterial: " + fmtN("loadMaterial"));
-            console.log(" loadMesh    : " + fmtN("loadMesh"));
-            console.log(" loadSkin    : " + fmtN("loadSkin"));
         }, function(err) {
             console.error("VRM parse error: " + err);
             if (err && err.stack) console.error("Stack: " + err.stack);

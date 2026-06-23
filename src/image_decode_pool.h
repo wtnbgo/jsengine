@@ -39,4 +39,9 @@ JSValue submit_decode_async(JSContext *ctx, const uint8_t *buf, size_t bufSize);
 // Promise を resolve/reject する。
 void drain_completed(JSContext *ctx);
 
+// pool に in-flight (pending or processing) な仕事があるか。
+// VRM ロード時の coroutine ループで、 「JS は暇だが workers がまだ動いてる」
+// 状況を検知するのに使う。
+bool has_in_flight();
+
 }  // namespace jsengine
