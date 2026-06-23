@@ -758,7 +758,11 @@ globalThis.createImageBitmap = function(source) {
     }
     if (typeof source === "string") {
         // 文字列 (ファイルパス) 引数は jsengine 拡張で同期。 ネイティブ実装が Image を即返す。
-        return _nativeCreateImageBitmap(source);
+        // RPG Maker MV / pixi.loader 等は非 ASCII ファイル名を encodeURIComponent で
+        // 渡してくるので、 ネイティブ fs に渡す前に元のバイト列に戻す。
+        var path = source;
+        try { path = decodeURI(path); } catch(e) {}
+        return _nativeCreateImageBitmap(path);
     }
     return Promise.reject(new Error("createImageBitmap: unsupported source type"));
 };
