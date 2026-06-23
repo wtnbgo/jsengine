@@ -864,16 +864,19 @@ globalThis.__blobStore = __blobStore;
 
 // --- createImageBitmap ラッパー（Blob / ArrayBuffer 対応） ---
 // ネイティブ版はファイルパスのみ対応 (同期的に Image オブジェクトを返す jsengine 拡張)。
-// Blob/ArrayBuffer は decodeImageBuffer で処理して Promise を返す (spec 準拠)。
-// 文字列の場合のみ後方互換のため同期挙動を維持。
+// Blob/ArrayBuffer は decodeImageBufferAsync (並列スレッドプール) で処理して Promise
+// を返す。 GLTFLoader 等が Promise.all で複数画像を並列待ちする経路で効く。
+// async 版が無い古いバイナリでは同期版にフォールバック。
+// 文字列 (path) の場合のみ後方互換で同期挙動を維持。
 var _nativeCreateImageBitmap = createImageBitmap;
+var _hasDecodeAsync = (typeof decodeImageBufferAsync === "function");
 globalThis.createImageBitmap = function(source) {
     if (source instanceof Blob) {
         var ab = awaitPromise(source.arrayBuffer());
-        return Promise.resolve(decodeImageBuffer(ab));
+        return _hasDecodeAsync ? decodeImageBufferAsync(ab) : Promise.resolve(decodeImageBuffer(ab));
     }
     if (source instanceof ArrayBuffer) {
-        return Promise.resolve(decodeImageBuffer(source));
+        return _hasDecodeAsync ? decodeImageBufferAsync(source) : Promise.resolve(decodeImageBuffer(source));
     }
     if (typeof source === "string") {
         // 文字列 (ファイルパス) 引数は jsengine 拡張で同期。 ネイティブ実装が Image を即返す。

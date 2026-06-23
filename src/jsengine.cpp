@@ -4,6 +4,7 @@
 #include "webaudio.h"
 #include "webgamepad.h"
 #include "canvas2d.h"
+#include "image_decode_pool.h"
 #ifdef JSENGINE_USE_MOVIE_PLAYER
 #include "video.h"
 #endif
@@ -540,6 +541,20 @@ static JSValue native_decodeImageBuffer(JSContext *ctx, JSValueConst this_val, i
 
     SDL_DestroySurface(rgba);
     return obj;
+}
+
+// decodeImageBufferAsync(arrayBuffer) => Promise<{ width, height, data }>
+// 同期版 decodeImageBuffer と並存。 ワーカースレッドプールで並列デコードして
+// Promise で返す。 GLTFLoader 等が複数画像を Promise.all で読む経路で効く。
+static JSValue native_decodeImageBufferAsync(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    (void)this_val;
+    if (argc < 1) return JS_ThrowInternalError(ctx, "decodeImageBufferAsync requires an ArrayBuffer argument");
+    size_t bufSize = 0;
+    uint8_t *bufData = JS_GetArrayBuffer(ctx, &bufSize, argv[0]);
+    if (!bufData || bufSize == 0) {
+        return JS_ThrowInternalError(ctx, "decodeImageBufferAsync: invalid ArrayBuffer");
+    }
+    return jsengine::submit_decode_async(ctx, bufData, bufSize);
 }
 
 // ============================================================
@@ -1882,6 +1897,9 @@ bool JsEngine::init(int argc, char **argv) {
     // createImageBitmap / decodeImageBuffer 登録
     JS_SetPropertyStr(ctx_, global, "createImageBitmap", JS_NewCFunction(ctx_, native_createImageBitmap, "createImageBitmap", 1));
     JS_SetPropertyStr(ctx_, global, "decodeImageBuffer", JS_NewCFunction(ctx_, native_decodeImageBuffer, "decodeImageBuffer", 1));
+    JS_SetPropertyStr(ctx_, global, "decodeImageBufferAsync", JS_NewCFunction(ctx_, native_decodeImageBufferAsync, "decodeImageBufferAsync", 1));
+    // 画像デコードスレッドプール (ハードウェア並列度の半分、 最低 2 ワーカー)
+    jsengine::image_decode_pool_init(0);
 
     // addEventListener / removeEventListener 登録
     JS_SetPropertyStr(ctx_, global, "addEventListener", JS_NewCFunction(ctx_, native_addEventListener, "addEventListener", 2));

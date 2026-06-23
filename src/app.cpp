@@ -10,6 +10,7 @@
 #ifdef JSENGINE_USE_MOVIE_PLAYER
 #include "video.h"
 #endif
+#include "image_decode_pool.h"
 
 // 静的メンバ初期化
 App* App::instance_ = nullptr;
@@ -168,6 +169,10 @@ App::~App()
     video_uninit();
 #endif
 
+    // 画像デコードプールを止める (ワーカースレッド join)。 完了済みで未 drain の
+    // 結果は捨てられる (jsEngine 解放と一緒に JS 側の参照も GC される)。
+    jsengine::image_decode_pool_shutdown();
+
     // ★ オーディオシステムを先に止める。
     // JsEngine 解放途中で abort/assert に遭遇した場合でも、 ma_engine が止まっていれば
     // 音が鳴り続ける事態を防げる。 JsAudioGain/Source の finalizer は webaudio_uninit 後
@@ -207,6 +212,11 @@ SDL_AppResult App::update(uint32_t delta)
     // タイミングで前フレームの framebuffer を読む。
     JsRepl::drain();
 #endif
+    // 画像デコードプールの完了ジョブを取り出して Promise を resolve する。
+    // GLTFLoader 等が Promise.all で並列待ちしている画像が、 ここで順次解決される。
+    if (jsEngine_) {
+        jsengine::drain_completed(jsEngine_->getContext());
+    }
     if (jsEngine_) {
         jsEngine_->update(delta);
     }

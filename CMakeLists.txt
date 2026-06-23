@@ -229,6 +229,7 @@ set(SOURCES
 	src/canvas2d.cpp
 	src/audio/AudioEngine.cpp
 	src/audio/AudioStream.cpp
+	src/image_decode_pool.cpp
 	src/main.cpp
 )
 
