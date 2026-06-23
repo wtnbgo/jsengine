@@ -48,6 +48,11 @@ public:
     // として評価。 main.js (= loadFile("main.js")) の代わりに -rpgmv <project-path> 指定時に呼ぶ。
     bool loadRpgmvMain();
 
+    // REPL からの単発 JS 評価 (グローバルスコープ)。 成功時 result_out に文字列化した値
+    // (オブジェクトなら JSON.stringify(indent=2) 相当)、 例外時はエラーメッセージ + stack。
+    // メインスレッドからのみ呼ぶこと (QuickJS はマルチスレッド非対応)。
+    bool evalForRepl(const std::string &source, std::string &result_out);
+
     JSContext* getContext() const { return ctx_; }
 
     // 任意の type と event オブジェクトを addEventListener で登録されたリスナへ配信。

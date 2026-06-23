@@ -1381,6 +1381,41 @@ static JSValue fs_writeText(JSContext *ctx, JSValueConst this_val, int argc, JSV
     return JS_UNDEFINED;
 }
 
+// fs.writeBinary(path, ArrayBuffer | TypedArray)
+// REPL / agent からの screenshot ダンプ / 生データ書き出し用。
+static JSValue fs_writeBinary(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    (void)this_val;
+    if (argc < 2) return JS_ThrowInternalError(ctx, "writeBinary requires path and buffer arguments");
+    const char *pathStr = JS_ToCString(ctx, argv[0]);
+    if (!pathStr) return JS_EXCEPTION;
+    std::string rpath = resolve_path(pathStr);
+    JS_FreeCString(ctx, pathStr);
+
+    // ArrayBuffer / TypedArray のどちらでも受け付ける。 TypedArray は offset/length を尊重。
+    size_t sz = 0;
+    uint8_t *ptr = JS_GetArrayBuffer(ctx, &sz, argv[1]);
+    std::vector<uint8_t> typedCopy;
+    if (!ptr) {
+        size_t offset = 0, byteLen = 0;
+        JSValue ab = JS_GetTypedArrayBuffer(ctx, argv[1], &offset, &byteLen, nullptr);
+        if (!JS_IsException(ab) && !JS_IsUndefined(ab)) {
+            size_t abSz = 0;
+            uint8_t *abPtr = JS_GetArrayBuffer(ctx, &abSz, ab);
+            if (abPtr) {
+                ptr = abPtr + offset;
+                sz = byteLen;
+            }
+            JS_FreeValue(ctx, ab);
+        }
+    }
+    if (!ptr) return JS_ThrowTypeError(ctx, "writeBinary: argument must be ArrayBuffer or TypedArray");
+    bool ok = SDL_SaveFile(rpath.c_str(), ptr, sz);
+    if (!ok) {
+        return JS_ThrowInternalError(ctx, "Failed to write file: %s", rpath.c_str());
+    }
+    return JS_UNDEFINED;
+}
+
 static void fs_register(JSContext *ctx) {
     JSValue obj = JS_NewObject(ctx);
 
@@ -1394,6 +1429,7 @@ static void fs_register(JSContext *ctx) {
     JS_SetPropertyStr(ctx, obj, "readText", JS_NewCFunction(ctx, fs_readText, "readText", 1));
     JS_SetPropertyStr(ctx, obj, "readBinary", JS_NewCFunction(ctx, fs_readBinary, "readBinary", 1));
     JS_SetPropertyStr(ctx, obj, "writeText", JS_NewCFunction(ctx, fs_writeText, "writeText", 2));
+    JS_SetPropertyStr(ctx, obj, "writeBinary", JS_NewCFunction(ctx, fs_writeBinary, "writeBinary", 2));
 
     // システム提供のパス群を fs に公開
     //   basePath: データ参照のベース (絶対パス、末尾 / つき)
@@ -1408,6 +1444,61 @@ static void fs_register(JSContext *ctx) {
 
     JSValue global = JS_GetGlobalObject(ctx);
     JS_SetPropertyStr(ctx, global, "fs", obj);
+    JS_FreeValue(ctx, global);
+}
+
+// ============================================================
+// captureScreen(path) — 現在の framebuffer 内容を PNG に保存
+//
+// REPL / 外部エージェントから `captureScreen("foo.png")` で呼ぶ用途。
+// 引数は basePath からの相対パス (resolve_path で絶対化)。 保存形式は PNG
+// (SDL3_image の IMG_SavePNG)。 戻り値は成功時 true、 失敗時 false。
+//
+// 注: framebuffer 0 (default) のピクセルを読むので、 通常は render() 直後
+// (= SDL_GL_SwapWindow で表示される寸前の内容) に呼ぶのが一番直感的。 REPL
+// drain がメインループのどこに刺さるかで「いつのフレーム」が捕まるかが
+// 変わる点に留意。 jsengine では drain は update の頭で行うので、 前フレームの
+// SwapWindow 後 〜 今フレームの clear/render より前のバッファが取れる。
+// ============================================================
+static JSValue captureScreen_native(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    (void)this_val;
+    if (argc < 1) return JS_ThrowTypeError(ctx, "captureScreen requires a path");
+    const char *p = JS_ToCString(ctx, argv[0]);
+    if (!p) return JS_EXCEPTION;
+    std::string rpath = resolve_path(p);
+    JS_FreeCString(ctx, p);
+
+    App *app = App::getInstance();
+    if (!app) return JS_ThrowInternalError(ctx, "captureScreen: no App");
+    SDL_Window *w = app->getWindow();
+    if (!w) return JS_ThrowInternalError(ctx, "captureScreen: no window");
+
+    int W = 0, H = 0;
+    SDL_GetWindowSizeInPixels(w, &W, &H);
+    if (W <= 0 || H <= 0) return JS_ThrowInternalError(ctx, "captureScreen: bad window size");
+
+    std::vector<uint8_t> raw((size_t)W * H * 4);
+    glPixelStorei(GL_PACK_ALIGNMENT, 1);
+    glReadPixels(0, 0, W, H, GL_RGBA, GL_UNSIGNED_BYTE, raw.data());
+
+    // OpenGL は左下原点。 PNG は左上原点なので Y 反転してコピー。
+    std::vector<uint8_t> flip((size_t)W * H * 4);
+    for (int y = 0; y < H; y++) {
+        memcpy(&flip[(size_t)(H - 1 - y) * W * 4], &raw[(size_t)y * W * 4], (size_t)W * 4);
+    }
+
+    SDL_Surface *surf = SDL_CreateSurfaceFrom(W, H, SDL_PIXELFORMAT_RGBA32, flip.data(), W * 4);
+    if (!surf) return JS_ThrowInternalError(ctx, "captureScreen: SDL_CreateSurfaceFrom failed: %s", SDL_GetError());
+    bool ok = IMG_SavePNG(surf, rpath.c_str());
+    SDL_DestroySurface(surf);
+    if (!ok) return JS_ThrowInternalError(ctx, "captureScreen: IMG_SavePNG failed: %s", SDL_GetError());
+    return JS_NewBool(ctx, true);
+}
+
+static void captureScreen_register(JSContext *ctx) {
+    JSValue global = JS_GetGlobalObject(ctx);
+    JS_SetPropertyStr(ctx, global, "captureScreen",
+        JS_NewCFunction(ctx, captureScreen_native, "captureScreen", 1));
     JS_FreeValue(ctx, global);
 }
 
@@ -1829,6 +1920,7 @@ bool JsEngine::init(int argc, char **argv) {
 
     // File System Access API 登録
     fs_register(ctx_);
+    captureScreen_register(ctx_);
 
     // localStorage 登録
     storage_register(ctx_);
@@ -1924,6 +2016,109 @@ bool JsEngine::loadRpgmvMain() {
     }
     JS_FreeValue(ctx_, result);
     SDL_Log("Loaded built-in rpgmv_main.js");
+    return true;
+}
+
+// ============================================================
+// REPL からの単発式評価
+// ============================================================
+bool JsEngine::evalForRepl(const std::string &source, std::string &result_out) {
+    result_out.clear();
+    if (!ctx_) { result_out = "no context"; return false; }
+
+    JSValue v = JS_Eval(ctx_, source.c_str(), source.size(), "<repl>", JS_EVAL_TYPE_GLOBAL);
+
+    // 例外: メッセージ + stack をテキストに詰める。
+    if (JS_IsException(v)) {
+        JSValue ex = JS_GetException(ctx_);
+        const char *s = JS_ToCString(ctx_, ex);
+        if (s) { result_out = s; JS_FreeCString(ctx_, s); }
+        if (JS_IsObject(ex)) {
+            JSValue stack = JS_GetPropertyStr(ctx_, ex, "stack");
+            if (!JS_IsUndefined(stack) && !JS_IsNull(stack)) {
+                const char *st = JS_ToCString(ctx_, stack);
+                if (st) { result_out += "\n"; result_out += st; JS_FreeCString(ctx_, st); }
+            }
+            JS_FreeValue(ctx_, stack);
+        }
+        JS_FreeValue(ctx_, ex);
+        return false;
+    }
+
+    // pending job を一度排出 (await 込みの式に部分対応)。
+    {
+        JSRuntime *rt = JS_GetRuntime(ctx_);
+        int max_iter = 1024;
+        while (max_iter-- > 0) {
+            JSContext *cctx;
+            int r = JS_ExecutePendingJob(rt, &cctx);
+            if (r <= 0) break;
+        }
+    }
+
+    // Promise なら pending job を回しつつ解決を待つ。 タイムアウト 1 秒。
+    if (JS_IsPromise(v)) {
+        JSRuntime *rt = JS_GetRuntime(ctx_);
+        for (int i = 0; i < 100; i++) {
+            JSPromiseStateEnum st = JS_PromiseState(ctx_, v);
+            if (st == JS_PROMISE_FULFILLED) {
+                JSValue res = JS_PromiseResult(ctx_, v);
+                JS_FreeValue(ctx_, v);
+                v = res;
+                break;
+            }
+            if (st == JS_PROMISE_REJECTED) {
+                JSValue res = JS_PromiseResult(ctx_, v);
+                const char *s = JS_ToCString(ctx_, res);
+                if (s) { result_out = std::string("(promise rejected) ") + s; JS_FreeCString(ctx_, s); }
+                JS_FreeValue(ctx_, res);
+                JS_FreeValue(ctx_, v);
+                return false;
+            }
+            JSContext *cctx;
+            int r = JS_ExecutePendingJob(rt, &cctx);
+            if (r == 0) {
+                // pending job 無しでも未解決ならスリープ相当 (固定なし、 諦める)。
+                result_out = "(promise pending)";
+                JS_FreeValue(ctx_, v);
+                return true;
+            }
+            if (r < 0) {
+                result_out = "(pending job error)";
+                JS_FreeValue(ctx_, v);
+                return false;
+            }
+        }
+    }
+
+    // 値の文字列化:
+    //   undefined / null / string / number / boolean は直接 ToCString
+    //   それ以外 (オブジェクト / 配列) は JSON.stringify(indent=2) を試行、 失敗時は toString。
+    if (JS_IsUndefined(v) || JS_IsNull(v) || JS_IsString(v) ||
+        JS_IsNumber(v) || JS_IsBool(v))
+    {
+        const char *s = JS_ToCString(ctx_, v);
+        if (s) { result_out = s; JS_FreeCString(ctx_, s); }
+    } else {
+        JSValue indent = JS_NewInt32(ctx_, 2);
+        JSValue json = JS_JSONStringify(ctx_, v, JS_UNDEFINED, indent);
+        JS_FreeValue(ctx_, indent);
+        bool got = false;
+        if (!JS_IsException(json) && !JS_IsUndefined(json)) {
+            const char *s = JS_ToCString(ctx_, json);
+            if (s) { result_out = s; JS_FreeCString(ctx_, s); got = true; }
+        } else if (JS_IsException(json)) {
+            JSValue ex = JS_GetException(ctx_);
+            JS_FreeValue(ctx_, ex);  // 捨てて toString fallback
+        }
+        JS_FreeValue(ctx_, json);
+        if (!got) {
+            const char *s = JS_ToCString(ctx_, v);
+            if (s) { result_out = s; JS_FreeCString(ctx_, s); }
+            else   { result_out = "(unprintable)"; }
+        }
+    }
+    JS_FreeValue(ctx_, v);
     return true;
 }
 

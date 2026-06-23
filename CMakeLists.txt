@@ -10,6 +10,11 @@ set(PROJECT_VERSION 1.00)
 
 option(SDL3_DYNAMIC "use dynamic SDL3" OFF)
 
+# REPL (Read-Eval-Print Loop): stdin から JS を評価したり、ファイルチャネル経由で
+# 外部エージェント (AI 等) から JS を駆動するための機能。 組込みターゲット等で
+# stdin を持たない / バイナリを小さくしたい場合は OFF にする。
+option(JSENGINE_USE_REPL "Enable interactive console REPL and file-channel REPL" ON)
+
 # ----------------------------------------------------
 # プラットフォーム差し替えフック
 #
@@ -184,6 +189,10 @@ set(SOURCES
 	src/main.cpp
 )
 
+if(JSENGINE_USE_REPL)
+	list(APPEND SOURCES src/repl.cpp)
+endif()
+
 # ----------------------------------------------------
 # 内蔵 JS スクリプトの埋め込み (cmake/embed_js.cmake 経由)
 #  - sysinit.js: ブラウザシム。 main.js のロード前に自動評価される。
@@ -245,6 +254,10 @@ target_include_directories(${PROJECT_NAME} PRIVATE
 # 親プロジェクトから注入された機種固有 define
 if(JSENGINE_DEFINES_PLATFORM)
 	target_compile_definitions(${PROJECT_NAME} PRIVATE ${JSENGINE_DEFINES_PLATFORM})
+endif()
+
+if(JSENGINE_USE_REPL)
+	target_compile_definitions(${PROJECT_NAME} PRIVATE JSENGINE_USE_REPL)
 endif()
 
 # OS スレッドスタックサイズを増やす（GLTFLoader の再帰的ノード読み込みに必要）

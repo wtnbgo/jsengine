@@ -4,6 +4,9 @@
 #include "webgamepad.h"
 #include "canvas2d.h"
 #include "glad/gles2.h"
+#ifdef JSENGINE_USE_REPL
+#include "repl.h"
+#endif
 
 // 静的メンバ初期化
 App* App::instance_ = nullptr;
@@ -138,11 +141,23 @@ bool App::init(int argc, char *argv[])
         }
     }
 
+#ifdef JSENGINE_USE_REPL
+    // REPL を起動。 main.js / rpgmv_main.js のロード後に立てるのは、 ワーカーから
+    // 投げられる JS が main.js で定義した globalThis.* を参照できるようにするため。
+    JsRepl::parseArgs(argc, argv);
+    JsRepl::create(jsEngine_.get());
+#endif
+
     return true;
 }
 
 App::~App()
 {
+#ifdef JSENGINE_USE_REPL
+    // REPL ワーカーを止めてから JS エンジンを落とす (worker が JS 評価待ちなら起こす)。
+    JsRepl::destroy();
+#endif
+
     // ★ オーディオシステムを先に止める。
     // JsEngine 解放途中で abort/assert に遭遇した場合でも、 ma_engine が止まっていれば
     // 音が鳴り続ける事態を防げる。 JsAudioGain/Source の finalizer は webaudio_uninit 後
@@ -175,6 +190,13 @@ App::~App()
 
 SDL_AppResult App::update(uint32_t delta)
 {
+#ifdef JSENGINE_USE_REPL
+    // ワーカーから提出された REPL リクエストを 1 件処理。
+    // update の頭で drain することで、 「直近の SwapWindow 後 〜 今フレームの
+    // render より前」 のタイミングで JS 評価が走る。 captureScreen はここの
+    // タイミングで前フレームの framebuffer を読む。
+    JsRepl::drain();
+#endif
     if (jsEngine_) {
         jsEngine_->update(delta);
     }

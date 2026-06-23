@@ -41,9 +41,13 @@ jsengine                       # Load main.js from data/ folder
 jsengine -data path/to/dir     # Load main.js from specified folder
 jsengine -sysinit path/to/file # Override built-in sysinit.js with an external file (dev convenience)
 jsengine -rpgmv path/to/proj   # Boot a RPG Maker MV project directly using the built-in rpgmv_main.js
+jsengine -repl                 # Enable interactive REPL on stdin (type JS, get results)
+jsengine -replfile <dir>       # Enable file-channel REPL (write JS to <dir>/cmd, read JSON from <dir>/resp) — for AI / agent control
 jsengine -debug                # Enable debug logging
 jsengine -quiet                # Warnings and errors only
 ```
+
+`-repl` / `-replfile` need the CMake option `JSENGINE_USE_REPL=ON` (default). Set OFF for embedded builds without stdin or to shrink the binary. The file-channel protocol (`<dir>/cmd` written via `cmd.tmp` → rename, response in `<dir>/resp` as `{"ok":bool,"result":"...","error":"..."}`) is designed so an external AI agent can drive jsengine end-to-end: evaluate JS, take screenshots via `captureScreen("foo.png")` (global), and write arbitrary bytes via `fs.writeBinary(path, buf)`.
 
 `-rpgmv` boots the built-in RPG Maker MV bootstrap (`src/rpgmv_main.js`) instead of `main.js`, with the supplied folder used as the data path. Use it to run any standard MV project (containing `data/System.json`, `js/`, `audio/`, `img/`, etc.) without copying a custom `main.js` into the project folder. Per-game save data is isolated under `%APPDATA%/jsengine_rpgmv/<gameTitle>/` (via `localStorage.setPath`).
 
