@@ -591,6 +591,40 @@ static GLint fixInternalFormat(GLint internalformat, GLenum type) {
     return fixed;
 }
 
+// ============================================================
+// pixelStorei (UNPACK_PREMULTIPLY_ALPHA_WEBGL 対応用、 texImage2D で参照する)
+// ============================================================
+
+// UNPACK_PREMULTIPLY_ALPHA_WEBGL の現在値 (default false)。
+// texImage2D / texSubImage2D で source が straight alpha (= Image/ImageBitmap)
+// だった場合に CPU 側で premultiply してから glTexImage2D に渡すために使う。
+// source が canvas (= 既に premultiplied) の場合は重複適用しないように
+// `_ctx2d` プロパティの有無で判別する。
+static int g_unpack_premultiply_alpha = 0;
+
+// source が canvas (= 既に premultiplied) でないか判定。
+// HTMLCanvasElement シム (sysinit.js) は _ctx2d プロパティを持つ。
+// Image (createImageBitmap 由来) はこれを持たない。
+static bool source_needs_premultiply(JSContext *ctx, JSValueConst source) {
+    if (!JS_IsObject(source)) return false;
+    JSValue ctx2d = JS_GetPropertyStr(ctx, source, "_ctx2d");
+    bool isCanvas = !JS_IsUndefined(ctx2d) && !JS_IsNull(ctx2d);
+    JS_FreeValue(ctx, ctx2d);
+    return !isCanvas;  // canvas なら不要、 それ以外 (Image) は premultiply 適用
+}
+
+// RGBA バッファに対して in-place で premultiply を適用。
+static void apply_premultiply_rgba(uint8_t *data, size_t pixelCount) {
+    for (size_t i = 0; i < pixelCount; i++) {
+        uint8_t a = data[i*4 + 3];
+        if (a == 255) continue;
+        if (a == 0) { data[i*4] = data[i*4+1] = data[i*4+2] = 0; continue; }
+        data[i*4]     = (uint8_t)((data[i*4]     * a + 127) / 255);
+        data[i*4 + 1] = (uint8_t)((data[i*4 + 1] * a + 127) / 255);
+        data[i*4 + 2] = (uint8_t)((data[i*4 + 2] * a + 127) / 255);
+    }
+}
+
 static JSValue js_texImage2D(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     GLenum target = (GLenum)arg_uint(ctx, argv[0]);
     GLint level = (GLint)arg_int(ctx, argv[1]);
@@ -613,6 +647,7 @@ static JSValue js_texImage2D(JSContext *ctx, JSValueConst this_val, int argc, JS
         GLenum type = (GLenum)arg_uint(ctx, argv[4]);
         GLsizei width = 0, height = 0;
         void *pixels = NULL;
+        std::vector<uint8_t> premultiplied;
         if (JS_IsObject(argv[5])) {
             JSValue wv = JS_GetPropertyStr(ctx, argv[5], "width");
             if (!JS_IsUndefined(wv)) { width = (GLsizei)arg_int(ctx, wv); }
@@ -621,6 +656,16 @@ static JSValue js_texImage2D(JSContext *ctx, JSValueConst this_val, int argc, JS
             if (!JS_IsUndefined(hv)) { height = (GLsizei)arg_int(ctx, hv); }
             JS_FreeValue(ctx, hv);
             pixels = qjs_get_pixels(ctx, argv[5], &pixelsHold);
+            // UNPACK_PREMULTIPLY_ALPHA_WEBGL=true で source が Image (straight alpha) の場合、
+            // CPU 側で premultiply してから glTexImage2D に渡す。 canvas は既に premultiplied
+            // なので二重適用しないように source_needs_premultiply で判別。
+            if (pixels && g_unpack_premultiply_alpha && format == GL_RGBA && type == GL_UNSIGNED_BYTE
+                && width > 0 && height > 0 && source_needs_premultiply(ctx, argv[5])) {
+                size_t pixelCount = (size_t)width * (size_t)height;
+                premultiplied.assign((const uint8_t*)pixels, (const uint8_t*)pixels + pixelCount * 4);
+                apply_premultiply_rgba(premultiplied.data(), pixelCount);
+                pixels = premultiplied.data();
+            }
         }
         internalformat = fixInternalFormat(internalformat, type);
         glTexImage2D(target, level, internalformat, width, height, 0, format, type, pixels);
@@ -650,6 +695,7 @@ static JSValue js_texSubImage2D(JSContext *ctx, JSValueConst this_val, int argc,
         GLenum type = (GLenum)arg_uint(ctx, argv[5]);
         GLsizei width = 0, height = 0;
         void *pixels = NULL;
+        std::vector<uint8_t> premultiplied;
         if (JS_IsObject(argv[6])) {
             JSValue wv = JS_GetPropertyStr(ctx, argv[6], "width");
             if (!JS_IsUndefined(wv)) { width = (GLsizei)arg_int(ctx, wv); }
@@ -658,6 +704,13 @@ static JSValue js_texSubImage2D(JSContext *ctx, JSValueConst this_val, int argc,
             if (!JS_IsUndefined(hv)) { height = (GLsizei)arg_int(ctx, hv); }
             JS_FreeValue(ctx, hv);
             pixels = qjs_get_pixels(ctx, argv[6], &pixelsHold);
+            if (pixels && g_unpack_premultiply_alpha && format == GL_RGBA && type == GL_UNSIGNED_BYTE
+                && width > 0 && height > 0 && source_needs_premultiply(ctx, argv[6])) {
+                size_t pixelCount = (size_t)width * (size_t)height;
+                premultiplied.assign((const uint8_t*)pixels, (const uint8_t*)pixels + pixelCount * 4);
+                apply_premultiply_rgba(premultiplied.data(), pixelCount);
+                pixels = premultiplied.data();
+            }
         }
         if (width > 0 && height > 0 && pixels) {
             glTexSubImage2D(target, level, xoffset, yoffset, width, height, format, type, pixels);
@@ -727,10 +780,11 @@ static JSValue js_copyTexSubImage2D(JSContext *ctx, JSValueConst this_val, int a
 static JSValue js_pixelStorei(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     GLenum pname = (GLenum)arg_uint(ctx, argv[0]);
     GLint param = (GLint)arg_int(ctx, argv[1]);
-    // WebGL 固有パラメータ（GLES3 にはない）はスキップ
-    // UNPACK_FLIP_Y_WEBGL (0x9240), UNPACK_PREMULTIPLY_ALPHA_WEBGL (0x9241)
-    // UNPACK_COLORSPACE_CONVERSION_WEBGL (0x9243)
-    if (pname == 0x9240 || pname == 0x9241 || pname == 0x9243) return JS_UNDEFINED;
+    // UNPACK_PREMULTIPLY_ALPHA_WEBGL (0x9241): 値を保持して texImage2D で参照
+    if (pname == 0x9241) { g_unpack_premultiply_alpha = param ? 1 : 0; return JS_UNDEFINED; }
+    // UNPACK_FLIP_Y_WEBGL (0x9240), UNPACK_COLORSPACE_CONVERSION_WEBGL (0x9243)
+    // は GLES3 にないので無視 (jsengine は origin/colorspace 変換なし)。
+    if (pname == 0x9240 || pname == 0x9243) return JS_UNDEFINED;
     glPixelStorei(pname, param);
     return JS_UNDEFINED;
 }

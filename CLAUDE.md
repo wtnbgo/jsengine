@@ -91,7 +91,7 @@ cmake --build build/x64-windows --config Release
 - `getParameter()` は配列型（VIEWPORT 等）を JS Array で返す。
 - `getExtension()` は GLES3 標準拡張に対して機能オブジェクトを返す（VAO 拡張メソッド含む）。
 - WebGL2 関数として `texStorage2D(target, levels, internalformat, w, h)` / `texStorage3D` をサポート（three.js r176 のボーンテクスチャ作成に必須）。
-- WebGL 固有 enum（`UNPACK_FLIP_Y_WEBGL` 0x9240, `UNPACK_PREMULTIPLY_ALPHA_WEBGL` 0x9241, `UNPACK_COLORSPACE_CONVERSION_WEBGL` 0x9243, `BROWSER_DEFAULT_WEBGL` 0x9244）は `gl` オブジェクトに定数登録済み。`pixelStorei` ではこれらをスキップ。
+- WebGL 固有 enum (`UNPACK_FLIP_Y_WEBGL` 0x9240, `UNPACK_PREMULTIPLY_ALPHA_WEBGL` 0x9241, `UNPACK_COLORSPACE_CONVERSION_WEBGL` 0x9243, `BROWSER_DEFAULT_WEBGL` 0x9244) は `gl` オブジェクトに定数登録済み。 `pixelStorei` で `UNPACK_FLIP_Y_WEBGL` / `UNPACK_COLORSPACE_CONVERSION_WEBGL` は GLES3 にないので no-op。 `UNPACK_PREMULTIPLY_ALPHA_WEBGL` は `g_unpack_premultiply_alpha` に保持し、 `texImage2D` / `texSubImage2D` で source が **straight alpha** (`_ctx2d` プロパティを持たないオブジェクト = Image/ImageBitmap) の場合に CPU 側で premultiply してから `glTexImage2D` に渡す。 canvas (`_ctx2d` 持ち) は `_getRGBA` が既に premultiplied で返すので二重適用を回避する。 これがないと RPG Maker MV の `Bitmap.decode` が初回 `_createBaseTexture(this._image)` で Image を直接テクスチャ化した時、 GPU には straight のまま入って pixi の premultiplied blend (`ONE, ONE_MINUS_SRC_ALPHA`) と不整合になり、 透過 PNG の `(255,255,255,α=0)` 領域が白不透明として描画される (キャラ周囲の白枠)。
 - `texImage2D` は WebGL2 の unsized internalformat (`RGBA + FLOAT` 等) を `fixInternalFormat()` で GLES3 の sized format (`RGBA32F` 等) に自動変換する。
 
 ### Web Audio (`src/webaudio.cpp`)
