@@ -1708,6 +1708,7 @@ function initDemo9() {
         loader.register(function(parser) { return new VRM.VRMLoaderPlugin(parser); });
         var vrmData = fs.readBinary("models/AvatarSample_A.vrm");
         console.log("VRM file loaded: " + vrmData.byteLength + " bytes");
+        loader.parse(vrmData, "", function(gltf) {
             vrmModel = gltf.userData.vrm;
             if (vrmModel) {
                 VRM.VRMUtils.removeUnnecessaryVertices(gltf.scene);

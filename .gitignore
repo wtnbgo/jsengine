@@ -26,6 +26,7 @@ savedata
 .venv/
 test/
 test2/
+samples/
 data/title.webm
 node_modules/
 package.json
