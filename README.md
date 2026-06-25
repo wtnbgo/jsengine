@@ -43,7 +43,19 @@ make package VERSION=1.0.0        # pin the version string explicitly
 
 `make package` runs `tools/package_win.ps1`, which assembles a self-contained release ZIP whose root holds `jsengine.exe`, the bundled `SDL3.dll` / `SDL3_image.dll`, `README.md`, `manual.js`, and the `data/` folder (the large `data/title.webm` demo video is excluded). The script is the single source of truth for the layout so local and CI packaging stay identical.
 
-CI: pushing a `v*` tag (e.g. `v1.0.0`) triggers `.github/workflows/release-win.yml`, which builds on `windows-latest`, runs the same packaging script, uploads the ZIP as a build artifact, and publishes it to **GitHub Releases**. Regular pushes do nothing; the workflow can also be run manually from the Actions tab. Only the Windows pipeline exists for now — other platforms will be added once validated on their own hosts.
+CI: pushing a `v*` tag (e.g. `v0.1.0`) triggers `.github/workflows/release-win.yml`, which builds on `windows-latest`, runs the same packaging script, uploads the ZIP as a build artifact, and publishes it to **GitHub Releases**. Regular pushes do nothing; the workflow can also be run manually from the Actions tab. Only the Windows pipeline exists for now — other platforms will be added once validated on their own hosts.
+
+#### Versioning
+
+The version's single source of truth is the root **`VERSION`** file (semver, e.g. `0.1.0`). `CMakeLists.txt` reads it at configure time (no hardcoded version), and the packaging script defaults to it. Bump everything in one step:
+
+```bash
+make bump VERSION=0.2.0     # rewrites VERSION + vcpkg.json (CMake reads VERSION automatically)
+git add VERSION vcpkg.json && git commit -m "Bump version to 0.2.0"
+git tag v0.2.0 && git push origin main --tags     # → CI builds and publishes the Release
+```
+
+The release workflow refuses to run if the pushed `v*` tag doesn't match the `VERSION` file, so a forgotten bump fails fast instead of shipping a mislabeled build. CMake also warns at configure time if `vcpkg.json`'s version drifts from `VERSION`.
 
 ### Launch Options
 

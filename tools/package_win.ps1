@@ -50,6 +50,11 @@ $repoRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $repoRoot
 
 # --- バージョン決定 ---
+# 優先順: 明示引数 > VERSION ファイル (単一ソース) > git describe > "dev"
+if ([string]::IsNullOrWhiteSpace($Version)) {
+    $verFile = Join-Path $repoRoot "VERSION"
+    if (Test-Path $verFile) { $Version = (Get-Content $verFile -Raw) }
+}
 if ([string]::IsNullOrWhiteSpace($Version)) {
     try { $Version = (git describe --tags --always 2>$null) } catch {}
     if ([string]::IsNullOrWhiteSpace($Version)) { $Version = "dev" }

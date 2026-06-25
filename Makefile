@@ -57,7 +57,7 @@ run: $(EXEFILE)
 	$(EXEFILE)
 
 # リリース zip を作る (exe + dll + data + README.md + manual.js)。
-# VERSION=1.2.3 で版を明示可能 (省略時は git describe / "dev")。
+# VERSION=1.2.3 で版を明示可能 (省略時は VERSION ファイル → git describe → "dev")。
 # 例: make package VERSION=1.0.0
 package: $(EXEFILE)
 	pwsh -NoProfile -File tools/package_win.ps1 -Version "$(VERSION)" -Config $(BUILD_TYPE) -BuildDir "$(BUILD_PATH)"
@@ -65,3 +65,10 @@ package: $(EXEFILE)
 .PHONY: run package
 
 endif
+
+# バージョンを一括更新 (VERSION ファイル + vcpkg.json)。 CMakeLists は VERSION を読む。
+# 例: make bump VERSION=0.2.0
+bump:
+	pwsh -NoProfile -File tools/bump_version.ps1 -Version "$(VERSION)"
+
+.PHONY: bump

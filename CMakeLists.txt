@@ -6,7 +6,24 @@ add_compile_options("$<$<AND:$<CXX_COMPILER_ID:MSVC>,$<COMPILE_LANGUAGE:CXX>>:/u
 add_compile_options("$<$<AND:$<CXX_COMPILER_ID:MSVC>,$<COMPILE_LANGUAGE:CXX>>:/Zc:__cplusplus>")
 
 set(PROJECT_NAME jsengine)
-set(PROJECT_VERSION 1.00)
+
+# バージョンの単一ソースは リポジトリルートの VERSION ファイル (semver, 例 0.1.0)。
+# CMake / vcpkg.json / リリースタグ をここに揃える。 バージョン更新は
+# `make bump VERSION=x.y.z` (tools/bump_version.ps1) で VERSION と vcpkg.json を
+# 一括更新する。 CMakeLists は VERSION を読むだけなので手で書き換えない。
+file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/VERSION" PROJECT_VERSION)
+string(STRIP "${PROJECT_VERSION}" PROJECT_VERSION)
+
+# vcpkg.json の version が VERSION とずれていたら警告 (リリース版ズレ防止)。
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/vcpkg.json")
+    file(READ "${CMAKE_CURRENT_SOURCE_DIR}/vcpkg.json" _vcpkg_json)
+    string(JSON _vcpkg_ver ERROR_VARIABLE _vcpkg_ver_err GET "${_vcpkg_json}" version)
+    if(_vcpkg_ver AND NOT _vcpkg_ver STREQUAL PROJECT_VERSION)
+        message(WARNING
+            "Version mismatch: VERSION='${PROJECT_VERSION}' but vcpkg.json version='${_vcpkg_ver}'. "
+            "Run `make bump VERSION=${PROJECT_VERSION}` to realign.")
+    endif()
+endif()
 
 option(SDL3_DYNAMIC "use dynamic SDL3" OFF)
 

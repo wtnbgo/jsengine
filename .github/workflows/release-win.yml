@@ -52,6 +52,19 @@ jobs:
         run: |
           "VCPKG_ROOT=$env:VCPKG_INSTALLATION_ROOT" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
+      # v* タグでリリースするときは、 タグ名と VERSION ファイルの食い違いを弾く
+      # (bump し忘れて古いバージョンが焼き込まれるのを防ぐ)。
+      - name: Verify tag matches VERSION
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}".TrimStart('v')
+          $ver = (Get-Content VERSION -Raw).Trim()
+          if ($tag -ne $ver) {
+            throw "Tag v$tag does not match VERSION file ($ver). Run 'make bump VERSION=$tag' and commit before tagging."
+          }
+          Write-Host "OK: tag v$tag matches VERSION $ver"
+
       - name: Configure (cmake --preset x64-windows)
         shell: pwsh
         run: cmake --preset x64-windows
