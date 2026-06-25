@@ -27,6 +27,7 @@ savedata
 test/
 test2/
 samples/
+dist/
 data/title.webm
 node_modules/
 package.json

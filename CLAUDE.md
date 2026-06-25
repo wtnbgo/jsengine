@@ -27,9 +27,18 @@ make run
 
 # Clean
 make clean
+
+# Package a Windows release zip (exe + DLLs + data + README.md + manual.js)
+make package                     # → dist/jsengine-<version>-win64.zip
+make package VERSION=1.0.0
 ```
 
 The Makefile auto-selects the preset based on OS: `x64-windows`, `x64-linux`, or `x64-macos`. Override with `PRESET=<name>`.
+
+### Packaging / Release
+
+- `make package` (Windows) runs `tools/package_win.ps1`, which stages `jsengine.exe` + bundled `SDL3.dll` / `SDL3_image.dll` + `README.md` + `manual.js` + `data/` (excluding the large `data/title.webm`) and zips it to `dist/jsengine-<version>-win64.zip`. This script — **not** CMake `install()`/CPack — is the single source of truth for the release layout (CPack would pull in FetchContent dependencies' install rules). `dist/` is git-ignored.
+- `.github/workflows/release-win.yml` runs on `v*` tag push (or manual `workflow_dispatch`): builds on `windows-latest` with the preinstalled vcpkg (manifest mode, `x64-windows-static` triplet, x-gha binary cache), runs the same `package_win.ps1`, uploads the zip as an artifact, and publishes a **GitHub Release**. Windows-only for now; add other platforms once each is validated on its own host. When the release layout or shipped files change, update `tools/package_win.ps1` (the script), not just docs.
 
 ### Available CMake Presets
 

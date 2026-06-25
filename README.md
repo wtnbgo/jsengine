@@ -34,6 +34,17 @@ cmake --preset x64-windows -DUSE_LOCAL_THORVG=ON
 
 `USE_LOCAL_THORVG=ON` uses `../thorvg/CMakeLists.txt` via `add_subdirectory`, intended for iterating on ThorVG patches without a push/tag-bump round-trip. Default OFF retains the FetchContent fetch from `wtnbgo/thorvg` (branch `cmake`).
 
+### Packaging / Release (Windows)
+
+```bash
+make package                     # build (if needed) + produce dist/jsengine-<version>-win64.zip
+make package VERSION=1.0.0        # pin the version string explicitly
+```
+
+`make package` runs `tools/package_win.ps1`, which assembles a self-contained release ZIP whose root holds `jsengine.exe`, the bundled `SDL3.dll` / `SDL3_image.dll`, `README.md`, `manual.js`, and the `data/` folder (the large `data/title.webm` demo video is excluded). The script is the single source of truth for the layout so local and CI packaging stay identical.
+
+CI: pushing a `v*` tag (e.g. `v1.0.0`) triggers `.github/workflows/release-win.yml`, which builds on `windows-latest`, runs the same packaging script, uploads the ZIP as a build artifact, and publishes it to **GitHub Releases**. Regular pushes do nothing; the workflow can also be run manually from the Actions tab. Only the Windows pipeline exists for now — other platforms will be added once validated on their own hosts.
+
 ### Launch Options
 
 ```bash

@@ -56,4 +56,12 @@ $(EXEFILE): build
 run: $(EXEFILE)
 	$(EXEFILE)
 
+# リリース zip を作る (exe + dll + data + README.md + manual.js)。
+# VERSION=1.2.3 で版を明示可能 (省略時は git describe / "dev")。
+# 例: make package VERSION=1.0.0
+package: $(EXEFILE)
+	pwsh -NoProfile -File tools/package_win.ps1 -Version "$(VERSION)" -Config $(BUILD_TYPE) -BuildDir "$(BUILD_PATH)"
+
+.PHONY: run package
+
 endif
