@@ -204,6 +204,24 @@ python -m http.server 8000
 # then open http://localhost:8000/docs/demoN_reference.html
 ```
 
+## Standalone samples
+
+Self-contained samples launched with `-data samples/<name>` (independent from the default `data/`):
+
+- **`samples/vrm_starter/`** — VRM base system (**vrmkit** reusable ESM library) plus two template
+  modes: a 3D walk-around mode (WASD movement, third-person camera, VRMA emotes, NPC dialogue)
+  and a novel-game style mode (telephoto 2D-like framing, message window, typewriter text,
+  choices, expression / VRMA / camera scripting). Switch modes with Tab. VRMA playback is powered
+  by the bundled `@pixiv/three-vrm-animation` v3.5.1. See `samples/vrm_starter/README.md` for the
+  API reference and asset setup (VRM models and the VRMA motion pack are **not** in the repo for
+  license reasons — download links are in that README).
+- `samples/vrm_town/` — procedural town with 4 walking VRM characters (not tracked in the repo).
+
+```bash
+jsengine.exe -data samples/vrm_starter
+# or: make run ARGS="-data samples/vrm_starter"
+```
+
 ## License
 
 This project is licensed under the [MIT License](LICENSE).
