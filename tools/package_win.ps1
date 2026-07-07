@@ -13,6 +13,10 @@
           README.md
           manual.js
           data/            (title.webm は除外)
+          samples/         (git 管理対象のみ = モデル/PSD 等の非同梱アセットは入らない)
+          run_demos.bat        (内蔵デモ集 = data/ で起動)
+          run_vrm_starter.bat  (-data samples/vrm_starter で起動)
+          run_anime25d.bat     (-data samples/anime25d で起動)
 
     ローカルでも CI (GitHub Actions) でも同じ結果になるよう、 CMake の install/CPack
     ではなくこの自己完結スクリプトでパッケージする (FetchContent 依存の install ルールが
@@ -102,6 +106,42 @@ $dataDst = Join-Path $stageDir "data"
 Copy-Item (Join-Path $repoRoot "data") $dataDst -Recurse
 $excluded = Join-Path $dataDst "title.webm"
 if (Test-Path $excluded) { Remove-Item -Force $excluded; Write-Host "  - data/title.webm (除外)" }
+
+# --- samples フォルダ (git 管理対象のみ) ---
+# ローカルの samples/ にはリポジトリ非同梱のアセット (VRM モデル / VRMA / PSD /
+# .rig キャッシュ等、ライセンス上再配布不可のもの) が置かれているため、
+# ディレクトリ丸ごとではなく git ls-files で track 済みファイルだけを写す。
+$sampleFiles = @()
+try { $sampleFiles = @(git ls-files samples 2>$null | Where-Object { $_ }) } catch {}
+if ($sampleFiles.Count -gt 0) {
+    foreach ($f in $sampleFiles) {
+        $dst = Join-Path $stageDir $f
+        $dstDir = Split-Path -Parent $dst
+        if (-not (Test-Path $dstDir)) { New-Item -ItemType Directory -Force -Path $dstDir | Out-Null }
+        Copy-Item (Join-Path $repoRoot $f) $dst
+    }
+    Write-Host "  + samples/ ($($sampleFiles.Count) files, git-tracked only)"
+} else {
+    Write-Host "  (skip) samples/ (git ls-files が空 / git なし)"
+}
+
+# --- 起動用バッチファイル (zip 展開先でダブルクリック起動する用) ---
+# 文字化け防止のため中身は ASCII のみ。%~dp0 で展開先に依存しない。
+$launchers = @(
+    @{ file = "run_demos.bat";       args = "";                          note = "built-in demo collection (data/)" },
+    @{ file = "run_vrm_starter.bat"; args = " -data samples\vrm_starter"; note = "VRM starter kit  (VRM models required - see samples\vrm_starter\README.md)" },
+    @{ file = "run_anime25d.bat";    args = " -data samples\anime25d";    note = "Anime2.5DRig port (pick a PSD from the in-app button)" }
+)
+foreach ($l in $launchers) {
+    $lines = @(
+        "@echo off",
+        "rem jsengine launcher: $($l.note)",
+        "cd /d `"%~dp0`"",
+        "jsengine.exe$($l.args) %*"
+    )
+    Set-Content -Path (Join-Path $stageDir $l.file) -Value ($lines -join "`r`n") -Encoding ascii
+    Write-Host "  + $($l.file)"
+}
 
 # --- zip 化 (既存があれば消す) ---
 if (Test-Path $zipPath) { Remove-Item -Force $zipPath }

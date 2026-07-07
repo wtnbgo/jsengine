@@ -37,7 +37,7 @@ The Makefile auto-selects the preset based on OS: `x64-windows`, `x64-linux`, or
 
 ### Packaging / Release
 
-- `make package` (Windows) runs `tools/package_win.ps1`, which stages `jsengine.exe` + bundled `SDL3.dll` / `SDL3_image.dll` + `README.md` + `manual.js` + `data/` (excluding the large `data/title.webm`) and zips it to `dist/jsengine-<version>-win64.zip`. This script — **not** CMake `install()`/CPack — is the single source of truth for the release layout (CPack would pull in FetchContent dependencies' install rules). `dist/` is git-ignored.
+- `make package` (Windows) runs `tools/package_win.ps1`, which stages `jsengine.exe` + bundled `SDL3.dll` / `SDL3_image.dll` + `README.md` + `manual.js` + `data/` (excluding the large `data/title.webm`) + `samples/` (**git-tracked files only** via `git ls-files` — ローカルに置いてある再配布不可アセット (VRM/VRMA/PSD/.rig) が混入しないため) and zips it to `dist/jsengine-<version>-win64.zip`. This script — **not** CMake `install()`/CPack — is the single source of truth for the release layout (CPack would pull in FetchContent dependencies' install rules). `dist/` is git-ignored.
 - `.github/workflows/release-win.yml` runs on `v*` tag push (or manual `workflow_dispatch`): builds on `windows-latest` with the preinstalled vcpkg (manifest mode, `x64-windows-static` triplet, x-gha binary cache), runs the same `package_win.ps1`, uploads the zip as an artifact, and publishes a **GitHub Release**. Windows-only for now; add other platforms once each is validated on its own host. When the release layout or shipped files change, update `tools/package_win.ps1` (the script), not just docs.
 - **Versioning single source of truth = root `VERSION` file** (semver). `CMakeLists.txt` reads it via `file(STRINGS VERSION ...)` into `PROJECT_VERSION` (do **not** hardcode a version there), and warns if `vcpkg.json`'s version drifts. Bump with `make bump VERSION=x.y.z` (`tools/bump_version.ps1`), which rewrites `VERSION` + `vcpkg.json` together. The release workflow asserts the pushed `v*` tag equals the `VERSION` file before building. Release flow: `make bump` → commit → `git tag vX.Y.Z` → `git push --tags`.
 
@@ -189,7 +189,6 @@ cmake --build build/x64-windows --config Release
 
 `-data samples/<name>` で起動する自己完結サンプル。標準 `data/` から独立しており、必要な lib / モデル / フォントを各フォルダに同梱する。
 
-- `samples/vrm_town/` — VRM 街シーン。procedural な街 + VRM 4 体 (Player + NPC×3)、sin 波の procedural 歩行、三人称カメラ。
 - `samples/vrm_starter/` — **VRM ベースシステム (vrmkit) + ひな型一式**。詳細は `samples/vrm_starter/README.md`。
   - `vrmkit/` (ESM ライブラリ): `core.js` (createRenderer / loadVRM / loadVRMA / renderFrame)、`actor.js` (VRMActor = VRMA 再生 + 表情 + 自動まばたき + 口パク + lookAt + procedural 歩行の排他制御)、`camera_rig.js` (OrbitFollowRig 三人称 / NovelCamera 望遠 fov20° の 2D 風構図プリセット closeUp/bustUp/waistUp/fullBody/twoShot)、`stage.js`、`overlay.js` (Canvas2D→GL 合成)、`novel_ui.js` (メッセージウィンドウ / タイプライタ / 選択肢)、`script_runner.js` (say/expr/motion/camera/choice/label/jump のコマンド配列インタプリタ)。
   - `scenes/`: explore_scene (WASD 移動 + VRMA エモート 1〜7 + NPC 会話)、novel_scene (ノベルスタイル、デモスクリプト入り)、dialogue_scene (任意シーンに pauseBelow で重ねる会話オーバーレイ)。Tab でモード切替。

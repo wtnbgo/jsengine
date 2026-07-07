@@ -220,7 +220,6 @@ Self-contained samples launched with `-data samples/<name>` (independent from th
   irises, dual-spring hair physics, idle / blink / lip-sync animation). Split into an embeddable
   library (`rig25d/`: PSD→rig data builder with binary caching, display runtime, test UI panel).
   Model PSDs are **not** in the repo — see `samples/anime25d/README.md`.
-- `samples/vrm_town/` — procedural town with 4 walking VRM characters (not tracked in the repo).
 
 ```bash
 jsengine.exe -data samples/vrm_starter
