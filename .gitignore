@@ -26,13 +26,16 @@ savedata
 .venv/
 test/
 test2/
-# samples: vrm_starter のコードのみ track する。
-# モデル (.vrm) と VRMA モーションパックは容量とライセンス
-# (二次配布不可) のため除外 — 入手方法は samples/vrm_starter/README.md 参照
+# samples: vrm_starter / anime25d のコードのみ track する。
+# モデル (.vrm / .psd) と VRMA モーションパックは容量とライセンス
+# (二次配布不可) のため除外 — 入手方法は各 samples/*/README.md 参照
 samples/*
 !samples/vrm_starter
 samples/vrm_starter/models/
 samples/vrm_starter/vrma/
+!samples/anime25d
+samples/anime25d/psd/
+samples/anime25d/*.png
 dist/
 data/title.webm
 node_modules/

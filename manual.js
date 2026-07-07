@@ -300,6 +300,17 @@ fs.mkdir("path/to/dir");                                // ディレクトリ作
 fs.remove("path/to/file.txt");                          // ファイルまたは空ディレクトリを削除
 fs.rename("old/path", "new/path");                      // 名前変更 / 移動
 
+// --- ネイティブファイルダイアログ (jsengine 拡張、デスクトップのみ) ---
+// SDL_ShowOpenFileDialog の Promise ラッパ。選択で絶対パス、キャンセルで null。
+// filters は省略可。pattern は拡張子を ';' 区切り ("*" で全ファイル)。
+// ダイアログは同時に 1 つまで (2 重に開くと throw)。
+fs.showOpenFileDialog([
+    { name: "PSD ファイル", pattern: "psd" },
+    { name: "すべてのファイル", pattern: "*" }
+]).then(function(path) {
+    if (path) { var buf = fs.readBinary(path); /* 絶対パスもそのまま読める */ }
+});
+
 // --- FileSystemFileHandle ---
 var fileHandle = fs.getFileHandle("path/to/file.txt");               // 既存ファイルを取得
 var fileHandle = fs.getFileHandle("path/to/file.txt", {create:true});// なければ作成

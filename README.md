@@ -215,6 +215,11 @@ Self-contained samples launched with `-data samples/<name>` (independent from th
   by the bundled `@pixiv/three-vrm-animation` v3.5.1. See `samples/vrm_starter/README.md` for the
   API reference and asset setup (VRM models and the VRMA motion pack are **not** in the repo for
   license reasons — download links are in that README).
+- **`samples/anime25d/`** — port of [Anime2.5DRig](https://github.com/852wa/Anime2.5DRig) (MIT):
+  drop-in auto-rigged 2.5D avatars from layered PSD files (mesh-warp rendering, stencil-clipped
+  irises, dual-spring hair physics, idle / blink / lip-sync animation). Split into an embeddable
+  library (`rig25d/`: PSD→rig data builder with binary caching, display runtime, test UI panel).
+  Model PSDs are **not** in the repo — see `samples/anime25d/README.md`.
 - `samples/vrm_town/` — procedural town with 4 walking VRM characters (not tracked in the repo).
 
 ```bash

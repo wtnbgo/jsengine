@@ -16,6 +16,7 @@
 #include <vector>
 #include <string>
 #include <algorithm>
+#include <mutex>
 
 // ============================================================
 // ヘルパー: JSValue の例外チェックとログ出力
@@ -1434,6 +1435,123 @@ static JSValue fs_writeBinary(JSContext *ctx, JSValueConst this_val, int argc, J
     return JS_UNDEFINED;
 }
 
+// ============================================================
+// fs.showOpenFileDialog(filters?) => Promise<string|null>
+//
+// SDL_ShowOpenFileDialog によるネイティブの「ファイルを開く」ダイアログ。
+// filters は [{ name: "PSD ファイル", pattern: "psd" }, ...] (pattern は
+// SDL_DialogFileFilter 形式 = 拡張子を ';' 区切り、"*" で全ファイル)。
+// 選択されたら絶対パス、キャンセル/エラーなら null で resolve する。
+//
+// SDL のコールバックは別スレッドから呼ばれる可能性があるため、結果は
+// mutex 付きの slot に置き、メインスレッドの JsEngine::update 冒頭で
+// drainFileDialog() が Promise を resolve する (repl の drain と同じ方式)。
+// 同時に開けるダイアログは 1 つ。
+// ============================================================
+static std::mutex g_fileDialogMutex;
+static bool g_fileDialogPending = false;   // ダイアログ表示中 (resolve 未了)
+static bool g_fileDialogReady = false;     // コールバック済み・resolve 待ち
+static std::string g_fileDialogResult;     // 選択されたパス (空 = キャンセル)
+static JSValue g_fileDialogResolve = JS_UNDEFINED;
+// SDL_DialogFileFilter はコールバックが呼ばれるまで生存が必要なので static 保持
+static std::vector<SDL_DialogFileFilter> g_fileDialogFilters;
+static std::vector<std::string> g_fileDialogFilterStrs;
+
+static void file_dialog_callback(void *userdata, const char * const *filelist, int filter) {
+    (void)userdata; (void)filter;
+    std::lock_guard<std::mutex> lock(g_fileDialogMutex);
+    if (!filelist) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "showOpenFileDialog error: %s", SDL_GetError());
+        g_fileDialogResult.clear();
+    } else if (filelist[0]) {
+        g_fileDialogResult = filelist[0];
+    } else {
+        g_fileDialogResult.clear();   // キャンセル
+    }
+    g_fileDialogReady = true;
+}
+
+static JSValue fs_showOpenFileDialog(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    (void)this_val;
+    if (g_fileDialogPending) {
+        return JS_ThrowInternalError(ctx, "showOpenFileDialog: dialog already open");
+    }
+
+    // filters 引数のパース
+    g_fileDialogFilters.clear();
+    g_fileDialogFilterStrs.clear();
+    if (argc >= 1 && JS_IsArray(argv[0])) {
+        JSValue lenv = JS_GetPropertyStr(ctx, argv[0], "length");
+        uint32_t len = 0;
+        JS_ToUint32(ctx, &len, lenv);
+        JS_FreeValue(ctx, lenv);
+        // 文字列の再配置で c_str() が無効化しないよう先に確保
+        g_fileDialogFilterStrs.reserve((size_t)len * 2);
+        for (uint32_t i = 0; i < len; i++) {
+            JSValue item = JS_GetPropertyUint32(ctx, argv[0], i);
+            JSValue namev = JS_GetPropertyStr(ctx, item, "name");
+            JSValue patv = JS_GetPropertyStr(ctx, item, "pattern");
+            const char *name = JS_ToCString(ctx, namev);
+            const char *pat = JS_ToCString(ctx, patv);
+            if (name && pat) {
+                g_fileDialogFilterStrs.push_back(name);
+                g_fileDialogFilterStrs.push_back(pat);
+                SDL_DialogFileFilter f;
+                f.name = g_fileDialogFilterStrs[g_fileDialogFilterStrs.size() - 2].c_str();
+                f.pattern = g_fileDialogFilterStrs[g_fileDialogFilterStrs.size() - 1].c_str();
+                g_fileDialogFilters.push_back(f);
+            }
+            if (name) JS_FreeCString(ctx, name);
+            if (pat) JS_FreeCString(ctx, pat);
+            JS_FreeValue(ctx, namev);
+            JS_FreeValue(ctx, patv);
+            JS_FreeValue(ctx, item);
+        }
+    }
+
+    JSValue resolving_funcs[2];
+    JSValue promise = JS_NewPromiseCapability(ctx, resolving_funcs);
+    if (JS_IsException(promise)) return promise;
+    g_fileDialogResolve = JS_DupValue(ctx, resolving_funcs[0]);
+    JS_FreeValue(ctx, resolving_funcs[0]);
+    JS_FreeValue(ctx, resolving_funcs[1]);
+
+    {
+        std::lock_guard<std::mutex> lock(g_fileDialogMutex);
+        g_fileDialogPending = true;
+        g_fileDialogReady = false;
+        g_fileDialogResult.clear();
+    }
+
+    App *app = App::getInstance();
+    SDL_Window *window = app ? app->getWindow() : nullptr;
+    SDL_ShowOpenFileDialog(file_dialog_callback, nullptr, window,
+                           g_fileDialogFilters.empty() ? nullptr : g_fileDialogFilters.data(),
+                           (int)g_fileDialogFilters.size(),
+                           nullptr /* default_location */, false /* allow_many */);
+    return promise;
+}
+
+// メインスレッド (JsEngine::update 冒頭) から毎フレーム呼ぶ
+static void file_dialog_drain(JSContext *ctx) {
+    std::string result;
+    {
+        std::lock_guard<std::mutex> lock(g_fileDialogMutex);
+        if (!g_fileDialogPending || !g_fileDialogReady) return;
+        result = g_fileDialogResult;
+        g_fileDialogPending = false;
+        g_fileDialogReady = false;
+    }
+    JSValue arg = result.empty() ? JS_NULL : JS_NewString(ctx, result.c_str());
+    JSValue r = JS_Call(ctx, g_fileDialogResolve, JS_UNDEFINED, 1, &arg);
+    JS_FreeValue(ctx, r);
+    JS_FreeValue(ctx, arg);
+    JS_FreeValue(ctx, g_fileDialogResolve);
+    g_fileDialogResolve = JS_UNDEFINED;
+    g_fileDialogFilters.clear();
+    g_fileDialogFilterStrs.clear();
+}
+
 static void fs_register(JSContext *ctx) {
     JSValue obj = JS_NewObject(ctx);
 
@@ -1448,6 +1566,7 @@ static void fs_register(JSContext *ctx) {
     JS_SetPropertyStr(ctx, obj, "readBinary", JS_NewCFunction(ctx, fs_readBinary, "readBinary", 1));
     JS_SetPropertyStr(ctx, obj, "writeText", JS_NewCFunction(ctx, fs_writeText, "writeText", 2));
     JS_SetPropertyStr(ctx, obj, "writeBinary", JS_NewCFunction(ctx, fs_writeBinary, "writeBinary", 2));
+    JS_SetPropertyStr(ctx, obj, "showOpenFileDialog", JS_NewCFunction(ctx, fs_showOpenFileDialog, "showOpenFileDialog", 1));
 
     // システム提供のパス群を fs に公開
     //   basePath: データ参照のベース (絶対パス、末尾 / つき)
@@ -2292,6 +2411,7 @@ void JsEngine::processRAF() {
 void JsEngine::update(uint32_t delta) {
     if (!ctx_) return;
 
+    file_dialog_drain(ctx_);   // ファイルダイアログ結果の Promise resolve (メインスレッド)
     processTimers();
     processRAF();
 
